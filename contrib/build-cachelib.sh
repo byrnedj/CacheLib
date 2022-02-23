@@ -31,7 +31,7 @@ mkdir -p "build-$NAME" || die "failed to create build-$NAME directory"
 cd "build-$NAME" || die "'cd' failed"
 
 cmake ../cachelib/ || die "cmake failed"
-make -j --keep-going || die "make failed"
+#make -j --keep-going || die "make failed"
 #sudo make install || die "make install failed"
 
 #echo "$NAME library is now installed"

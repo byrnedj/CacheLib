@@ -314,7 +314,7 @@ install(
     PATTERN "CMakeFiles" EXCLUDE
 )
 
-
+include(sanitizers)
 # Install CMake package configuration files for cachelib
 # TODO: @ONLY?
 include(CMakePackageConfigHelpers)
