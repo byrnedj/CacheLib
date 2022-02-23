@@ -243,6 +243,10 @@ Use the `-O` option to skip the installation of system packages, e.g.
 As all dependencies use `git/cmake/make`, rebuilding the same code (if there
 were no updates) will be very fast.
 
+Note - fmt library might fail a static assert - in this case it is recommended
+to use commit c5dce1caf9fc8dff4e309683252fee5fbc0b6c2b from the fmt repository
+with the following command in the cachelib/external/fmt directory:
+`git reset --hard c5dce1caf9fc8dff4e309683252fee5fbc0b6c2b`
 
 ## Downloading the source code without building
 
