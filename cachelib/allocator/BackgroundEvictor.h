@@ -18,37 +18,61 @@
 
 #include <gtest/gtest_prod.h>
 
-#include "cachelib/allocator/Cache.h"
 #include "cachelib/allocator/CacheStats.h"
 #include "cachelib/common/PeriodicWorker.h"
+#include "cachelib/allocator/BackgroundEvictorStrategy.h"
+
 
 namespace facebook {
 namespace cachelib {
 
+// wrapper that exposes the private APIs of CacheType that are specifically
+// needed for the eviction.
+template <typename C>
+struct BackgroundEvictorAPIWrapper {
+
+  static unsigned int traverseAndEvictItems(C& cache,
+          unsigned int tid, unsigned int pid, unsigned int cid, unsigned int batch) {
+    return cache.traverseAndEvictItems(tid,pid,cid,batch);
+  }
+};
+
 // Periodic worker that evicts items from tiers in batches
 // The primary aim is to reduce insertion times for new items in the
 // cache
+template <typename CacheT>
 class BackgroundEvictor : public PeriodicWorker {
  public:
+  using Cache = CacheT;
   // @param cache               the cache interface
   // @param target_free         the target amount of memory to keep free in 
   //                            this tier
   // @param tier id             memory tier to perform eviction on 
-  BackgroundEvictor(CacheBase& cache,
-                    double targetFree
+  BackgroundEvictor(Cache& cache,
+                    std::shared_ptr<BackgroundEvictorStrategy> strategy,
                     unsigned int tid);
 
   ~BackgroundEvictor() override;
 
+  BackgroundEvictorStats getStats() const noexcept;
 
  private:
   // cache allocator's interface for evicting
-  CacheBase& cache_;
-  double targetFree_;
+  
+  using Item = typename Cache::Item;
+  
+  Cache& cache_;
+  std::shared_ptr<BackgroundEvictorStrategy> strategy_;
   unsigned int tid_;
 
   // implements the actual logic of running the background evictor
-  void work() final;
+  void work() override final;
+  void checkAndRun(PoolId pid);
+  
+  std::atomic<uint64_t> numEvictedItems_{0};
+  std::atomic<uint64_t> runCount_{0};
 };
 } // namespace cachelib
 } // namespace facebook
+
+#include "cachelib/allocator/BackgroundEvictor-inl.h"

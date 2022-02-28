@@ -265,6 +265,12 @@ class CacheAllocatorConfig {
       std::chrono::seconds regularInterval,
       std::chrono::seconds ccacheInterval,
       uint32_t ccacheStepSizePercent);
+  
+  // Enable the background evictor - scans a tier to look for objects
+  // to evict to the next tier
+  CacheAllocatorConfig& enableBackgroundEvictor(
+      std::shared_ptr<BackgroundEvictorStrategy> backgroundEvictorStrategy,
+      std::chrono::seconds regularInterval);
 
   // This enables an optimization for Pool rebalancing and resizing.
   // The rough idea is to ensure only the least useful items are evicted when
@@ -335,6 +341,12 @@ class CacheAllocatorConfig {
     return (regularPoolOptimizeInterval.count() > 0 ||
             compactCacheOptimizeInterval.count() > 0) &&
            poolOptimizeStrategy != nullptr;
+  }
+  
+  // @return whether background evictor thread is enabled
+  bool backgroundEvictorEnabled() const noexcept {
+    return backgroundEvictorInterval.count() > 0 &&
+           backgroundEvictorStrategy != nullptr;
   }
 
   // @return whether memory monitor is enabled
@@ -426,6 +438,9 @@ class CacheAllocatorConfig {
 
   // time interval to sleep between iterators of rebalancing the pools.
   std::chrono::milliseconds poolRebalanceInterval{std::chrono::seconds{1}};
+  
+  // time interval to sleep between runs of the background evictor
+  std::chrono::milliseconds backgroundEvictorInterval{std::chrono::seconds{1}};
 
   // Free slabs pro-actively if the ratio of number of freeallocs to
   // the number of allocs per slab in a slab class is above this
@@ -437,6 +452,9 @@ class CacheAllocatorConfig {
   // rebalance to avoid alloc fialures.
   std::shared_ptr<RebalanceStrategy> defaultPoolRebalanceStrategy{
       new RebalanceStrategy{}};
+  
+  // rebalance to avoid alloc fialures.
+  std::shared_ptr<BackgroundEvictorStrategy> backgroundEvictorStrategy;
 
   // time interval to sleep between iterations of pool size optimization,
   // for regular pools and compact caches
@@ -964,6 +982,15 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enablePoolRebalancing(
 }
 
 template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundEvictor(
+    std::shared_ptr<BackgroundEvictorStrategy> strategy,
+    std::chrono::seconds interval) {
+  backgroundEvictorStrategy = strategy;
+  backgroundEvictorInterval = interval;
+  return *this;
+}
+
+template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enablePoolResizing(
     std::shared_ptr<RebalanceStrategy> resizeStrategy,
     std::chrono::milliseconds interval,
@@ -1050,45 +1077,7 @@ size_t CacheAllocatorConfig<T>::getCacheSize() const noexcept {
   return sum_sizes;
 }
 
-template <typename T>
-void CacheAllocatorConfig<T>::validateMemoryTiersWithSize(
-    const MemoryTierConfigs &config, size_t size) const {
-  size_t sum_ratios = 0;
-  size_t sum_sizes = 0;
 
-  for (const auto &tier_config: config) {
-    sum_ratios += tier_config.getRatio();
-    sum_sizes += tier_config.getSize();
-  }
-
-  if (sum_ratios && sum_sizes) {
-    throw  std::invalid_argument("Cannot mix ratios and sizes.");
-  } else if (sum_sizes) {
-    if (size && sum_sizes != size) {
-      throw std::invalid_argument(
-          "Sum of tier sizes doesn't match total cache size. "
-          "Setting of cache total size is not required when per-tier "
-          "sizes are specified - it is calculated as sum of tier sizes.");
-    }
-  } else if (!sum_ratios && !sum_sizes) {
-    throw std::invalid_argument(
-      "Either sum of all memory tiers sizes or sum of all ratios "
-      "must be greater than 0.");
-  }
-}
-
-template <typename T>
-size_t CacheAllocatorConfig<T>::getCacheSize() const noexcept {
-  if (size)
-    return size;
-
-  size_t sum_sizes = 0;
-  for (const auto &tier_config : getMemoryTierConfigs()) {
-    sum_sizes += tier_config.getSize();
-  }
-
-  return sum_sizes;
-}
 
 template <typename T>
 void CacheAllocatorConfig<T>::validateMemoryTiersWithSize(
