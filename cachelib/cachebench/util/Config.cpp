@@ -77,9 +77,11 @@ StressorConfig::StressorConfig(const folly::dynamic& configJson) {
         for (int i = 0; i < numPools; i++) {
             poolDistributions.push_back(DistributionConfig(configJson, configPath));
         }
+        opPoolDistribution.clear();
+        keyPoolDistribution.clear();
         for (int i = 0; i < numPools; i++) {
-            opPoolDistribution[i] = (double) (1.0 / numPools);
-            keyPoolDistribution[i] = (double) (1.0 / numPools);
+            opPoolDistribution.push_back( (double) (1.0 / numPools) );
+            keyPoolDistribution.push_back( (double) (1.0 / numPools) );
         }
     } else {
         poolDistributions.push_back(DistributionConfig(configJson, configPath));
