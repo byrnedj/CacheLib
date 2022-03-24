@@ -213,6 +213,9 @@ struct StressorConfig : public JSONConfig {
   // Distribution of keys across pools in cache (1 key only belongs to 1 pool)
   std::vector<double> keyPoolDistribution{1.0};
 
+  // set to make the ops and keys evenly distributed across pools
+  size_t useEvenPoolDistribution{0};
+
   // Max number of inconsistency detection (exits after exceeded).
   uint64_t maxInconsistencyCount{50};
 

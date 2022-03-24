@@ -61,12 +61,29 @@ StressorConfig::StressorConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, repeatTraceReplay);
   JSONSetVal(configJson, timestampFactor);
 
+  JSONSetVal(configJson, useEvenPoolDistribution);
+
   if (configJson.count("poolDistributions")) {
     for (auto& it : configJson["poolDistributions"]) {
       poolDistributions.push_back(DistributionConfig(it, configPath));
     }
   } else {
-    poolDistributions.push_back(DistributionConfig(configJson, configPath));
+    if (useEvenPoolDistribution > 0) {
+        // assume that the ops and keys are evenly split over all
+        // the pools in the cache
+        size_t numPools = useEvenPoolDistribution;
+        std::cout << "Assuming each of the "
+                  << numPools << " pools uses same distribution" << std::endl;
+        for (int i = 0; i < numPools; i++) {
+            poolDistributions.push_back(DistributionConfig(configJson, configPath));
+        }
+        for (int i = 0; i < numPools; i++) {
+            opPoolDistribution[i] = (double) (1.0 / numPools);
+            keyPoolDistribution[i] = (double) (1.0 / numPools);
+        }
+    } else {
+        poolDistributions.push_back(DistributionConfig(configJson, configPath));
+    }
   }
 
   if (configJson.count("replayGeneratorConfig")) {
@@ -77,7 +94,7 @@ StressorConfig::StressorConfig(const folly::dynamic& configJson) {
   // If you added new fields to the configuration, update the JSONSetVal
   // to make them available for the json configs and increment the size
   // below
-  checkCorrectSize<StressorConfig, 456>();
+  checkCorrectSize<StressorConfig, 464>();
 }
 
 bool StressorConfig::usesChainedItems() const {

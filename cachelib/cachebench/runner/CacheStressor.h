@@ -100,6 +100,13 @@ class CacheStressor : public Stressor {
           "test: {}, cache: {}",
           config_.opPoolDistribution.size(), cache_->numPools()));
     }
+    if (config_.useEvenPoolDistribution > 0 &&
+            config_.useEvenPoolDistribution != cache_->numPools()) {
+      throw std::invalid_argument(folly::sformat(
+          "evenly split pools must be equal to pools than in the cache. "
+          "test: {}, cache: {}",
+          config_.useEvenPoolDistribution, cache_->numPools()));
+    }
     if (config_.keyPoolDistribution.size() != cache_->numPools()) {
       throw std::invalid_argument(folly::sformat(
           "different number of pools in the test from in the cache. "
