@@ -119,7 +119,9 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
               << numPools << " pools uses same size distribution" << std::endl;
     for (int i = 0; i < numPools; i++) {
         poolSizes[i] = (double) (1.0 / numPools);
+        std::cout << "pool " << i << " size: " << poolSizes[i];
     }
+    
     //throw std::invalid_argument(folly::sformat(
     //    "number of pools must be the same as the pool size distribution. "
     //    "numPools: {}, poolSizes.size(): {}",
