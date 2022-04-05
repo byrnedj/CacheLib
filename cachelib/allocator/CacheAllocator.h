@@ -1560,6 +1560,8 @@ class CacheAllocator : public CacheBase {
   // @param  cid  the id of the class to look for evictions inside
   // @return An evicted item or nullptr  if there is no suitable candidate.
   Item* findEviction(TierId tid, PoolId pid, ClassId cid);
+  
+  Item* findRandEviction(TierId tid, PoolId pid, ClassId cid);
 
   // Advance the current iterator and try to evict a regular item
   //

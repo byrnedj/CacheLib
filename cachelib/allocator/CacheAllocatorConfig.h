@@ -481,6 +481,9 @@ class CacheAllocatorConfig {
   // system is out of memory. The user must free previously allocated
   // items to make more room.
   bool disableEviction = false;
+  
+  // use random eviction
+  bool randEviction = false;
 
   // the number of tries to search for an item to evict
   // 0 means it's infinite
@@ -1197,6 +1200,7 @@ std::map<std::string, std::string> CacheAllocatorConfig<T>::serialize() const {
   configMap["reaperInterval"] = util::toString(reaperInterval);
   configMap["mmReconfigureInterval"] = util::toString(mmReconfigureInterval);
   configMap["disableEviction"] = std::to_string(disableEviction);
+  configMap["randEviction"] = std::to_string(randEviction);
   configMap["evictionSearchTries"] = std::to_string(evictionSearchTries);
   configMap["thresholdForConvertingToIOBuf"] =
       std::to_string(thresholdForConvertingToIOBuf);

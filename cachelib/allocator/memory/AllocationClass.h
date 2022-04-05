@@ -309,6 +309,7 @@ class AllocationClass {
   // @throw std::logic_error if the object state can not be serialized
   serialization::AllocationClassObject saveState() const;
 
+  const Slab* getRandomSlab() const noexcept;
  private:
   // check if the state of the AllocationClass is valid and if not, throws an
   // std::invalid_argument exception. This is intended for use in
@@ -329,6 +330,7 @@ class AllocationClass {
   // get a suitable slab for being released from either the set of free slabs
   // or the allocated slabs.
   const Slab* getSlabForReleaseLocked() const noexcept;
+
 
   // prune the freeAllocs_ to eliminate any  allocs belonging to this slab and
   // also return a list of active allocations. If there are any active

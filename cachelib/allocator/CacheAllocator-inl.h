@@ -375,7 +375,11 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
   // TODO: Today disableEviction means do not evict from memory (DRAM).
   //       Should we support eviction between memory tiers (e.g. from DRAM to PMEM)?
   if (memory == nullptr && !config_.disableEviction) {
-    memory = findEviction(tid, pid, cid);
+    if (config_.randEviction) {
+        memory = findRandEviction(tid,pid,cid);
+    } else {
+        memory = findEviction(tid, pid, cid);
+    }
   }
 
   ItemHandle handle;
@@ -1443,6 +1447,76 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
   XDCHECK(!oldItemHandle->isInMMContainer());
 
   return true;
+}
+
+template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid) {
+  
+  auto& pool = allocator_[tid]->getPool(pid);
+  auto& ac = pool.getAllocationClass(cid);
+  
+  unsigned int allocsPerSlab = ac.getAllocsPerSlab();
+  unsigned int allocSize = ac.getAllocSize();
+  
+  const Slab* slab = ac.getRandomSlab();
+  const void* ptr = reinterpret_cast<const void*>(slab);
+
+
+  // Keep searching for a candidate until we were able to evict it
+  // or until the search limit has been exhausted
+  unsigned int searchTries = 0;
+  while (config_.evictionSearchTries == 0 ||
+          config_.evictionSearchTries > searchTries) {
+    ++searchTries;
+    
+    auto idx =
+        folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
+    Item* candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
+    // for chained items, the ownership of the parent can change. We try to
+    // evict what we think as parent and see if the eviction of parent
+    // recycles the child we intend to.
+    
+    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(candidate);
+    bool movedToNextTier = false;
+    if(toReleaseHandle) {
+      movedToNextTier = true;
+    }
+
+    if (toReleaseHandle) {
+      if (toReleaseHandle->hasChainedItem()) {
+        (*stats_.chainedItemEvictions)[pid][cid].inc();
+      } else {
+        (*stats_.regularItemEvictions)[pid][cid].inc();
+      }
+
+      // we must be the last handle and for chained items, this will be
+      // the parent.
+      XDCHECK(toReleaseHandle.get() == candidate || candidate->isChainedItem());
+      XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
+
+      // We manually release the item here because we don't want to
+      // invoke the Item Handle's destructor which will be decrementing
+      // an already zero refcount, which will throw exception
+      auto& itemToRelease = *toReleaseHandle.release();
+
+      // Decrementing the refcount because we want to recycle the item
+      const auto ref = decRef(itemToRelease);
+      XDCHECK_EQ(0u, ref);
+
+      // check if by releasing the item we intend to, we actually
+      // recycle the candidate.
+      if (ReleaseRes::kRecycled ==
+          releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
+                                 /* isNascent */ movedToNextTier, candidate)) {
+        return candidate;
+      }
+    }
+    
+    ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(ptr) + allocSize);
+
+  }
+  return nullptr;
 }
 
 template <typename CacheTrait>
