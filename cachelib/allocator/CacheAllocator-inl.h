@@ -1514,8 +1514,6 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
       }
     }
     
-    ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(ptr) + allocSize);
-
   }
   return nullptr;
 }
