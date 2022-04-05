@@ -1466,8 +1466,9 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
   // Keep searching for a candidate until we were able to evict it
   // or until the search limit has been exhausted
   unsigned int searchTries = 0;
-  while (config_.evictionSearchTries == 0 ||
-          config_.evictionSearchTries > searchTries) {
+  while ((config_.evictionSearchTries == 0 ||
+          config_.evictionSearchTries > searchTries)
+          && ptr != nullptr ) {
     ++searchTries;
     
     auto idx =
