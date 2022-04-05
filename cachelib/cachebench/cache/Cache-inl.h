@@ -108,6 +108,8 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     allocatorConfig_.configureMemoryTiers(config_.memoryTierConfigs);
   }
 
+  allocatorConfig_.randEviction = config_.randEviction;
+
   auto cleanupGuard = folly::makeGuard([&] {
     if (!nvmCacheFilePath_.empty()) {
       util::removePath(nvmCacheFilePath_);
