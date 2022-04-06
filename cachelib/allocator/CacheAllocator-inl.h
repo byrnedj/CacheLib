@@ -1473,16 +1473,22 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
     
     auto idx =
         folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
-    Item* candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
+    ItemHandle handle = acquire(reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx));
+
+    Item* candidate = handle.get();
+
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
     
     ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(candidate);
+    handle.release();
+    
     bool movedToNextTier = false;
     if(toReleaseHandle) {
       movedToNextTier = true;
     }
+
 
     if (toReleaseHandle) {
       if (toReleaseHandle->hasChainedItem()) {
@@ -1510,6 +1516,7 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
+        
         return candidate;
       }
     }
