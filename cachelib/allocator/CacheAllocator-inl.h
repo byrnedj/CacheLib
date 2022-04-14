@@ -1477,7 +1477,7 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
 
     Item *candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
 
-    mmContainer.remove(candidate);
+    mmContainer.remove(*candidate);
 
 
     // for chained items, the ownership of the parent can change. We try to
