@@ -1452,6 +1452,7 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
 template <typename CacheTrait>
 typename CacheAllocator<CacheTrait>::Item*
 CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid) {
+  auto& mmContainer = getMMContainer(tid, pid, cid);
   
   auto& pool = allocator_[tid]->getPool(pid);
   auto& ac = pool.getAllocationClass(cid);
@@ -1473,16 +1474,16 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
     
     auto idx =
         folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
-    ItemHandle handle = acquire(reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx));
 
-    Item* candidate = handle.get();
+    Item *candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
+
+    mmContainer.remove(candidate);
+
 
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
-    
     ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(candidate);
-    handle.release();
     
     bool movedToNextTier = false;
     if(toReleaseHandle) {
@@ -1513,6 +1514,8 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
 
       // check if by releasing the item we intend to, we actually
       // recycle the candidate.
+      mmContainer.add(*candidate);
+
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
