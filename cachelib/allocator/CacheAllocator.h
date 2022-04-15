@@ -1403,6 +1403,9 @@ class CacheAllocator : public CacheBase {
   //               successfully.
   template <typename ItemPtr>
   ItemHandle moveRegularItemOnEviction(ItemPtr& oldItem, ItemHandle& newItemHdl);
+  
+  template <typename ItemPtr>
+  ItemHandle moveRegularItemOnEvictionNoLock(ItemPtr& oldItem, ItemHandle& newItemHdl, ItemHandle& resHdl);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's moving bit has been set. The user supplied
@@ -1592,6 +1595,9 @@ class CacheAllocator : public CacheBase {
   //         handle to the item. On failure an empty handle.
   template <typename ItemPtr>
   ItemHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, ItemPtr& item);
+  
+  template <typename ItemPtr>
+  ItemHandle tryEvictToNextMemoryTierNoLock(TierId tid, PoolId pid, ItemPtr& item, ItemHandle& resHdl);
 
   // Try to move the item down to the next memory tier
   //
