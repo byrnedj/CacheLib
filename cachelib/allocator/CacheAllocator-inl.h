@@ -1637,7 +1637,6 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
 
       // check if by releasing the item we intend to, we actually
       // recycle the candidate.
-      mmContainer.add(*candidate);
 
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
@@ -1646,6 +1645,7 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
         return candidate;
       }
     }
+    mmContainer.add(*candidate);
     
   }
   return nullptr;
