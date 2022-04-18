@@ -1313,7 +1313,7 @@ template <typename CacheTrait>
 template <typename ItemPtr>
 typename CacheAllocator<CacheTrait>::ItemHandle
 CacheAllocator<CacheTrait>::moveRegularItemOnEvictionNoLock(
-    ItemPtr& oldItemPtr, ItemHandle& newItemHdl, ItemHandle& resHdl) {
+    ItemPtr& oldItemPtr, ItemHandle& newItemHdl) {
   // TODO: should we introduce new latency tracker. E.g. evictRegularLatency_
   // ??? util::LatencyTracker tracker{stats_.evictRegularLatency_};
 
@@ -1402,7 +1402,6 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEvictionNoLock(
     XDCHECK(newItemHdl->hasChainedItem());
   }
   newItemHdl.unmarkNascent();
-  resHdl = std::move(newItemHdl); // guard will assign it to ctx under lock
   return acquire(&oldItem);
 }
 
@@ -1600,12 +1599,11 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
 
     mmContainer.remove(*candidate);
 
-
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
     ItemHandle toReleaseHandle = 
-        tryEvictToNextMemoryTierNoLock(tid,pid,candidate,resHdl);
+        tryEvictToNextMemoryTierNoLock(tid,pid,candidate,&resHdl);
     
     bool movedToNextTier = false;
     if(toReleaseHandle) {
@@ -1802,7 +1800,7 @@ template <typename CacheTrait>
 template <typename ItemPtr>
 typename CacheAllocator<CacheTrait>::ItemHandle
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
-    TierId tid, PoolId pid, ItemPtr& item, ItemHandle& resHdl) {
+    TierId tid, PoolId pid, ItemPtr& item, ItemHandle *resHdl) {
   if(item->isChainedItem()) return {}; // TODO: We do not support ChainedItem yet
   if(item->isExpired()) return acquire(item);
 
@@ -1818,7 +1816,11 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item->getSize());
 
-      return moveRegularItemOnEvictionNoLock(item, newItemHdl, resHdl);
+      ItemHandle toReleaseHandle = 
+          moveRegularItemOnEvictionNoLock(item, newItemHdl);
+      
+      *resHdl = std::move(newItemHdl); // guard will assign it to ctx under lock
+      return toReleaseHandle;
     }
   }
 

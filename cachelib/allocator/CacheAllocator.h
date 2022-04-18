@@ -1405,7 +1405,7 @@ class CacheAllocator : public CacheBase {
   ItemHandle moveRegularItemOnEviction(ItemPtr& oldItem, ItemHandle& newItemHdl);
   
   template <typename ItemPtr>
-  ItemHandle moveRegularItemOnEvictionNoLock(ItemPtr& oldItem, ItemHandle& newItemHdl, ItemHandle& resHdl);
+  ItemHandle moveRegularItemOnEvictionNoLock(ItemPtr& oldItem, ItemHandle& newItemHdl);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's moving bit has been set. The user supplied
@@ -1597,7 +1597,7 @@ class CacheAllocator : public CacheBase {
   ItemHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, ItemPtr& item);
   
   template <typename ItemPtr>
-  ItemHandle tryEvictToNextMemoryTierNoLock(TierId tid, PoolId pid, ItemPtr& item, ItemHandle& resHdl);
+  ItemHandle tryEvictToNextMemoryTierNoLock(TierId tid, PoolId pid, ItemPtr& item, ItemHandle *resHdl);
 
   // Try to move the item down to the next memory tier
   //
