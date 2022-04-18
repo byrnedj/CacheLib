@@ -1600,17 +1600,17 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
 
     mmContainer.remove(*candidate);
 
+    ItemHandle *newHdl;
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
     ItemHandle toReleaseHandle = 
-        tryEvictToNextMemoryTierNoLock(tid,pid,candidate,&resHdl);
+        tryEvictToNextMemoryTierNoLock(tid,pid,candidate,newHdl);
     
     bool movedToNextTier = false;
     if(toReleaseHandle) {
       movedToNextTier = true;
     }
-
 
     if (toReleaseHandle) {
       if (toReleaseHandle->hasChainedItem()) {
@@ -1639,7 +1639,8 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
-        
+       
+        resHdl = std::move(*newHdl);
         return candidate;
       }
     }
@@ -1808,7 +1809,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
   TierId nextTier = tid; // TODO - calculate this based on some admission policy
   while (++nextTier < numTiers_) { // try to evict down to the next memory tiers
     // allocateInternal might trigger another eviction
-    auto newItemHdl = allocateInternalTier(nextTier, pid,
+    ItemHandle newItemHdl = allocateInternalTier(nextTier, pid,
                      item->getKey(),
                      item->getSize(),
                      item->getCreationTime(),
@@ -1820,7 +1821,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
       ItemHandle toReleaseHandle = 
           moveRegularItemOnEvictionNoLock(item, newItemHdl);
       
-      *resHdl = std::move(newItemHdl); // guard will assign it to ctx under lock
+      resHdl = &newItemHdl;
       return toReleaseHandle;
     }
   }
