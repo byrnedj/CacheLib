@@ -1369,10 +1369,9 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEvictionNoLock(
                 oldItem.getSize());
   }
 
-  // Inside the MM container's lock, this checks if the old item exists to
-  // make sure that no other thread removed it, and only then replaces it.
-  if (!replaceInMMContainer(oldItemPtr, *newItemHdl)) {
-    accessContainer_->remove(*newItemHdl);
+  // Inside the MM container's lock, old item has already been removed
+  // so add the new item to its new container
+  if (!getMMContainer(*newItemHdl).add(*newItemHdl)) {
     return {};
   }
 
