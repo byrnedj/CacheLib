@@ -1636,11 +1636,11 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
       // check if by releasing the item we intend to, we actually
       // recycle the candidate.
 
+      resHdl = std::move(toReleaseHandle);
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
        
-        resHdl = std::move(toReleaseHandle);
         return candidate;
       }
     }
