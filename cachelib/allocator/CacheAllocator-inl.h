@@ -1597,15 +1597,15 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
       ctx->setItemHandle(std::move(resHdl));
       movesMap.erase(key);
     });
+  
 
     mmContainer.remove(*candidate);
 
-    ItemHandle *newHdl;
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
     ItemHandle toReleaseHandle = 
-        tryEvictToNextMemoryTierNoLock(tid,pid,candidate,newHdl);
+        tryEvictToNextMemoryTierNoLock(tid,pid,candidate);
     
     bool movedToNextTier = false;
     if(toReleaseHandle) {
@@ -1640,7 +1640,7 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
        
-        resHdl = std::move(*newHdl);
+        resHdl = std::move(toReleaseHandle);
         return candidate;
       }
     }
@@ -1802,7 +1802,7 @@ template <typename CacheTrait>
 template <typename ItemPtr>
 typename CacheAllocator<CacheTrait>::ItemHandle
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
-    TierId tid, PoolId pid, ItemPtr& item, ItemHandle *resHdl) {
+    TierId tid, PoolId pid, ItemPtr& item) {
   if(item->isChainedItem()) return {}; // TODO: We do not support ChainedItem yet
   if(item->isExpired()) return acquire(item);
 
@@ -1817,12 +1817,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
 
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item->getSize());
-
-      ItemHandle toReleaseHandle = 
-          moveRegularItemOnEvictionNoLock(item, newItemHdl);
-      
-      resHdl = &newItemHdl;
-      return toReleaseHandle;
+      return moveRegularItemOnEvictionNoLock(item, newItemHdl);
     }
   }
 

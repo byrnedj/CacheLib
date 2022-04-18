@@ -1597,7 +1597,7 @@ class CacheAllocator : public CacheBase {
   ItemHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, ItemPtr& item);
   
   template <typename ItemPtr>
-  ItemHandle tryEvictToNextMemoryTierNoLock(TierId tid, PoolId pid, ItemPtr& item, ItemHandle *resHdl);
+  ItemHandle tryEvictToNextMemoryTierNoLock(TierId tid, PoolId pid, ItemPtr& item);
 
   // Try to move the item down to the next memory tier
   //
