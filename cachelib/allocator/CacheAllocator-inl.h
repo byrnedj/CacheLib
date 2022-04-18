@@ -375,7 +375,7 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
   // TODO: Today disableEviction means do not evict from memory (DRAM).
   //       Should we support eviction between memory tiers (e.g. from DRAM to PMEM)?
   if (memory == nullptr && !config_.disableEviction) {
-    if (config_.randEviction) {
+    if (config_.randEviction && tid < numTiers_ - 1) {
         memory = findRandEviction(tid,pid,cid);
     } else {
         memory = findEviction(tid, pid, cid);
@@ -1568,6 +1568,7 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
           config_.evictionSearchTries > searchTries)
           && ptr != nullptr ) {
     ++searchTries;
+  
     
     auto idx =
         folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
