@@ -53,58 +53,85 @@ bool MM2Q::Container<T, HookPtr>::recordAccess(T& node,
   if (node.isInMMContainer() &&
       ((curr >= getUpdateTime(node) +
                     lruRefreshTime_.load(std::memory_order_relaxed)))) {
-    auto func = [&]() {
-      reconfigureLocked(curr);
-      if (!node.isInMMContainer()) {
-        return false;
-      }
-      if (isHot(node)) {
-        lru_.getList(LruType::Hot).moveToHead(node);
-        ++numHotAccesses_;
-      } else if (isCold(node)) {
-        if (inTail(node)) {
-          unmarkTail(node);
-          lru_.getList(LruType::ColdTail).remove(node);
-          ++numColdTailAccesses_;
-        } else {
-          lru_.getList(LruType::Cold).remove(node);
-        }
-        lru_.getList(LruType::Warm).linkAtHead(node);
-        unmarkCold(node);
-        ++numColdAccesses_;
-        // only rebalance if config says so. recordAccess is called mostly on
-        // latency sensitive cache get operations.
-        if (config_.rebalanceOnRecordAccess) {
-          rebalance();
-        }
-      } else {
-        if (inTail(node)) {
-          unmarkTail(node);
-          lru_.getList(LruType::WarmTail).remove(node);
-          lru_.getList(LruType::Warm).linkAtHead(node);
-          ++numWarmTailAccesses_;
-        } else {
-          lru_.getList(LruType::Warm).moveToHead(node);
-        }
-        ++numWarmAccesses_;
-      }
-      setUpdateTime(node, curr);
-      return true;
-    };
 
+
+    if (!node.isInMMContainer()) {
+      return false;
+    }
+    
+    if (isHot(node)) {
+      auto func = [&]() {
+          reconfigureLocked(curr);
+          lru_[LruType::Hot].moveToHead(node);
+          ++numHotAccesses_;
+          setUpdateTime(node, curr);
+          return true;
+      };
+    } else if (isCold(node)) {
+      auto funcColdTail = [&]() {
+          if (inTail(node)) {
+              unmarkTail(node);
+              lru_[LruType::ColdTail].remove(node);
+              ++numColdTailAccesses_;
+          };
+      };
+      auto funcCold = [&]() {
+          reconfigureLocked(curr);
+          if (!inTail(node)) {
+            lru_[LruType::Cold].remove(node);
+            ++numColdAccesses_;
+          }
+          return true;
+      };
+      auto funcWarm = [&]() {
+          // need to make sure this lock doesn't cause deadlock
+          lru_[LruType::Warm].linkAtHead(node);
+          unmarkCold(node);
+          // only rebalance if config says so. recordAccess is called mostly on
+          // latency sensitive cache get operations.
+          if (config_.rebalanceOnRecordAccess) {
+            rebalance();
+          }
+          setUpdateTime(node, curr);
+          return true;
+      };
+    } else {
+      auto funcWarmTail = [&]() {
+          if (inTail(node)) {
+            unmarkTail(node);
+            lru_[LruType::WarmTail].remove(node);
+            ++numWarmTailAccesses_;
+          }
+      }
+      auto funcWarm = [&]() {
+          reconfigureLocked(curr);
+          if (inTail(node)) {
+            lru_[LruType::Warm].linkAtHead(node);
+          } else {
+            lru_[LruType::Warm].moveToHead(node);
+          }
+          ++numWarmAccesses_;
+          setUpdateTime(node, curr);
+          return true;
+      };
+    }
+
+    // hot access needs hot lock
+    // cold access needs cold (and cold tail) and warm lock
+    // warm access needs warm lock (and warm tail)
     // if the tryLockUpdate optimization is on, and we were able to grab the
     // lock, execute the critical section and return true, else return false
     //
     // if the tryLockUpdate optimization is off, we always execute the critical
     // section and return true
     if (config_.tryLockUpdate) {
-      if (auto lck = LockHolder{*lruMutex_, std::try_to_lock}) {
+      if (auto lck = LockHolder{*lruMutex_[list], std::try_to_lock}) {
         return func();
       }
       return false;
     }
 
-    return lruMutex_->lock_combine(func);
+    return lruMutex_[list]->lock_combine(func);
   }
   return false;
 }

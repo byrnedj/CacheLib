@@ -316,7 +316,7 @@ class MM2Q {
   template <typename T, Hook<T> T::*HookPtr>
   struct Container {
    private:
-    using LruList = MultiDList<T, HookPtr>;
+    using LruList = DList<T, HookPtr>;
     using Mutex = folly::DistributedMutex;
     using LockHolder = std::unique_lock<Mutex>;
     using PtrCompressor = typename T::PtrCompressor;
@@ -348,7 +348,8 @@ class MM2Q {
     Container& operator=(const Container&) = delete;
 
     // context for iterating the MM container. At any given point of time,
-    // there can be only one iterator active since we need to lock the LRU for
+    // there can be only one iterator active since we need to lock the LRU
+    // region for
     // iteration. we can support multiple iterators at same time, by using a
     // shared ptr in the context for the lock holder in the future.
     class Iterator : public LruList::Iterator {
@@ -456,7 +457,9 @@ class MM2Q {
     bool isEmpty() const noexcept { return size() == 0; }
 
     size_t size() const noexcept {
-      return lruMutex_->lock_combine([this]() { return lru_.size(); });
+      for (int i = LruType::Warm; i != LruType::NumTypes; i++) {
+        return lruMutex_[i]->lock_combine([this,i]() { return lru_[i].size(); });
+      }
     }
 
     // Returns the eviction age stats. See CacheStats.h for details
@@ -575,10 +578,10 @@ class MM2Q {
     // protects all operations on the lru. We never really just read the state
     // of the LRU. Hence we dont really require a RW mutex at this point of
     // time.
-    mutable folly::cacheline_aligned<Mutex> lruMutex_;
+    mutable folly::cacheline_aligned<Mutex> lruMutex_[LruType::NumTypes];
 
     // the lru
-    LruList lru_{LruType::NumTypes, PtrCompressor{}};
+    LruList lru_[LruType::NumTypes]{PtrCompressor{}};
 
     // size of tail after insertion point
     size_t tailSize_{0};
