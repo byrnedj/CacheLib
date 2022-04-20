@@ -1245,9 +1245,10 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
                 oldItem.getSize());
   }
 
-  // Inside the MM container's lock, this checks if the old item exists to
-  // make sure that no other thread removed it, and only then replaces it.
-  if (!replaceInMMContainer(oldItemPtr, *newItemHdl)) {
+  // Inside the MM container's lock, old item has been removed
+  // make sure that no other thread added it, and add new one
+  XDCHECK(!oldItem.isInMMContainer());
+  if (!getMMContainer(*newItemHdl).add(*newItemHdl)) {
     accessContainer_->remove(*newItemHdl);
     return {};
   }
@@ -1463,6 +1464,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       movesMap.erase(key);
     });
 
+    mmContainer.remove(itr);
     itr.destroy();
 
     ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate);
@@ -1508,6 +1510,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       }
     }
 
+    mmContainer.add(*candidate);
     //reset iterator
     itr.resetToBegin();
   }
