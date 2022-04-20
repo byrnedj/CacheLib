@@ -1463,10 +1463,9 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
-    mmContainer.remove(itr);
     itr.destroy();
 
-    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, itr);
+    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate);
     bool movedToNextTier = false;
     if(toReleaseHandle) {
       movedToNextTier = true;
@@ -1508,8 +1507,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       }
     }
 
-    // Insert item back to the mmContainer if eviction failed.
-    mmContainer.add(*candidate);
+    //reset iterator
     itr.resetToBegin();
   }
   return nullptr;
