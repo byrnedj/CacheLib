@@ -1599,8 +1599,9 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item->getSize());
 
+      ItemHandle toReleaseHandle = moveRegularItemOnEviction(item, newItemHdl);
       *resHdl = std::move(newItemHdl);
-      return moveRegularItemOnEviction(item, newItemHdl);
+      return toReleaseHandle;
     }
   }
 
