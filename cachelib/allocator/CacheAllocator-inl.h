@@ -1228,7 +1228,6 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
   // also abort.
   if (!accessContainer_->replaceIf(oldItem, *newItemHdl,
                                    itemEvictionPredicate)) {
-    newItemHdl->unmarkIncomplete();
     return {};
   }
 
@@ -1251,7 +1250,6 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
   XDCHECK(!oldItem.isInMMContainer());
   if (!getMMContainer(*newItemHdl).add(*newItemHdl)) {
     accessContainer_->remove(*newItemHdl);
-    newItemHdl->unmarkIncomplete();
     return {};
   }
 
@@ -1260,7 +1258,6 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
   // replaceInMMContainer() operation, which would invalidate newItemHdl.
   if (!newItemHdl->isAccessible()) {
     removeFromMMContainer(*newItemHdl);
-    newItemHdl->unmarkIncomplete();
     return {};
   }
 
@@ -1283,7 +1280,6 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
     XDCHECK(newItemHdl->hasChainedItem());
   }
   newItemHdl.unmarkNascent();
-  newItemHdl->unmarkIncomplete();
   return acquire(&oldItem);
 }
 
@@ -1428,11 +1424,11 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
 }
 
 template <typename CacheTrait>
+template <typename ItemPtr>
 typename CacheAllocator<CacheTrait>::ItemHandle
-CacheAllocator<CacheTrait>::evictWithShardLock(TierId tid, PoolId pid, 
-        MMContainer& mmContainer, EvictionIterator& itr) {
+CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, 
+        MMContainer& mmContainer, ItemPtr& candidate, EvictionIterator& itr) {
 
-    Item *candidate = itr.get();
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
@@ -1452,8 +1448,8 @@ CacheAllocator<CacheTrait>::evictWithShardLock(TierId tid, PoolId pid,
     auto resHdl = ItemHandle{};
     auto guard = folly::makeGuard([key, this, ctx, shard, &resHdl]() {
       auto& movesMap = getMoveMapForShard(shard);
-      //if (resHdl)
-      //  resHdl->unmarkIncomplete();
+      if (resHdl)
+        resHdl->unmarkIncomplete();
       auto lock = getMoveLockForShard(shard);
       ctx->setItemHandle(std::move(resHdl));
       movesMap.erase(key);
@@ -1462,8 +1458,7 @@ CacheAllocator<CacheTrait>::evictWithShardLock(TierId tid, PoolId pid,
     mmContainer.remove(itr);
     itr.destroy();
 
-    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate);
-    resHdl = std::move(toReleaseHandle); // guard will assign it to ctx under lock
+    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
     return toReleaseHandle;
 }
 
@@ -1482,7 +1477,11 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     ++searchTries;
 
     Item* candidate = itr.get();
-    ItemHandle toReleaseHandle = evictWithShardLock(tid, pid, mmContainer, itr);
+    //1. shard lock is acquired with move ctx
+    //2. item is removed from container
+    //3. itr is destroyed, 
+    ItemHandle toReleaseHandle = tryEvictWithShardLock(tid, pid, mmContainer, 
+                                                       candidate, itr);
 
     bool movedToNextTier = false;
     if(toReleaseHandle) {
@@ -1584,9 +1583,9 @@ template <typename CacheTrait>
 template <typename ItemPtr>
 typename CacheAllocator<CacheTrait>::ItemHandle
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
-    TierId tid, PoolId pid, ItemPtr& item) {
+    TierId tid, PoolId pid, ItemPtr& item, ItemHandle* resHdl) {
   if(item->isChainedItem()) return {}; // TODO: We do not support ChainedItem yet
-  if(item->isExpired()) return acquire(item);
+  if(item->isExpired()) return {};
 
   TierId nextTier = tid; // TODO - calculate this based on some admission policy
   while (++nextTier < numTiers_) { // try to evict down to the next memory tiers
@@ -1600,6 +1599,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item->getSize());
 
+      *resHdl = std::move(newItemHdl);
       return moveRegularItemOnEviction(item, newItemHdl);
     }
   }
@@ -1612,7 +1612,8 @@ typename CacheAllocator<CacheTrait>::ItemHandle
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(Item* item) {
   auto tid = getTierId(*item);
   auto pid = allocator_[tid]->getAllocInfo(item->getMemory()).poolId;
-  return tryEvictToNextMemoryTier(tid, pid, item);
+  ItemHandle resHdl{};
+  return tryEvictToNextMemoryTier(tid, pid, item, &resHdl);
 }
 
 template <typename CacheTrait>
