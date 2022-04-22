@@ -1590,6 +1590,10 @@ class CacheAllocator : public CacheBase {
   //         handle to the item. On failure an empty handle.
   template <typename ItemPtr>
   ItemHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, ItemPtr& item);
+  
+  ItemHandle evictWithShardLock(TierId tid, PoolId pid, 
+          MMContainer& mmContainer,
+          EvictionIterator& itr);
 
   // Try to move the item down to the next memory tier
   //

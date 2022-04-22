@@ -1228,6 +1228,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
   // also abort.
   if (!accessContainer_->replaceIf(oldItem, *newItemHdl,
                                    itemEvictionPredicate)) {
+    newItemHdl->unmarkIncomplete();
     return {};
   }
 
@@ -1250,6 +1251,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
   XDCHECK(!oldItem.isInMMContainer());
   if (!getMMContainer(*newItemHdl).add(*newItemHdl)) {
     accessContainer_->remove(*newItemHdl);
+    newItemHdl->unmarkIncomplete();
     return {};
   }
 
@@ -1258,6 +1260,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
   // replaceInMMContainer() operation, which would invalidate newItemHdl.
   if (!newItemHdl->isAccessible()) {
     removeFromMMContainer(*newItemHdl);
+    newItemHdl->unmarkIncomplete();
     return {};
   }
 
@@ -1280,6 +1283,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnEviction(
     XDCHECK(newItemHdl->hasChainedItem());
   }
   newItemHdl.unmarkNascent();
+  newItemHdl->unmarkIncomplete();
   return acquire(&oldItem);
 }
 
@@ -1424,20 +1428,11 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
 }
 
 template <typename CacheTrait>
-typename CacheAllocator<CacheTrait>::Item*
-CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
-  auto& mmContainer = getMMContainer(tid, pid, cid);
+typename CacheAllocator<CacheTrait>::ItemHandle
+CacheAllocator<CacheTrait>::evictWithShardLock(TierId tid, PoolId pid, 
+        MMContainer& mmContainer, EvictionIterator& itr) {
 
-  // Keep searching for a candidate until we were able to evict it
-  // or until the search limit has been exhausted
-  unsigned int searchTries = 0;
-  auto itr = mmContainer.getEvictionIterator();
-  while ((config_.evictionSearchTries == 0 ||
-          config_.evictionSearchTries > searchTries) &&
-         itr) {
-    ++searchTries;
-
-    Item* candidate = itr.get();
+    Item *candidate = itr.get();
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
@@ -1457,8 +1452,8 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     auto resHdl = ItemHandle{};
     auto guard = folly::makeGuard([key, this, ctx, shard, &resHdl]() {
       auto& movesMap = getMoveMapForShard(shard);
-      if (resHdl)
-        resHdl->unmarkIncomplete();
+      //if (resHdl)
+      //  resHdl->unmarkIncomplete();
       auto lock = getMoveLockForShard(shard);
       ctx->setItemHandle(std::move(resHdl));
       movesMap.erase(key);
@@ -1468,6 +1463,27 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     itr.destroy();
 
     ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate);
+    resHdl = std::move(toReleaseHandle); // guard will assign it to ctx under lock
+    return toReleaseHandle;
+}
+
+template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
+  auto& mmContainer = getMMContainer(tid, pid, cid);
+
+  // Keep searching for a candidate until we were able to evict it
+  // or until the search limit has been exhausted
+  unsigned int searchTries = 0;
+  auto itr = mmContainer.getEvictionIterator();
+  while ((config_.evictionSearchTries == 0 ||
+          config_.evictionSearchTries > searchTries) &&
+         itr) {
+    ++searchTries;
+
+    Item* candidate = itr.get();
+    ItemHandle toReleaseHandle = evictWithShardLock(tid, pid, mmContainer, itr);
+
     bool movedToNextTier = false;
     if(toReleaseHandle) {
       movedToNextTier = true;
@@ -1505,7 +1521,6 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
-        resHdl = std::move(toReleaseHandle); // guard will assign it to ctx under lock
         return candidate;
       }
     }
