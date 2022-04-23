@@ -1573,6 +1573,9 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, MMCont
     });
   
 
+    if (!candidate->isInMMContainer())
+        return {};
+
     mmContainer.remove(*candidate);
 
     // for chained items, the ownership of the parent can change. We try to
