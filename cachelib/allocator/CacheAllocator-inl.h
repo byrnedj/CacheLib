@@ -1547,34 +1547,8 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
 }
 
 template <typename CacheTrait>
-typename CacheAllocator<CacheTrait>::Item*
-CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid) {
-  auto& mmContainer = getMMContainer(tid, pid, cid);
-  
-  auto& pool = allocator_[tid]->getPool(pid);
-  auto& ac = pool.getAllocationClass(cid);
-  
-  unsigned int allocsPerSlab = ac.getAllocsPerSlab();
-  unsigned int allocSize = ac.getAllocSize();
-  
-  const Slab* slab = ac.getRandomSlab();
-  const void* ptr = reinterpret_cast<const void*>(slab);
-
-
-  // Keep searching for a candidate until we were able to evict it
-  // or until the search limit has been exhausted
-  unsigned int searchTries = 0;
-  while ((config_.evictionSearchTries == 0 ||
-          config_.evictionSearchTries > searchTries)
-          && ptr != nullptr ) {
-    ++searchTries;
-  
-    
-    auto idx =
-        folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
-
-    Item *candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
-
+typename CacheAllocator<CacheTrait>::ItemHandle 
+CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, MMContainer& mmContainer, Item* candidate) {
     folly::StringPiece key(candidate->getKey());
     auto shard = getShardForKey(key);
     auto& movesMap = getMoveMapForShard(shard);
@@ -1604,9 +1578,46 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
-    ItemHandle toReleaseHandle = 
+    auto handlePair = 
         tryEvictToNextMemoryTierNoLock(tid,pid,candidate);
+      
+    resHdl = std::move(handlePair.second);
+    return std::move(handlePair.first); 
+}
+
+template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid) {
+  auto& mmContainer = getMMContainer(tid, pid, cid);
+  
+  auto& pool = allocator_[tid]->getPool(pid);
+  auto& ac = pool.getAllocationClass(cid);
+  
+  unsigned int allocsPerSlab = ac.getAllocsPerSlab();
+  unsigned int allocSize = ac.getAllocSize();
+  
+  void* ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
+
+  // Keep searching for a candidate until we were able to evict it
+  // or until the search limit has been exhausted
+  unsigned int searchTries = 0;
+  while ((config_.evictionSearchTries == 0 ||
+          config_.evictionSearchTries > searchTries)
+          && ptr != nullptr ) {
+    ++searchTries;
+  
+    //after more than 10 failures try a new slab
+    if (searchTries % 10 == 0) {
+        ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
+    }
     
+    auto idx =
+        folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
+
+    Item *candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
+
+    ItemHandle toReleaseHandle = tryEvictWithShardLock(tid,pid, mmContainer,candidate);
+
     bool movedToNextTier = false;
     if(toReleaseHandle) {
       movedToNextTier = true;
@@ -1636,7 +1647,6 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
       // check if by releasing the item we intend to, we actually
       // recycle the candidate.
 
-      resHdl = std::move(toReleaseHandle);
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
@@ -1800,11 +1810,17 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
 
 template <typename CacheTrait>
 template <typename ItemPtr>
-typename CacheAllocator<CacheTrait>::ItemHandle
+std::pair<typename CacheAllocator<CacheTrait>::ItemHandle,
+          typename CacheAllocator<CacheTrait>::ItemHandle>
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
     TierId tid, PoolId pid, ItemPtr& item) {
-  if(item->isChainedItem()) return {}; // TODO: We do not support ChainedItem yet
-  if(item->isExpired()) return acquire(item);
+
+  std::pair<ItemHandle, ItemHandle> res;
+  if(item->isChainedItem()) return res; // TODO: We do not support ChainedItem yet
+  if(item->isExpired()) {
+      res.first = std::move(acquire(item));
+      return res;
+  }
 
   TierId nextTier = tid; // TODO - calculate this based on some admission policy
   while (++nextTier < numTiers_) { // try to evict down to the next memory tiers
@@ -1817,11 +1833,14 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTierNoLock(
 
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item->getSize());
-      return moveRegularItemOnEvictionNoLock(item, newItemHdl);
+      ItemHandle toReleaseHandle = moveRegularItemOnEvictionNoLock(item, newItemHdl);
+      res.first = std::move(toReleaseHandle);
+      res.second = std::move(newItemHdl);
+      return res;
     }
   }
 
-  return {};
+  return res;
 }
 
 template <typename CacheTrait>
