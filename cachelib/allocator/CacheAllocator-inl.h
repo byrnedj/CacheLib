@@ -1625,6 +1625,8 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassI
         return candidate;
       }
     }
+    
+    mmContainer.add(*candidate);
       
     return nullptr; 
 }
@@ -1666,7 +1668,6 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
         return evicted;
 
 
-    mmContainer.add(*candidate);
     
   }
   return nullptr;
