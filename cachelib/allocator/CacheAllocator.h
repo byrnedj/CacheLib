@@ -1600,7 +1600,7 @@ class CacheAllocator : public CacheBase {
   template <typename ItemPtr>
   std::pair<ItemHandle, ItemHandle> tryEvictToNextMemoryTierNoLock(TierId tid, PoolId pid, ItemPtr& item);
   
-  ItemHandle tryEvictWithShardLock(TierId tid, PoolId pid, MMContainer& mmContainer, Item* item);
+  Item* tryEvictWithShardLock(TierId tid, PoolId pid, ClassId cid, MMContainer& mmContainer, Item* item);
 
   // Try to move the item down to the next memory tier
   //

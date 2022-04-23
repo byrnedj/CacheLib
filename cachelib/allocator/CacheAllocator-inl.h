@@ -1547,8 +1547,9 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
 }
 
 template <typename CacheTrait>
-typename CacheAllocator<CacheTrait>::ItemHandle 
-CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, MMContainer& mmContainer, Item* candidate) {
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassId cid, 
+        MMContainer& mmContainer, Item* candidate) {
     folly::StringPiece key(candidate->getKey());
     auto shard = getShardForKey(key);
     auto& movesMap = getMoveMapForShard(shard);
@@ -1574,7 +1575,8 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, MMCont
   
 
     if (!candidate->isInMMContainer())
-        return {};
+        return nullptr;
+
 
     mmContainer.remove(*candidate);
 
@@ -1583,44 +1585,10 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, MMCont
     // recycles the child we intend to.
     auto handlePair = 
         tryEvictToNextMemoryTierNoLock(tid,pid,candidate);
-      
-    resHdl = std::move(handlePair.second);
-    return std::move(handlePair.first); 
-}
-
-template <typename CacheTrait>
-typename CacheAllocator<CacheTrait>::Item*
-CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid) {
-  auto& mmContainer = getMMContainer(tid, pid, cid);
-  
-  auto& pool = allocator_[tid]->getPool(pid);
-  auto& ac = pool.getAllocationClass(cid);
-  
-  unsigned int allocsPerSlab = ac.getAllocsPerSlab();
-  unsigned int allocSize = ac.getAllocSize();
-  
-  void* ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
-
-  // Keep searching for a candidate until we were able to evict it
-  // or until the search limit has been exhausted
-  unsigned int searchTries = 0;
-  while ((config_.evictionSearchTries == 0 ||
-          config_.evictionSearchTries > searchTries)
-          && ptr != nullptr ) {
-    ++searchTries;
-  
-    //after more than 10 failures try a new slab
-    if (searchTries % 10 == 0) {
-        ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
-    }
     
-    auto idx =
-        folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
-
-    Item *candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
-
-    ItemHandle toReleaseHandle = tryEvictWithShardLock(tid,pid, mmContainer,candidate);
-
+    resHdl = std::move(handlePair.second);
+    ItemHandle toReleaseHandle = std::move(handlePair.first);
+    
     bool movedToNextTier = false;
     if(toReleaseHandle) {
       movedToNextTier = true;
@@ -1657,6 +1625,47 @@ CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid
         return candidate;
       }
     }
+      
+    return nullptr; 
+}
+
+template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::findRandEviction(TierId tid, PoolId pid, ClassId cid) {
+  auto& mmContainer = getMMContainer(tid, pid, cid);
+  
+  auto& pool = allocator_[tid]->getPool(pid);
+  auto& ac = pool.getAllocationClass(cid);
+  
+  unsigned int allocsPerSlab = ac.getAllocsPerSlab();
+  unsigned int allocSize = ac.getAllocSize();
+  
+  void* ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
+
+  // Keep searching for a candidate until we were able to evict it
+  // or until the search limit has been exhausted
+  unsigned int searchTries = 0;
+  while ((config_.evictionSearchTries == 0 ||
+          config_.evictionSearchTries > searchTries)
+          && ptr != nullptr ) {
+    ++searchTries;
+  
+    //after more than 10 failures try a new slab
+    if (searchTries % 10 == 0) {
+        ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
+    }
+    
+    auto idx =
+        folly::Random::rand32(static_cast<uint32_t>(allocsPerSlab-1)) + 1;
+
+    Item *candidate = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(ptr) + allocSize*idx);
+
+    Item* evicted = tryEvictWithShardLock(tid, pid, cid, mmContainer,candidate);
+   
+    if (evicted != nullptr) 
+        return evicted;
+
+
     mmContainer.add(*candidate);
     
   }
