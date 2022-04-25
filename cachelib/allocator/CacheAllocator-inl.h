@@ -1541,6 +1541,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     mmContainer.add(*candidate);
     //reset iterator
     itr.resetToBegin();
+    ++itr; //incremnet the iterator since this last one failed
   }
   return nullptr;
 }
