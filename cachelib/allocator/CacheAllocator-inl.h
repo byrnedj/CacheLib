@@ -1589,10 +1589,6 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassI
     resHdl = std::move(handlePair.second);
     ItemHandle toReleaseHandle = std::move(handlePair.first);
     
-    bool movedToNextTier = false;
-    if(toReleaseHandle) {
-      movedToNextTier = true;
-    }
 
     if (toReleaseHandle) {
       if (toReleaseHandle->hasChainedItem()) {
@@ -1620,7 +1616,7 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassI
 
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
-                                 /* isNascent */ movedToNextTier, candidate)) {
+                                 /* isNascent */ true, candidate)) {
        
         return candidate;
       }
@@ -1692,16 +1688,10 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     // evict what we think as parent and see if the eviction of parent
     // recycles the child we intend to.
     
-    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, itr);
-    bool movedToNextTier = false;
-    if(toReleaseHandle) {
-      movedToNextTier = true;
-    } else {
-      toReleaseHandle =
+    ItemHandle toReleaseHandle =
           itr->isChainedItem()
               ? advanceIteratorAndTryEvictChainedItem(tid, pid, itr)
               : advanceIteratorAndTryEvictRegularItem(tid, pid, mmContainer, itr);
-    }
 
     if (toReleaseHandle) {
       if (toReleaseHandle->hasChainedItem()) {
@@ -1732,7 +1722,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       // recycle the candidate.
       if (ReleaseRes::kRecycled ==
           releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
-                                 /* isNascent */ movedToNextTier, candidate)) {
+                                 /* isNascent */ false, candidate)) {
         return candidate;
       }
     }
