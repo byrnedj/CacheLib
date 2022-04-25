@@ -1532,7 +1532,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       // check if by releasing the item we intend to, we actually
       // recycle the candidate.
       if (ReleaseRes::kRecycled ==
-          releaseBackToAllocator(itemToRelease, RemoveContext::kEviction,
+          releaseBackToAllocator(*toReleaseHandle, RemoveContext::kEviction,
                                  /* isNascent */ movedToNextTier, candidate)) {
         return candidate;
       }
