@@ -1451,9 +1451,10 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassI
       ctx->setItemHandle(std::move(resHdl));
       movesMap.erase(key);
     });
+    
+    itr->destroy();
 
     mmContainer.remove(*candidate);
-    itr->destroy();
 
     ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
 
@@ -1527,6 +1528,9 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     //reset iterator
     itr.resetToBegin();
     ++itr; //incremnet the iterator since this last one failed
+  }
+  if (itr) {
+      itr.destroy();
   }
   return nullptr;
 }
