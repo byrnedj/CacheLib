@@ -2081,7 +2081,7 @@ class CacheAllocator : public CacheBase {
   // poolResizer_, poolOptimizer_, memMonitor_, reaper_
   mutable std::mutex workersMutex_;
 
-  static constexpr size_t kShards = 127997; // TODO: need to define right value
+  static constexpr size_t kShards = 8192; // TODO: need to define right value
 
   struct MovesMapShard {
     alignas(folly::hardware_destructive_interference_size) MoveMap movesMap_;
