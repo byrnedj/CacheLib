@@ -1431,35 +1431,47 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid,
 
     // for chained items, the ownership of the parent can change. We try to
     // evict what we think as parent and see if the eviction of parent
-    // recycles the child we intend to.
-    folly::StringPiece key(candidate->getKey());
-    auto shard = getShardForKey(key);
-    auto& movesMap = getMoveMapForShard(shard);
-    MoveCtx* ctx(nullptr);
-    {
-      auto lock = getMoveLockForShard(shard);
-      auto res = movesMap.try_emplace(key, std::make_unique<MoveCtx>());
-      if (!res.second) {
+    // recycles the child we intend tod
+
+
+    TierId nextTier = tid++;
+    if (nextTier < numTiers_) {
+        folly::StringPiece key(candidate->getKey());
+        auto shard = getShardForKey(key);
+        auto& movesMap = getMoveMapForShard(shard);
+        MoveCtx* ctx(nullptr);
+        {
+          auto lock = getMoveLockForShard(shard);
+          auto res = movesMap.try_emplace(key, std::make_unique<MoveCtx>());
+          if (!res.second) {
+            return {};
+          }
+          ctx = res.first->second.get();
+        }
+
+        auto resHdl = ItemHandle{};
+        auto guard = folly::makeGuard([key, this, ctx, shard, &resHdl]() {
+          auto& movesMap = getMoveMapForShard(shard);
+          if (resHdl)
+            resHdl->unmarkIncomplete();
+          auto lock = getMoveLockForShard(shard);
+          ctx->setItemHandle(std::move(resHdl));
+          movesMap.erase(key);
+        });
+
+        mmContainer.remove(itr);
+        itr.destroy();
+
+        ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
+        return toReleaseHandle;
+    } else {
+        mmContainer.remove(itr);
+        itr.destroy();
+
         return {};
-      }
-      ctx = res.first->second.get();
+
     }
 
-    auto resHdl = ItemHandle{};
-    auto guard = folly::makeGuard([key, this, ctx, shard, &resHdl]() {
-      auto& movesMap = getMoveMapForShard(shard);
-      if (resHdl)
-        resHdl->unmarkIncomplete();
-      auto lock = getMoveLockForShard(shard);
-      ctx->setItemHandle(std::move(resHdl));
-      movesMap.erase(key);
-    });
-
-    mmContainer.remove(itr);
-    itr.destroy();
-
-    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
-    return toReleaseHandle;
 }
 
 template <typename CacheTrait>
