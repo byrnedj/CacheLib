@@ -1592,9 +1592,9 @@ class CacheAllocator : public CacheBase {
   ItemHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, ItemPtr& item, ItemHandle* resHdl);
   
   template <typename ItemPtr>
-  ItemHandle tryEvictWithShardLock(TierId tid, PoolId pid, 
+  Item* tryEvictWithShardLock(TierId tid, PoolId pid, ClassId cid,
           MMContainer& mmContainer, ItemPtr& candidate,
-          EvictionIterator& itr);
+          EvictionIterator* itr);
 
   // Try to move the item down to the next memory tier
   //

@@ -1425,90 +1425,37 @@ bool CacheAllocator<CacheTrait>::moveChainedItem(ChainedItem& oldItem,
 
 template <typename CacheTrait>
 template <typename ItemPtr>
-typename CacheAllocator<CacheTrait>::ItemHandle
-CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, 
-        MMContainer& mmContainer, ItemPtr& candidate, EvictionIterator& itr) {
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassId cid, 
+        MMContainer& mmContainer, ItemPtr& candidate, EvictionIterator* itr) {
 
-    // for chained items, the ownership of the parent can change. We try to
-    // evict what we think as parent and see if the eviction of parent
-    // recycles the child we intend tod
-
-
-    TierId nextTier = tid++;
-    if (nextTier < numTiers_) {
-        folly::StringPiece key(candidate->getKey());
-        auto shard = getShardForKey(key);
-        auto& movesMap = getMoveMapForShard(shard);
-        MoveCtx* ctx(nullptr);
-        {
-          auto lock = getMoveLockForShard(shard);
-          auto res = movesMap.try_emplace(key, std::make_unique<MoveCtx>());
-          if (!res.second) {
-            return {};
-          }
-          ctx = res.first->second.get();
-        }
-
-        auto resHdl = ItemHandle{};
-        auto guard = folly::makeGuard([key, this, ctx, shard, &resHdl]() {
-          auto& movesMap = getMoveMapForShard(shard);
-          if (resHdl)
-            resHdl->unmarkIncomplete();
-          auto lock = getMoveLockForShard(shard);
-          ctx->setItemHandle(std::move(resHdl));
-          movesMap.erase(key);
-        });
-
-        mmContainer.remove(itr);
-        itr.destroy();
-
-        ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
-        if (toReleaseHandle) {
-            // we must be the last handle and for chained items, this will be
-            // the parent.
-            XDCHECK(toReleaseHandle.get() == candidate || candidate->isChainedItem());
-            XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
-
-            // We manually release the item here because we don't want to
-            // invoke the Item Handle's destructor which will be decrementing
-            // an already zero refcount, which will throw exception
-            auto& itemToRelease = *toReleaseHandle.release();
-
-            // Decrementing the refcount because we want to recycle the item
-            const auto ref = decRef(itemToRelease);
-            XDCHECK_EQ(0u, ref);
-        }
-        return toReleaseHandle;
-    } else {
-        mmContainer.remove(itr);
-        itr.destroy();
-
+    folly::StringPiece key(candidate->getKey());
+    auto shard = getShardForKey(key);
+    auto& movesMap = getMoveMapForShard(shard);
+    MoveCtx* ctx(nullptr);
+    {
+      auto lock = getMoveLockForShard(shard);
+      auto res = movesMap.try_emplace(key, std::make_unique<MoveCtx>());
+      if (!res.second) {
         return {};
-
+      }
+      ctx = res.first->second.get();
     }
 
-}
+    auto resHdl = ItemHandle{};
+    auto guard = folly::makeGuard([key, this, ctx, shard, &resHdl]() {
+      auto& movesMap = getMoveMapForShard(shard);
+      if (resHdl)
+        resHdl->unmarkIncomplete();
+      auto lock = getMoveLockForShard(shard);
+      ctx->setItemHandle(std::move(resHdl));
+      movesMap.erase(key);
+    });
 
-template <typename CacheTrait>
-typename CacheAllocator<CacheTrait>::Item*
-CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
-  auto& mmContainer = getMMContainer(tid, pid, cid);
+    mmContainer.remove(*candidate);
+    itr->destroy();
 
-  // Keep searching for a candidate until we were able to evict it
-  // or until the search limit has been exhausted
-  unsigned int searchTries = 0;
-  auto itr = mmContainer.getEvictionIterator();
-  while ((config_.evictionSearchTries == 0 ||
-          config_.evictionSearchTries > searchTries) &&
-         itr) {
-    ++searchTries;
-
-    Item* candidate = itr.get();
-    //1. shard lock is acquired with move ctx
-    //2. item is removed from container
-    //3. itr is destroyed, 
-    ItemHandle toReleaseHandle = tryEvictWithShardLock(tid, pid, mmContainer, 
-                                                       candidate, itr);
+    ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
 
     bool movedToNextTier = false;
     if(toReleaseHandle) {
@@ -1527,6 +1474,19 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
         (*stats_.regularItemEvictions)[pid][cid].inc();
       }
 
+      // we must be the last handle and for chained items, this will be
+      // the parent.
+      XDCHECK(toReleaseHandle.get() == candidate || candidate->isChainedItem());
+      XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
+
+      // We manually release the item here because we don't want to
+      // invoke the Item Handle's destructor which will be decrementing
+      // an already zero refcount, which will throw exception
+      auto& itemToRelease = *toReleaseHandle.release();
+
+      // Decrementing the refcount because we want to recycle the item
+      const auto ref = decRef(itemToRelease);
+      XDCHECK_EQ(0u, ref);
 
 
       // check if by releasing the item we intend to, we actually
@@ -1537,6 +1497,31 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
         return candidate;
       }
     }
+    return nullptr;
+}
+
+template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::Item*
+CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
+  auto& mmContainer = getMMContainer(tid, pid, cid);
+
+  // Keep searching for a candidate until we were able to evict it
+  // or until the search limit has been exhausted
+  unsigned int searchTries = 0;
+  EvictionIterator itr = mmContainer.getEvictionIterator();
+  while ((config_.evictionSearchTries == 0 ||
+          config_.evictionSearchTries > searchTries) &&
+         itr) {
+    ++searchTries;
+
+    Item* candidate = itr.get();
+    //1. shard lock is acquired with move ctx
+    //2. item is removed from container
+    //3. itr is destroyed, 
+    Item* toEvict = tryEvictWithShardLock(tid, pid, cid, mmContainer, 
+                                                       candidate, &itr);
+    if (toEvict)
+        return toEvict;
 
     mmContainer.add(*candidate);
     //reset iterator
