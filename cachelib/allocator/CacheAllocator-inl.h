@@ -1463,6 +1463,21 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid,
         itr.destroy();
 
         ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
+        if (toReleaseHandle) {
+            // we must be the last handle and for chained items, this will be
+            // the parent.
+            XDCHECK(toReleaseHandle.get() == candidate || candidate->isChainedItem());
+            XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
+
+            // We manually release the item here because we don't want to
+            // invoke the Item Handle's destructor which will be decrementing
+            // an already zero refcount, which will throw exception
+            auto& itemToRelease = *toReleaseHandle.release();
+
+            // Decrementing the refcount because we want to recycle the item
+            const auto ref = decRef(itemToRelease);
+            XDCHECK_EQ(0u, ref);
+        }
         return toReleaseHandle;
     } else {
         mmContainer.remove(itr);
@@ -1513,19 +1528,6 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       }
 
 
-      // we must be the last handle and for chained items, this will be
-      // the parent.
-      XDCHECK(toReleaseHandle.get() == candidate || candidate->isChainedItem());
-      XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
-
-      // We manually release the item here because we don't want to
-      // invoke the Item Handle's destructor which will be decrementing
-      // an already zero refcount, which will throw exception
-      auto& itemToRelease = *toReleaseHandle.release();
-
-      // Decrementing the refcount because we want to recycle the item
-      const auto ref = decRef(itemToRelease);
-      XDCHECK_EQ(0u, ref);
 
       // check if by releasing the item we intend to, we actually
       // recycle the candidate.
@@ -1679,6 +1681,16 @@ CacheAllocator<CacheTrait>::tryEvictRegularItem(
     XDCHECK(token.isValid());
     nvmCache_->put(evictHandle, std::move(token));
   }
+  
+
+  // We manually release the item here because we don't want to
+  // invoke the Item Handle's destructor which will be decrementing
+  // an already zero refcount, which will throw exception
+  auto& itemToRelease = *evictHandle.release();
+
+  // Decrementing the refcount because we want to recycle the item
+  const auto ref = decRef(itemToRelease);
+  XDCHECK_EQ(0u, ref);
   return evictHandle;
 }
 
