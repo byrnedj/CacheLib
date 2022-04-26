@@ -1437,6 +1437,7 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassI
       auto lock = getMoveLockForShard(shard);
       auto res = movesMap.try_emplace(key, std::make_unique<MoveCtx>());
       if (!res.second) {
+        itr->destroy();
         return {};
       }
       ctx = res.first->second.get();
@@ -1452,9 +1453,9 @@ CacheAllocator<CacheTrait>::tryEvictWithShardLock(TierId tid, PoolId pid, ClassI
       movesMap.erase(key);
     });
     
-    itr->destroy();
 
-    mmContainer.remove(*candidate);
+    mmContainer.remove(*itr);
+    itr->destroy();
 
     ItemHandle toReleaseHandle = tryEvictToNextMemoryTier(tid, pid, candidate, &resHdl);
 
@@ -1673,14 +1674,6 @@ CacheAllocator<CacheTrait>::tryEvictRegularItem(
   }
   
 
-  // We manually release the item here because we don't want to
-  // invoke the Item Handle's destructor which will be decrementing
-  // an already zero refcount, which will throw exception
-  auto& itemToRelease = *evictHandle.release();
-
-  // Decrementing the refcount because we want to recycle the item
-  const auto ref = decRef(itemToRelease);
-  XDCHECK_EQ(0u, ref);
   return evictHandle;
 }
 
