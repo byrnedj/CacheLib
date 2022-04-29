@@ -4,6 +4,8 @@ import json
 import re
 import subprocess
 
+
+once = int(sys.argv[1])
 sizes = [8192, 65536]
 levels = ["leader","follower"]
 ratios = [ 1, 4 ]
@@ -57,7 +59,9 @@ for l in levels:
                         conf = dict()
                         with open(base_conf, 'r') as f:
                             conf = json.load(f)
-                        
+                       
+                        conf['cache_config']['htBucketPower'] = 28
+                        conf['cache_config']['htLockPower'] = 28
                         conf['cache_config']['tryLockUpdate'] = tlu
                         conf['cache_config']['cacheSizeMB'] = s
                         mtier = ""
@@ -100,7 +104,7 @@ for l in levels:
                                 if (len(p) == 3):
                                     line = str(s) + "," + str(r) + "," + str(tlu) + "," + m + "," + p[0] + "," + p[1] + "," + str(p[2]) + '\n'
                                     f.write(line)
-                        exit(1)
-
+                        if (once == 1):
+                            exit(1)
 
 
