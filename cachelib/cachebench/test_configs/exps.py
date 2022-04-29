@@ -27,7 +27,7 @@ memconfig = [ 'DRAM', 'PMEM', 'HYBRID' ]
 # DRAM:PMEM ratios = 1 , 4
 # trylockupdate => true,false
 
-cachelib_bin = bins[0]
+cachelib_bin = "../../../opt/cachelib/bin/cachebench"
 exp_res_file_lat = "/tmp/exp1_lat"
 exp_res_file_tp = "/tmp/exp1_tp"
 
@@ -40,7 +40,10 @@ with open(exp_res_file_tp, 'w') as f:
 
 for l in levels:
     for o in otypes:
-        base_conf = "hit_ratio/" + "graph_cache_" + l + "_" + o + "/config.json"
+        prefix = "hit_ratio/" + "graph_cache_" + l + "_" + o
+        base_conf = prefix + "/config.json"
+        #base_sizes = "hit_ratio/" + "graph_cache_" + l + "_" + o + "/sizes.json"
+        #base_pop = "hit_ratio/" + "graph_cache_" + l + "_" + o + "/pop.json"
         print(base_conf)
         for s in sizes:
             for r in ratios:
@@ -68,11 +71,11 @@ for l in levels:
                         conf['test_config']['numKeys'] = factor*conf['test_config']['numKeys']
                         conf['test_config']['numOps'] = factor*conf['test_config']['numOps']
                         
-                        exp_conf = "/tmp/config_size_" + str(s) + "_ratio_" + str(r) + "_tlu_" + str(tlu) + "_mem_" + m
-                        res_file = "/tmp/result_size_" + str(s) + "_ratio_" + str(r) + "_tlu_" + str(tlu) + "_mem_" + m
+                        exp_conf = prefix + "/config_wrkld_" + str(l) + "_size_" + str(s) + "_ratio_" + str(r) + "_tlu_" + str(tlu) + "_mem_" + m
+                        res_file = "/tmp/result_wrkld_" + str(l) + "_size_" + str(s) + "_ratio_" + str(r) + "_tlu_" + str(tlu) + "_mem_" + m
                         with open(exp_conf, 'w') as f:
                             json.dump(conf,f)
-                        cmd = "numactl -N 1 ../bin/" + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
+                        cmd = "numactl -N 0 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
                         
                         print(cmd)
                         print(res_file)
@@ -97,6 +100,7 @@ for l in levels:
                                 if (len(p) == 3):
                                     line = str(s) + "," + str(r) + "," + str(tlu) + "," + m + "," + p[0] + "," + p[1] + "," + str(p[2]) + '\n'
                                     f.write(line)
+                        exit(1)
 
 
 
