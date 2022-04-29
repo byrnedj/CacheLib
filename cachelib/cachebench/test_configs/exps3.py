@@ -90,7 +90,7 @@ for l in levels:
                             res_file = "/tmp/result_wrkld_" + str(l) + "_size_" + str(s) + "_ratio_" + str(r) + "_reduced-cs_" + "_mem_" + m + "_bgi_" + str(bi) + "_keepfree_" + str(keepfree)
                             with open(exp_conf, 'w') as f:
                                 json.dump(conf,f)
-                            cmd = "numactl -N 0 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
+                            cmd = "numactl -N 1 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
                             
                             print(cmd)
                             print(res_file)
