@@ -40,7 +40,7 @@ with open(exp_res_file_tp, 'w') as f:
     f.write(line)
 
 for l in levels:
-    threads = 48
+    threads = 24
     if (l == "leader"):
         threads = 24
     for o in otypes:
@@ -78,6 +78,8 @@ for l in levels:
                         conf['cache_config']['memoryTiers'] = mtier
                         conf['test_config']['numKeys'] = factor*conf['test_config']['numKeys']
                         conf['test_config']['numOps'] = factor*conf['test_config']['numOps']
+                        if l == "follower":
+                            conf['test_config']['numOps'] = 2*conf['test_config']['numOps']
                         conf['test_config']['numThreads'] = threads 
                         
                         conf_p = "_wrkld_" + str(l) + "_size_" + str(s) + "_ratio_" + str(r) + "_tlu_" + str(tlu) + "_mem_" + m
@@ -85,7 +87,7 @@ for l in levels:
                         res_file = "results/result" + conf_p
                         with open(exp_conf, 'w') as f:
                             json.dump(conf,f)
-                        cmd = "numactl -N 1 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
+                        cmd = "numactl -N 0 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
                         
                         print(cmd)
                         print(res_file)
@@ -107,8 +109,8 @@ for l in levels:
                             f.write(line)
                        
                         with open(exp_res_file_lat, 'ab') as f:
-                            for l in latency:
-                                p = l.split(',')
+                            for lat in latency:
+                                p = lat.split(',')
                                 if (len(p) == 3):
                                     line = res_p + "," + p[0] + "," + p[1] + "," + str(p[2]) + '\n'
                                     f.write(line)

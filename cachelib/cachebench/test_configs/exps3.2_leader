@@ -1,0 +1,17 @@
+numa,workload,size,ratio,bg-int,bg-size,mem,variable,value
+0,leader,8192,1,0,500,HYBRID,get,3483804
+0,leader,8192,1,0,500,HYBRID,set,1983406
+0,leader,8192,1,0,500,DRAM,get,4956837
+0,leader,8192,1,0,500,DRAM,set,2810945
+0,leader,8192,1,0,500,PMEM,get,3758289
+0,leader,8192,1,0,500,PMEM,set,2132673
+0,leader,8192,1,10,500,HYBRID,get,3550227
+0,leader,8192,1,10,500,HYBRID,set,2030951
+0,follower,8192,1,0,500,HYBRID,get,13528172
+0,follower,8192,1,0,500,HYBRID,set,1346439
+0,follower,8192,1,0,500,DRAM,get,15491429
+0,follower,8192,1,0,500,DRAM,set,1541643
+0,follower,8192,1,0,500,PMEM,get,12564883
+0,follower,8192,1,0,500,PMEM,set,1250877
+0,follower,8192,1,10,500,HYBRID,get,13823543
+0,follower,8192,1,10,500,HYBRID,set,1376347

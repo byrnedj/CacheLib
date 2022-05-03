@@ -6,7 +6,7 @@ import subprocess
 
 once = int(sys.argv[1])
 sizes = [8192]
-levels = ["leader","follower"]
+levels = ["follower"]
 ratios = [ 1 ]
 #otypes = ["fbobj" , "assocs"]
 otypes = ["fbobj"]
@@ -44,6 +44,7 @@ with open(exp_res_file_tp, 'w') as f:
 
 for l in levels:
     workload = l
+    threads = 24
     if (l == "leader"):
         threads = 24
     for o in otypes:
@@ -98,12 +99,14 @@ for l in levels:
                                 conf['test_config']['numOps'] = factor*conf['test_config']['numOps']
                                 conf['test_config']['numThreads'] = threads 
                                 
+                                if l == "follower":
+                                    conf['test_config']['numOps'] = 2*conf['test_config']['numOps']
                                 conf_p = "_wrkld_" + str(workload) + "_size_" + str(s) + "_ratio_" + str(r) + "_ff_" + str(ff) + "_mem_" + m + "_bgi_" + str(bi) + "_keepfree_" + str(keepfree)
                                 exp_conf = prefix + "/config" + conf_p
                                 res_file = "results/result" + conf_p 
                                 with open(exp_conf, 'w') as f:
                                     json.dump(conf,f)
-                                cmd = "numactl -N 1 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
+                                cmd = "numactl -N 0 " + str(cachelib_bin) + " --json_test_config " + exp_conf + " --report_api_latency" + " > " + res_file
                                 
                                 print(cmd)
                                 print(res_file)
