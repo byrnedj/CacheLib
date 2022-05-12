@@ -29,7 +29,7 @@
 #include "cachelib/allocator/Cache.h"
 #include "cachelib/allocator/CacheStats.h"
 #include "cachelib/allocator/Util.h"
-#include "cachelib/allocator/datastruct/MultiDList.h"
+#include "cachelib/allocator/datastruct/DList.h"
 #include "cachelib/allocator/memory/serialize/gen-cpp2/objects_types.h"
 #include "cachelib/common/CompilerUtils.h"
 #include "cachelib/common/Mutex.h"
@@ -71,14 +71,15 @@ class MM2Q {
   struct Config {
     // Create from serialized config
     explicit Config(SerializationConfigType configState)
-        : Config(*configState.lruRefreshTime(),
-                 *configState.lruRefreshRatio(),
-                 *configState.updateOnWrite(),
-                 *configState.updateOnRead(),
-                 *configState.tryLockUpdate(),
-                 *configState.rebalanceOnRecordAccess(),
-                 *configState.hotSizePercent(),
-                 *configState.coldSizePercent()) {}
+        : Config(*configState.lruRefreshTime_ref(),
+                 *configState.lruRefreshRatio_ref(),
+                 *configState.updateOnWrite_ref(),
+                 *configState.updateOnRead_ref(),
+                 *configState.tryLockUpdate_ref(),
+                 *configState.rebalanceOnRecordAccess_ref(),
+                 *configState.rebalanceProb_ref(),
+                 *configState.hotSizePercent_ref(),
+                 *configState.coldSizePercent_ref()) {}
 
     // @param time      the refresh time in seconds to trigger an update in
     // position upon access. An item will be promoted only once in each lru
@@ -91,6 +92,7 @@ class MM2Q {
                  updateOnR,
                  /* try lock update */ false,
                  /* rebalanceOnRecordAccess */ false,
+                 /* rebalanceP */ 25, 
                  30,
                  30) {}
 
@@ -113,6 +115,7 @@ class MM2Q {
                  updateOnR,
                  /* try lock update */ false,
                  /* rebalanceOnRecordAccess */ false,
+                 /* rebalanceP */ 25, 
                  hotPercent,
                  coldPercent) {}
 
@@ -127,6 +130,7 @@ class MM2Q {
     // @param rebalanceOnRecordAccs   whether to do rebalance on access. If set
     //                                to false, rebalance only happens when
     //                                items are added or removed to the queue.
+    // @param rebalanceP              probablity we do rebalance. 0 - 100 
     // @param hotPercent              percentage number for the size of the hot
     //                                queue in the overall size.
     // @param coldPercent             percentage number for the size of the cold
@@ -136,6 +140,7 @@ class MM2Q {
            bool updateOnR,
            bool tryLockU,
            bool rebalanceOnRecordAccs,
+           size_t rebalanceP,
            size_t hotPercent,
            size_t coldPercent)
         : Config(time,
@@ -144,6 +149,7 @@ class MM2Q {
                  updateOnR,
                  tryLockU,
                  rebalanceOnRecordAccs,
+                 rebalanceP,
                  hotPercent,
                  coldPercent) {}
 
@@ -162,6 +168,7 @@ class MM2Q {
     // @param rebalanceOnRecordAccs   whether to do rebalance on access. If set
     //                                to false, rebalance only happens when
     //                                items are added or removed to the queue.
+    // @param rebalanceP              probablity we do rebalance. 0 - 100 
     // @param hotPercent              percentage number for the size of the hot
     //                                queue in the overall size.
     // @param coldPercent             percentage number for the size of the cold
@@ -172,6 +179,7 @@ class MM2Q {
            bool updateOnR,
            bool tryLockU,
            bool rebalanceOnRecordAccs,
+           size_t rebalanceP,
            size_t hotPercent,
            size_t coldPercent)
         : Config(time,
@@ -180,6 +188,7 @@ class MM2Q {
                  updateOnR,
                  tryLockU,
                  rebalanceOnRecordAccs,
+                 rebalanceP,
                  hotPercent,
                  coldPercent,
                  0) {}
@@ -199,6 +208,7 @@ class MM2Q {
     // @param rebalanceOnRecordAccs   whether to do rebalance on access. If set
     //                                to false, rebalance only happens when
     //                                items are added or removed to the queue.
+    // @param rebalanceP              probablity we do rebalance. 0 - 100 
     // @param hotPercent              percentage number for the size of the hot
     //                                queue in the overall size.
     // @param coldPercent             percentage number for the size of the cold
@@ -211,6 +221,7 @@ class MM2Q {
            bool updateOnR,
            bool tryLockU,
            bool rebalanceOnRecordAccs,
+           size_t rebalanceP,
            size_t hotPercent,
            size_t coldPercent,
            uint32_t mmReconfigureInterval)
@@ -220,6 +231,7 @@ class MM2Q {
           updateOnRead(updateOnR),
           tryLockUpdate(tryLockU),
           rebalanceOnRecordAccess(rebalanceOnRecordAccs),
+          rebalanceProb(rebalanceP),
           hotSizePercent(hotPercent),
           coldSizePercent(coldPercent),
           mmReconfigureIntervalSecs(
@@ -241,18 +253,9 @@ class MM2Q {
     // Make sure that the size percent numbers are sane.
     void checkLruSizes() {
       auto warmSizePercent = getWarmSizePercent();
-      // 100% hot is allowed as a drop-in replacement for LRU
-
-      if (hotSizePercent == 100) {
-        if (coldSizePercent != 0 && warmSizePercent != 0) {
-          throw std::invalid_argument(folly::sformat(
-              "Invalid hot/cold/warm lru size {}/{}/{}. When Hot is 100%,"
-              " Warm and Cold must be 0.",
-              hotSizePercent, coldSizePercent, warmSizePercent));
-        }
-      } else if (hotSizePercent <= 0 || hotSizePercent > 100 ||
-                 coldSizePercent <= 0 || coldSizePercent >= 100 ||
-                 warmSizePercent <= 0 || warmSizePercent >= 100) {
+      if (hotSizePercent <= 0 || hotSizePercent >= 100 ||
+          coldSizePercent <= 0 || coldSizePercent >= 100 ||
+          warmSizePercent <= 0 || warmSizePercent >= 100) {
         throw std::invalid_argument(
             folly::sformat("Invalid hot/cold/warm lru size {}/{}/{}. Hot, "
                            "Warm and Cold lru's "
@@ -294,6 +297,9 @@ class MM2Q {
     // cache on reads, disable this.
     bool rebalanceOnRecordAccess{true};
 
+    // we use this to probablistically rebalance lrus so we don't always grab locks
+    size_t rebalanceProb{10}; //default is 10% of (adds and removes)
+
     // Size of hot and cold lru sizes.
     size_t hotSizePercent{30};
     size_t coldSizePercent{30};
@@ -317,7 +323,7 @@ class MM2Q {
   struct Container {
    private:
     using LruList = DList<T, HookPtr>;
-    using Mutex = folly::DistributedMutex;
+    using Mutex = std::mutex;
     using LockHolder = std::unique_lock<Mutex>;
     using PtrCompressor = typename T::PtrCompressor;
     using Time = typename Hook<T>::Time;
@@ -327,9 +333,14 @@ class MM2Q {
    public:
     Container() = default;
     Container(Config c, PtrCompressor compressor)
-        : lru_(LruType::NumTypes, std::move(compressor)),
-          tailTrackingEnabled_(c.tailSize > 0),
-          config_(std::move(c)) {
+          : tailTrackingEnabled_(c.tailSize > 0),
+            config_(std::move(c)) {
+      //for (int i = 0; i < LruType::NumTypes; i++) {
+      //  lru_.push_back(LruList(std::move(compressor)));
+      //}
+      //for (int i = 0; i < LruType::NumTypes; i++) {
+      //  lruMutex_.push_back(Mutex());
+      //}
       lruRefreshTime_ = config_.lruRefreshTime;
       nextReconfigureTime_ =
           config_.mmReconfigureIntervalSecs.count() == 0
@@ -348,8 +359,7 @@ class MM2Q {
     Container& operator=(const Container&) = delete;
 
     // context for iterating the MM container. At any given point of time,
-    // there can be only one iterator active since we need to lock the LRU
-    // region for
+    // there can be only one iterator active since we need to lock the LRU for
     // iteration. we can support multiple iterators at same time, by using a
     // shared ptr in the context for the lock holder in the future.
     class Iterator : public LruList::Iterator {
@@ -457,9 +467,20 @@ class MM2Q {
     bool isEmpty() const noexcept { return size() == 0; }
 
     size_t size() const noexcept {
-      for (int i = LruType::Warm; i != LruType::NumTypes; i++) {
-        return lruMutex_[i]->lock_combine([this,i]() { return lru_[i].size(); });
-      }
+      //return lruMutex_->lock_combine([this]() { return lru_.size(); });
+        //auto hotlck = LockHolder{*lruMutex_[LruType::Hot], std::defer_lock};
+        //auto warmlck = LockHolder{*lruMutex_[LruType::Warm], std::defer_lock};
+        //auto warmtaillck = LockHolder{*lruMutex_[LruType::WarmTail], std::defer_lock};
+        //auto coldlck = LockHolder{*lruMutex_[LruType::Cold], std::defer_lock};
+        //auto coldtaillck = LockHolder{*lruMutex_[LruType::ColdTail], std::defer_lock};
+        //std::lock(hotlck,warmlck,warmtaillck,coldlck,coldtaillck);
+        // shrink Warm (and WarmTail) if their total size is larger than expected
+        size_t lru_size = lru_[LruType::Hot].size() +
+                          lru_[LruType::Warm].size() +
+                          lru_[LruType::WarmTail].size() +
+                          lru_[LruType::Cold].size() +
+                          lru_[LruType::ColdTail].size();
+        return lru_size;
     }
 
     // Returns the eviction age stats. See CacheStats.h for details
@@ -504,7 +525,7 @@ class MM2Q {
     //
     // @param node          node to remove
     // @param doRebalance     whether to do rebalance in this remove
-    void removeLocked(T& node, bool doRebalance = true) noexcept;
+    void removeLocked(T& node) noexcept; //, bool doRebalance = true) noexcept;
 
     // Bit MM_BIT_0 is used to record if the item is hot.
     void markHot(T& node) noexcept {
@@ -578,10 +599,10 @@ class MM2Q {
     // protects all operations on the lru. We never really just read the state
     // of the LRU. Hence we dont really require a RW mutex at this point of
     // time.
-    mutable folly::cacheline_aligned<Mutex> lruMutex_[LruType::NumTypes];
+    mutable std::vector<Mutex> lruMutex_;
 
     // the lru
-    LruList lru_[LruType::NumTypes]{PtrCompressor{}};
+    std::vector<LruList> lru_; //{LruType::NumTypes, PtrCompressor{}};
 
     // size of tail after insertion point
     size_t tailSize_{0};
