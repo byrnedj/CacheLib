@@ -210,6 +210,15 @@ const Slab* AllocationClass::getSlabForReleaseLocked() const noexcept {
   return nullptr;
 }
 
+const Slab* AllocationClass::getRandomSlab() const noexcept {
+  if (!allocatedSlabs_.empty()) {
+    auto idx =
+        folly::Random::rand32(static_cast<uint32_t>(allocatedSlabs_.size()));
+    return allocatedSlabs_[idx];
+  }
+  return nullptr;
+}
+
 SlabReleaseContext AllocationClass::startSlabRelease(
     SlabReleaseMode mode, const void* hint, SlabReleaseAbortFn shouldAbortFn) {
   using LockHolder = std::unique_lock<std::mutex>;

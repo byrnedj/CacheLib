@@ -1403,6 +1403,7 @@ class CacheAllocator : public CacheBase {
   //               successfully.
   template <typename ItemPtr>
   ItemHandle moveRegularItemOnEviction(ItemPtr& oldItem, ItemHandle& newItemHdl);
+  ItemHandle moveRegularItemOnRandEviction(Item& oldItem, ItemHandle& newItemHdl);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's moving bit has been set. The user supplied
@@ -1737,6 +1738,7 @@ class CacheAllocator : public CacheBase {
   //
   // @return true if it item expire and removed successfully.
   bool removeIfExpired(const ItemHandle& handle);
+  bool removeIfRandEvict(const ItemHandle& handle);
 
   // exposed for the Reaper to iterate through the memory and find items to
   // reap under the super charged mode. This is faster if there are lots of
@@ -1847,6 +1849,10 @@ class CacheAllocator : public CacheBase {
 
   static bool itemEvictionPredicate(const Item& item) {
     return item.getRefCount() == 0 && !item.isMoving();
+  }
+  
+  static bool itemRandEvictionPredicate(const Item& item) {
+    return item.getRefCount() == 1 && !item.isMoving();
   }
 
   static bool itemExpiryPredicate(const Item& item) {
