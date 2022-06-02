@@ -1403,7 +1403,7 @@ class CacheAllocator : public CacheBase {
   //               successfully.
   template <typename ItemPtr>
   ItemHandle moveRegularItemOnEviction(ItemPtr& oldItem, ItemHandle& newItemHdl);
-  ItemHandle moveRegularItemOnRandEviction(Item& oldItem, ItemHandle& newItemHdl);
+  bool moveRegularItemOnRandEviction(Item& oldItem, ItemHandle& newItemHdl);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's moving bit has been set. The user supplied

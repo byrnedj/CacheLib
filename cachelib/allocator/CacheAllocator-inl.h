@@ -1186,8 +1186,7 @@ bool CacheAllocator<CacheTrait>::addWaitContextForMovingItem(
 }
 
 template <typename CacheTrait>
-typename CacheAllocator<CacheTrait>::ItemHandle
-CacheAllocator<CacheTrait>::moveRegularItemOnRandEviction(
+bool CacheAllocator<CacheTrait>::moveRegularItemOnRandEviction(
     Item& oldItem, ItemHandle& newItemHdl) {
   // TODO: should we introduce new latency tracker. E.g. evictRegularLatency_
   // ??? util::LatencyTracker tracker{stats_.evictRegularLatency_};
@@ -1211,7 +1210,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnRandEviction(
     auto lock = getMoveLockForShard(shard);
     auto res = movesMap.try_emplace(key, std::make_unique<MoveCtx>());
     if (!res.second) {
-      return {};
+      return false;
     }
     ctx = res.first->second.get();
   }
@@ -1268,7 +1267,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnRandEviction(
   // replaceInMMContainer() operation, which would invalidate newItemHdl.
   if (!newItemHdl->isAccessible()) {
     removeFromMMContainer(*newItemHdl);
-    return {};
+    return false;
   }
 
   // no one can add or remove chained items at this point
@@ -1291,7 +1290,7 @@ CacheAllocator<CacheTrait>::moveRegularItemOnRandEviction(
   }
   newItemHdl.unmarkNascent();
   resHdl = std::move(newItemHdl); // guard will assign it to ctx under lock
-  return acquire(&oldItem);
+  return true;
 }
 
 template <typename CacheTrait>
@@ -1608,19 +1607,19 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
             if (newItemHdl) {
               XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
 
-              ItemHandle toReleaseHandle = moveRegularItemOnRandEviction(item, newItemHdl);
-              if(toReleaseHandle) {
+              bool moved = moveRegularItemOnRandEviction(item, newItemHdl);
+              if (moved) {
                 if (toReleaseHandle->hasChainedItem()) {
                   (*stats_.chainedItemEvictions)[pid][cid].inc();
                 } else {
                   (*stats_.regularItemEvictions)[pid][cid].inc();
                 }
-                XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
+                XDCHECK_EQ(1u, handle->getRefCount());
 
                 // We manually release the item here because we don't want to
                 // invoke the Item Handle's destructor which will be decrementing
                 // an already zero refcount, which will throw exception
-                auto& itemToRelease = *toReleaseHandle.release();
+                auto& itemToRelease = *handle.release();
 
                 // Decrementing the refcount because we want to recycle the item
                 const auto ref = decRef(itemToRelease);
