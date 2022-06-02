@@ -1571,9 +1571,14 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
           config_.evictionSearchTries > searchTries) ) {
     ++searchTries;
    
-    //after more than 10 failures try a new slab
-    if (searchTries % 10 == 0) {
+    //after more than 16 failures try a new slab
+    unsigned int nullptrs = 0;
+    while ( (searchTries % 16 == 0 && searchTries > 1) || ptr == NULL) {
         ptr = reinterpret_cast<void*>(const_cast<Slab*>(ac.getRandomSlab()));
+        nullptrs++;
+        if (nullptrs > 100) {
+            XDCHECK(false);
+        }
     }
     
     auto idx =
