@@ -1609,7 +1609,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
 
               bool moved = moveRegularItemOnRandEviction(item, newItemHdl);
               if (moved) {
-                if (toReleaseHandle->hasChainedItem()) {
+                if (handle->hasChainedItem()) {
                   (*stats_.chainedItemEvictions)[pid][cid].inc();
                 } else {
                   (*stats_.regularItemEvictions)[pid][cid].inc();
