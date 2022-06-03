@@ -3279,6 +3279,27 @@ bool CacheAllocator<CacheTrait>::removeIfExpired(const ItemHandle& handle) {
 }
 
 template <typename CacheTrait>
+bool CacheAllocator<CacheTrait>::removeIfSampled(const ItemHandle& handle, uint64_t sloc, uint64_t s) {
+  if (!handle) {
+    return false;
+  }
+  if (s < sloc) {
+    return false;
+  }
+
+  // We remove the item from both access and mm containers.
+  // We want to make sure the caller is the only one holding the handle.
+  auto removedHandle =
+      accessContainer_->removeIf(*(handle.getInternal()), itemSampledPredicate);
+  if (removedHandle) {
+    removeFromMMContainer(*(handle.getInternal()));
+    return true;
+  }
+
+  return false;
+}
+
+template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::removeIfRandEvict(const ItemHandle& handle) {
   if (!handle) {
     return false;

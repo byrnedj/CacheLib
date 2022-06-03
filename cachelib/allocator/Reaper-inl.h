@@ -50,6 +50,8 @@ void Reaper<CacheT>::reapSlabWalkMode() {
   // millions of times per sec.
   uint64_t visits = 0;
   uint64_t reaps = 0;
+  uint64_t sloc = (rand() % 500);
+  uint64_t s = 1;
 
   // unlike the iterator mode, in this mode, we traverse all the way
   ReaperAPIWrapper<CacheT>::traverseAndExpireItems(
@@ -81,7 +83,7 @@ void Reaper<CacheT>::reapSlabWalkMode() {
         // container before we actually grab the
         // handle to the item and proceed to expire it.
         const auto& item = *reinterpret_cast<const Item*>(ptr);
-        if (!item.isExpired(currentTimeSec) || !item.isAccessible()) {
+        if (!item.isAccessible()) {
           return true;
         }
 
@@ -97,10 +99,13 @@ void Reaper<CacheT>::reapSlabWalkMode() {
           // cache.
           auto handle = cache_.peek(key);
           auto reaped =
-              ReaperAPIWrapper<CacheT>::removeIfExpired(cache_, handle);
+              //ReaperAPIWrapper<CacheT>::removeIfExpired(cache_, handle);
+              ReaperAPIWrapper<CacheT>::removeIfSampled(cache_, handle, sloc, s);
           if (reaped) {
+            sloc += rand() % 500;
             reaps++;
           }
+          s++;
         } catch (const std::exception& e) {
           numErrs_.fetch_add(1, std::memory_order_relaxed);
           XLOGF(DBG, "Error while reaping. Msg = {}", e.what());
