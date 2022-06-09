@@ -120,6 +120,13 @@ struct CacheStat {
 
   // number of regular items that were evicted from this classId
   uint64_t regularItemEvictions;
+  
+  // number of evictions from this class id that was of a chained item
+  uint64_t chainedItemEvictionsReap;
+
+  // number of regular items that were evicted from this classId
+  uint64_t regularItemEvictionsReap;
+
 
   // the stats from the mm container
   MMContainerStat containerStat;
@@ -132,6 +139,11 @@ struct CacheStat {
   // total number of evictions.
   uint64_t numEvictions() const noexcept {
     return chainedItemEvictions + regularItemEvictions;
+  }
+  
+  // total number of evictions.
+  uint64_t numEvictionsReap() const noexcept {
+    return chainedItemEvictionsReap + regularItemEvictionsReap;
   }
 
   // the current oldest item in the container in seconds.
@@ -194,6 +206,9 @@ struct PoolStats {
 
   // number of evictions for this pool
   uint64_t numEvictions() const noexcept;
+  
+  // number of evictions for this pool
+  uint64_t numEvictionsReap() const noexcept;
 
   // number of all items in this pool
   uint64_t numItems() const noexcept;
@@ -415,6 +430,9 @@ struct GlobalCacheStats {
 
   // number of evictions across all the pools in the cache.
   uint64_t numEvictions{0};
+  
+  // number of evictions across all the pools in the cache.
+  uint64_t numEvictionsReap{0};
 
   // number of allocation attempts with invalid input params.
   uint64_t invalidAllocs{0};

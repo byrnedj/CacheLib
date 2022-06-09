@@ -50,7 +50,7 @@ void Reaper<CacheT>::reapSlabWalkMode() {
   // millions of times per sec.
   uint64_t visits = 0;
   uint64_t reaps = 0;
-  uint64_t sloc = (rand() % 500);
+  uint64_t sloc = (rand() % 3);
   uint64_t s = 1;
 
   // unlike the iterator mode, in this mode, we traverse all the way
@@ -102,7 +102,7 @@ void Reaper<CacheT>::reapSlabWalkMode() {
               //ReaperAPIWrapper<CacheT>::removeIfExpired(cache_, handle);
               ReaperAPIWrapper<CacheT>::removeIfSampled(cache_, handle, sloc, s);
           if (reaped) {
-            sloc += rand() % 500;
+            sloc += rand() % 3;
             reaps++;
           }
           s++;

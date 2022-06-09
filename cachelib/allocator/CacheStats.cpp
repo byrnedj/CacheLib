@@ -28,7 +28,9 @@ void Stats::init() {
   fragmentationSize = std::make_unique<PerPoolClassAtomicCounters>();
   allocFailures = std::make_unique<PerPoolClassAtomicCounters>();
   chainedItemEvictions = std::make_unique<PerPoolClassAtomicCounters>();
+  chainedItemEvictionsReap = std::make_unique<PerPoolClassAtomicCounters>();
   regularItemEvictions = std::make_unique<PerPoolClassAtomicCounters>();
+  regularItemEvictionsReap = std::make_unique<PerPoolClassAtomicCounters>();
   auto initToZero = [](auto& a) {
     for (auto& s : a) {
       for (auto& c : s) {
@@ -42,6 +44,8 @@ void Stats::init() {
   initToZero(*fragmentationSize);
   initToZero(*chainedItemEvictions);
   initToZero(*regularItemEvictions);
+  initToZero(*chainedItemEvictionsReap);
+  initToZero(*regularItemEvictionsReap);
 }
 
 template <int>
@@ -49,7 +53,7 @@ struct SizeVerify {};
 
 void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 #ifndef SKIP_SIZE_VERIFY
-  SizeVerify<sizeof(Stats)> a = SizeVerify<16144>{};
+  SizeVerify<sizeof(Stats)> a = SizeVerify<16160>{};
   std::ignore = a;
 #endif
   ret.numCacheGets = numCacheGets.get();
@@ -123,6 +127,8 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
   ret.allocFailures = accum(*allocFailures);
   ret.numEvictions = accum(*chainedItemEvictions);
   ret.numEvictions += accum(*regularItemEvictions);
+  ret.numEvictionsReap = accum(*chainedItemEvictionsReap);
+  ret.numEvictionsReap += accum(*regularItemEvictionsReap);
 
   ret.invalidAllocs = invalidAllocs.get();
   ret.numRefcountOverflow = numRefcountOverflow.get();
@@ -175,6 +181,8 @@ PoolStats& PoolStats::operator+=(const PoolStats& other) {
       d.numHits += s.numHits;
       d.chainedItemEvictions += s.chainedItemEvictions;
       d.regularItemEvictions += s.regularItemEvictions;
+      d.chainedItemEvictionsReap += s.chainedItemEvictionsReap;
+      d.regularItemEvictionsReap += s.regularItemEvictionsReap;
     }
 
     // aggregate container stats within CacheStat
@@ -224,6 +232,14 @@ uint64_t PoolStats::numEvictions() const noexcept {
   uint64_t n = 0;
   for (const auto& s : cacheStats) {
     n += s.second.numEvictions();
+  }
+  return n;
+}
+
+uint64_t PoolStats::numEvictionsReap() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numEvictionsReap();
   }
   return n;
 }

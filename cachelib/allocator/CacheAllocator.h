@@ -1739,7 +1739,7 @@ class CacheAllocator : public CacheBase {
   // @return true if it item expire and removed successfully.
   bool removeIfExpired(const ItemHandle& handle);
   bool removeIfRandEvict(const ItemHandle& handle);
-  bool removeIfSampled(const ItemHandle& handle, uint64_t sloc, uint64_t s);
+  bool removeIfSampled(ItemHandle& handle, uint64_t sloc, uint64_t s);
 
   // exposed for the Reaper to iterate through the memory and find items to
   // reap under the super charged mode. This is faster if there are lots of

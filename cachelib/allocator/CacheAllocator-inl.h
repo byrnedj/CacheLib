@@ -315,9 +315,9 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                        config_.poolAdviseStrategy);
   }
 
-  if (config_.itemsReaperEnabled()) {
-    startNewReaper(config_.reaperInterval, config_.reaperConfig);
-  }
+  //if (config_.itemsReaperEnabled()) {
+  startNewReaper(std::chrono::milliseconds(1),util::Throttler::Config{});
+  //}
 
   if (config_.poolOptimizerEnabled()) {
     startNewPoolOptimizer(config_.regularPoolOptimizeInterval,
@@ -2689,6 +2689,8 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
             (*stats_.fragmentationSize)[poolId][cid].get(), classHits,
             (*stats_.chainedItemEvictions)[poolId][cid].get(),
             (*stats_.regularItemEvictions)[poolId][cid].get(),
+            (*stats_.chainedItemEvictionsReap)[poolId][cid].get(),
+            (*stats_.regularItemEvictionsReap)[poolId][cid].get(),
             container.getStats()}});
       totalHits += classHits;
     }
@@ -3279,21 +3281,63 @@ bool CacheAllocator<CacheTrait>::removeIfExpired(const ItemHandle& handle) {
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::removeIfSampled(const ItemHandle& handle, uint64_t sloc, uint64_t s) {
+bool CacheAllocator<CacheTrait>::removeIfSampled(ItemHandle& handle, uint64_t sloc, uint64_t s) {
   if (!handle) {
     return false;
   }
-  if (s < sloc) {
-    return false;
-  }
+  //if (s < sloc) {
+  //  return false;
+  //}
 
   // We remove the item from both access and mm containers.
   // We want to make sure the caller is the only one holding the handle.
   auto removedHandle =
       accessContainer_->removeIf(*(handle.getInternal()), itemSampledPredicate);
   if (removedHandle) {
+    auto removedItemKey = handle.get()->getKey();
+    auto removedItemSize = handle.get()->getSize();
+    auto removedItemCt = handle.get()->getCreationTime();
+    auto removedItemEt = handle.get()->getExpiryTime();
+    auto tid = currentTier();
+    const auto requiredSize = Item::getRequiredSize(removedItemKey, removedItemSize);
+    const auto pid = allocator_[tid]->getAllocInfo(removedHandle.get()->getMemory()).poolId;
+    const auto cid = allocator_[tid]->getAllocationClassId(pid, requiredSize);
     removeFromMMContainer(*(handle.getInternal()));
-    return true;
+    TierId nextTier = tid; // TODO - calculate this based on some admission policy
+    while (++nextTier < numTiers_) { // try to evict down to the next memory tiers
+      // allocateInternal might trigger another eviction
+      auto newItemHdl = allocateInternalTier(nextTier, pid,
+		      removedItemKey,removedItemSize,removedItemCt,removedItemEt);
+
+      if (newItemHdl) {
+        XDCHECK_EQ(newItemHdl->getSize(), removedItemSize);
+
+        bool moved = moveRegularItemOnRandEviction(*(handle.getInternal()), newItemHdl);
+        if (moved) {
+          if (handle->hasChainedItem()) {
+            (*stats_.chainedItemEvictionsReap)[pid][cid].inc();
+          } else {
+            (*stats_.regularItemEvictionsReap)[pid][cid].inc();
+          }
+
+	  handle.release();
+          XDCHECK_EQ(2u, removedHandle->getRefCount());
+
+          // We manually release the item here because we don't want to
+          // invoke the Item Handle's destructor which will be decrementing
+          // an already zero refcount, which will throw exception
+          auto& itemToRelease = *removedHandle.release();
+
+          // Decrementing the refcount because we want to recycle the item
+          const auto ref1 = decRef(itemToRelease);
+          XDCHECK_EQ(1u, ref1);
+          const auto ref0 = decRef(itemToRelease);
+          XDCHECK_EQ(0u, ref0);
+          releaseBackToAllocator(itemToRelease, RemoveContext::kNormal, false);
+	  return true;
+        }
+      }
+    }
   }
 
   return false;
