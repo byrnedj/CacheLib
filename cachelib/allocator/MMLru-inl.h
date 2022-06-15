@@ -256,6 +256,9 @@ void MMLru::Container<T, HookPtr>::removeLocked(T& node) {
 
 template <typename T, MMLru::Hook<T> T::*HookPtr>
 bool MMLru::Container<T, HookPtr>::remove(T& node) noexcept {
+  //we are 99.9% sure that this is protected - this is the default 
+  //method for removing from container from upstream.
+  folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
   return lruMutex_->lock_combine([this, &node]() {
     if (!node.isInMMContainer()) {
       return false;

@@ -116,6 +116,7 @@ struct Stats {
         << std::endl;
     out << folly::sformat("RAM Evictions : {:,}", numEvictions) << std::endl;
     out << folly::sformat("RAM Evictions Reap : {:,}", numEvictionsReap) << std::endl;
+    out << folly::sformat("Items Reaped: {:,}", numReapedItems) << std::endl;
 
     if (numCacheGets > 0) {
       out << folly::sformat("Cache Gets    : {:,}", numCacheGets) << std::endl;

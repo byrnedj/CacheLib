@@ -250,6 +250,9 @@ class MMLru {
       // 1. Invalidate this iterator
       // 2. Unlock
       void destroy() {
+        //we are 99.9% sure that this is protected - this is the default 
+        //method for removing from container from upstream.
+        folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
         LruList::Iterator::reset();
         if (l_.owns_lock()) {
           l_.unlock();
