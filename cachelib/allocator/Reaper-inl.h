@@ -16,6 +16,10 @@
 
 #include "cachelib/allocator/memory/Slab.h"
 
+#include <folly/fibers/FiberManager.h>
+#include <folly/fibers/FiberManagerMap.h>
+#include <folly/io/async/EventBase.h>
+
 namespace facebook {
 namespace cachelib {
 
@@ -52,6 +56,8 @@ void Reaper<CacheT>::reapSlabWalkMode() {
   uint64_t reaps = 0;
   uint64_t sloc = (rand() % 3);
   uint64_t s = 1;
+  folly::EventBase evb;
+  auto& fiberManager = folly::fibers::getFiberManager(evb);
 
   // unlike the iterator mode, in this mode, we traverse all the way
   ReaperAPIWrapper<CacheT>::traverseAndExpireItems(
@@ -59,25 +65,25 @@ void Reaper<CacheT>::reapSlabWalkMode() {
         XDCHECK(ptr);
         // see if we need to stop the traversal and accumulate counts to
         // global
-        if (visits++ == kCheckThreshold) {
-          numVisitedItems_.fetch_add(visits, std::memory_order_relaxed);
-          numReapedItems_.fetch_add(reaps, std::memory_order_relaxed);
-          visits = 0;
-          reaps = 0;
+        //if (visits++ == kCheckThreshold) {
+        //  numVisitedItems_.fetch_add(visits, std::memory_order_relaxed);
+        //  numReapedItems_.fetch_add(reaps, std::memory_order_relaxed);
+        //  visits = 0;
+        //  reaps = 0;
 
-          // abort the current iteration since we have to stop
-          if (shouldStopWork()) {
-            return false;
-          }
+        //  // abort the current iteration since we have to stop
+        //  if (shouldStopWork()) {
+        //    return false;
+        //  }
 
-          currentTimeSec = util::getCurrentTimeSec();
-        }
+        //  currentTimeSec = util::getCurrentTimeSec();
+        //}
 
         // if we throttle, then we should check for stop condition after
         // the throttler has actually throttled us.
-        if (t.throttle() && shouldStopWork()) {
-          return false;
-        }
+        //if (t.throttle() && shouldStopWork()) {
+        //  return false;
+        //}
 
         // get an item and check if it is expired and is in the access
         // container before we actually grab the
@@ -93,29 +99,28 @@ void Reaper<CacheT>::reapSlabWalkMode() {
             allocInfo.allocSize) {
           return true;
         }
-
+        fiberManager.addTask( [this,key]() {
         try {
           // obtain a valid handle without disturbing the state of the item in
           // cache.
-          auto handle = cache_.peek(key);
-          auto reaped =
-              //ReaperAPIWrapper<CacheT>::removeIfExpired(cache_, handle);
-              ReaperAPIWrapper<CacheT>::removeIfSampled(cache_, handle, sloc, s);
-          if (reaped) {
-            sloc += rand() % 3;
-            reaps++;
-          }
-          s++;
+          //if (s < sloc) {
+              auto handle = cache_.peek(key);
+              auto reaped = ReaperAPIWrapper<CacheT>::removeIfSampled(cache_, handle);
+              if (reaped) {
+                  numReapedItems_.fetch_add(1, std::memory_order_relaxed);
+              }
+          //    sloc += rand() % 10;
+          //}
+          //s++;
         } catch (const std::exception& e) {
           numErrs_.fetch_add(1, std::memory_order_relaxed);
           XLOGF(DBG, "Error while reaping. Msg = {}", e.what());
         }
+        });
         return true;
       });
+  evb.loop();
 
-  // accumulate any left over visits, reaps.
-  numVisitedItems_.fetch_add(visits, std::memory_order_relaxed);
-  numReapedItems_.fetch_add(reaps, std::memory_order_relaxed);
   auto end = util::getCurrentTimeMs();
   traversalStats_.recordTraversalTime(end > begin ? end - begin : 0);
 }

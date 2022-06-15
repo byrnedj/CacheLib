@@ -3281,7 +3281,7 @@ bool CacheAllocator<CacheTrait>::removeIfExpired(const ItemHandle& handle) {
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::removeIfSampled(ItemHandle& handle, uint64_t sloc, uint64_t s) {
+bool CacheAllocator<CacheTrait>::removeIfSampled(ItemHandle& handle) {
   if (!handle) {
     return false;
   }
@@ -3320,7 +3320,7 @@ bool CacheAllocator<CacheTrait>::removeIfSampled(ItemHandle& handle, uint64_t sl
             (*stats_.regularItemEvictionsReap)[pid][cid].inc();
           }
 
-	  handle.release();
+	      handle.release();
           XDCHECK_EQ(2u, removedHandle->getRefCount());
 
           // We manually release the item here because we don't want to
@@ -3334,7 +3334,7 @@ bool CacheAllocator<CacheTrait>::removeIfSampled(ItemHandle& handle, uint64_t sl
           const auto ref0 = decRef(itemToRelease);
           XDCHECK_EQ(0u, ref0);
           releaseBackToAllocator(itemToRelease, RemoveContext::kNormal, false);
-	  return true;
+	      return true;
         }
       }
     }
