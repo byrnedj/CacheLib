@@ -119,7 +119,6 @@ void Reaper<CacheT>::reapSlabWalkMode() {
         });
         return true;
       });
-  evb.loop();
 
   auto end = util::getCurrentTimeMs();
   traversalStats_.recordTraversalTime(end > begin ? end - begin : 0);
