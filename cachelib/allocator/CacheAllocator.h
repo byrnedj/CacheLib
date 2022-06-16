@@ -24,6 +24,11 @@
 #include <folly/hash/Hash.h>
 #include <folly/container/F14Map.h>
 
+#include <folly/fibers/FiberManager.h>
+#include <folly/fibers/FiberManagerMap.h>
+#include <folly/fibers/SimpleLoopController.h>
+#include <folly/io/async/EventBase.h>
+
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -1777,7 +1782,8 @@ class CacheAllocator : public CacheBase {
     size_t evictionCandidates = 0;
     std::vector<Item*> candidates;
     candidates.reserve(batch);
-
+    folly::EventBase evb;
+    auto& fiberManager = folly::fibers::getFiberManager(evb); 
     size_t tries = 0;
     mmContainer.withEvictionIterator([&tries, &candidates, &batch, this](auto &&itr){
       while (candidates.size() < batch && (config_.evictionHotnessThreshold == 0 || tries < config_.evictionHotnessThreshold) && itr) {
@@ -1798,52 +1804,54 @@ class CacheAllocator : public CacheBase {
     });
 
     for (Item *candidate : candidates) {
-      auto toReleaseHandle =
-          evictNormalItem(*candidate, true /* skipIfTokenInvalid */, true /* from BG thread */);
-      auto ref = candidate->unmarkMoving();
+      fiberManager.addTask( [this,candidate,&evictions,pid,cid]() {  
+        auto toReleaseHandle =
+            evictNormalItem(*candidate, true /* skipIfTokenInvalid */, true /* from BG thread */);
+        auto ref = candidate->unmarkMoving();
 
-      if (toReleaseHandle || ref == 0u) {
-        if (candidate->hasChainedItem()) {
-          (*stats_.chainedItemEvictions)[pid][cid].inc();
+        if (toReleaseHandle || ref == 0u) {
+          if (candidate->hasChainedItem()) {
+            (*stats_.chainedItemEvictions)[pid][cid].inc();
+          } else {
+            (*stats_.regularItemEvictions)[pid][cid].inc();
+          }
+
+          evictions++;
         } else {
-          (*stats_.regularItemEvictions)[pid][cid].inc();
+          if (candidate->hasChainedItem()) {
+            stats_.evictFailParentAC.inc();
+          } else {
+            stats_.evictFailAC.inc();
+          }
         }
 
-        evictions++;
-      } else {
-        if (candidate->hasChainedItem()) {
-          stats_.evictFailParentAC.inc();
-        } else {
-          stats_.evictFailAC.inc();
+        if (toReleaseHandle) {
+          XDCHECK(toReleaseHandle.get() == candidate);
+          XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
+
+          // We manually release the item here because we don't want to
+          // invoke the Item Handle's destructor which will be decrementing
+          // an already zero refcount, which will throw exception
+          auto& itemToRelease = *toReleaseHandle.release();
+
+          // Decrementing the refcount because we want to recycle the item
+          const auto ref = decRef(itemToRelease);
+          XDCHECK_EQ(0u, ref);
+
+          auto res = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
+                                    /* isNascent */ false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        } else if (ref == 0u) {
+          // it's safe to recycle the item here as there are no more
+          // references and the item could not been marked as moving
+          // by other thread since it's detached from MMContainer.
+          auto res = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
+                                    /* isNascent */ false);
+          XDCHECK(res == ReleaseRes::kReleased);
         }
-      }
-
-      if (toReleaseHandle) {
-        XDCHECK(toReleaseHandle.get() == candidate);
-        XDCHECK_EQ(1u, toReleaseHandle->getRefCount());
-
-        // We manually release the item here because we don't want to
-        // invoke the Item Handle's destructor which will be decrementing
-        // an already zero refcount, which will throw exception
-        auto& itemToRelease = *toReleaseHandle.release();
-
-        // Decrementing the refcount because we want to recycle the item
-        const auto ref = decRef(itemToRelease);
-        XDCHECK_EQ(0u, ref);
-
-        auto res = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
-                                  /* isNascent */ false);
-        XDCHECK(res == ReleaseRes::kReleased);
-      } else if (ref == 0u) {
-        // it's safe to recycle the item here as there are no more
-        // references and the item could not been marked as moving
-        // by other thread since it's detached from MMContainer.
-        auto res = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
-                                  /* isNascent */ false);
-        XDCHECK(res == ReleaseRes::kReleased);
-      }
+      });
     }
-
+    evb.loop();
     return evictions;
   }
 
