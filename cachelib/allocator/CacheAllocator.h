@@ -1905,7 +1905,8 @@ class CacheAllocator : public CacheBase {
     size_t tries = 0;
 
     mmContainer.withPromotionIterator([&tries, &candidates, &batch, this](auto &&itr){
-      while (candidates.size() < batch && (config_.maxEvictionPromotionHotness == 0 || tries < config_.maxEvictionPromotionHotness) && itr) {
+      while (candidates.size() < batch && (config_.maxEvictionPromotionHotness == 0 || tries < config_.maxEvictionPromotionHotness) 
+              && itr.get() != nullptr) {
         tries++;
         Item* candidate = itr.get();
         XDCHECK(candidate);
