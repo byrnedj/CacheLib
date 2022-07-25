@@ -354,6 +354,9 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                                 config_.backgroundPromoterStrategy,
                                 config_.backgroundPromoterThreads);
   }
+  if (config_.backgroundEvictorEnabled() || config_.backgroundPromoterEnabled()) {
+      startNewBackgroundManager(); 
+  }
 }
 
 template <typename CacheTrait>
@@ -3831,6 +3834,13 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
       backgroundEvictor_[i]->setAssignedMemory(getAssignedMemoryToBgWorker(i, backgroundEvictor_.size(), 0));
     }
   }
+  return result;
+}
+
+template <typename CacheTrait>
+bool CacheAllocator<CacheTrait>::startNewBackgroundManager() {
+  const auto workerInterval = std::chrono::seconds(1);
+  auto result = startNewWorker("BackgroundManager", backgroundManager_, workerInterval, backgroundEvictor_, backgroundPromoter_);
   return result;
 }
 

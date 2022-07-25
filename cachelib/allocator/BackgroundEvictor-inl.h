@@ -63,6 +63,8 @@ void BackgroundEvictor<CacheT>::checkAndRun() {
   std::set<ClassId> classes{};
   auto batches = strategy_->calculateBatchSizes(cache_,assignedMemory);
 
+  setLastBatch(batches);
+
   for (size_t i = 0; i < batches.size(); i++) {
     const auto [tid, pid, cid] = assignedMemory[i];
     const auto batch = batches[i];
@@ -105,6 +107,26 @@ BackgroundEvictionStats BackgroundEvictor<CacheT>::getStats() const noexcept {
   evicStats.totalClasses = stats.totalClasses.get();
 
   return evicStats;
+}
+
+template <typename CacheT>
+void BackgroundEvictor<CacheT>::setLastBatch(std::vector<size_t> batch, std::vector<std::tuple<TierId,PoolId,ClassId>> assignments) const noexcept {
+    assignments_ = assignments;
+    batch_ = batch;
+
+}
+
+template <typename CacheT>
+std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> BackgroundEvictor<CacheT>::getLastBatch() const noexcept {
+    
+    std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> lastBatch;
+    int index = 0;
+    for (auto tp : assignments_) {
+        lastBatch[tp] = batches[index];
+        index++;
+    }
+    return lastBatch;
+
 }
 
 template <typename CacheT>

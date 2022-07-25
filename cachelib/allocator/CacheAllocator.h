@@ -38,6 +38,7 @@
 #pragma GCC diagnostic pop
 #include "cachelib/allocator/BackgroundEvictor.h"
 #include "cachelib/allocator/BackgroundPromoter.h"
+#include "cachelib/allocator/BackgroundManager.h"
 #include "cachelib/allocator/CCacheManager.h"
 #include "cachelib/allocator/Cache.h"
 #include "cachelib/allocator/CacheAllocatorConfig.h"
@@ -2175,6 +2176,9 @@ class CacheAllocator : public CacheBase {
 
   // free memory monitor
   std::unique_ptr<MemoryMonitor> memMonitor_;
+ 
+  // manager of background threads
+  std::unique_ptr<BackgroundManager> backgroundManager_;
   
   // background evictor
   std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> backgroundEvictor_;
