@@ -23,6 +23,8 @@
 #include "cachelib/common/PeriodicWorker.h"
 #include "cachelib/common/AtomicCounter.h"
 
+#include "cachelib/allocator/BackgroundEvictor.h"
+#include "cachelib/allocator/BackgroundPromoter.h"
 
 namespace facebook {
 namespace cachelib {
@@ -30,16 +32,20 @@ namespace cachelib {
 template <typename CacheT>
 class BackgroundManager : public PeriodicWorker {
  public:
-  BackgroundManager( std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> backgroundEvictors,
-  std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> backgroundPromoters );
+  BackgroundManager( 
+          std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &backgroundEvictors ,
+          std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &backgroundPromoters );
 
   ~BackgroundManager() override;
 
  private:
   // implements the actual logic of running the background evictor
   void work() override final;
-  std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> evictors_;
-  std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> promoters_; 
+  std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> doLinearPartition(
+        std::map<std::tuple<TierId, PoolId, ClassId>,uint32_t> batchesMap, 
+        size_t kParts);
+  std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &evictors_;
+  std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &promoters_; 
 
 
 };

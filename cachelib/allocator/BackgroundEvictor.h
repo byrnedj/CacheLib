@@ -71,7 +71,9 @@ class BackgroundEvictor : public PeriodicWorker {
   
   BackgroundEvictionStats getStats() const noexcept;
   std::map<uint32_t,uint64_t> getClassStats() const noexcept;
-
+  //void setLastBatch(std::vector<size_t> batch, std::vector<std::tuple<TierId,PoolId,ClassId>> assignments) const noexcept;
+  void setLastBatch(std::vector<size_t> batch); //, std::vector<std::tuple<TierId,PoolId,ClassId>> assignments) const noexcept;
+  std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> getLastBatch() const noexcept;
   void setAssignedMemory(std::vector<std::tuple<TierId, PoolId, ClassId>> &&assignedMemory);
 
  private:
@@ -89,7 +91,7 @@ class BackgroundEvictor : public PeriodicWorker {
   void checkAndRun();
 
   BackgroundEvictorStats stats;
-
+  std::vector<size_t> batches_;
   std::vector<std::tuple<TierId, PoolId, ClassId>> assignedMemory_;
   folly::DistributedMutex mutex;
 };

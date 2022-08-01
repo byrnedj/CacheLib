@@ -355,7 +355,7 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                                 config_.backgroundPromoterThreads);
   }
   if (config_.backgroundEvictorEnabled() || config_.backgroundPromoterEnabled()) {
-      startNewBackgroundManager(); 
+      //startNewBackgroundManager(); 
   }
 }
 
@@ -3380,6 +3380,7 @@ bool CacheAllocator<CacheTrait>::stopWorkers(std::chrono::seconds timeout) {
   return success;
 }
 
+
 template <typename CacheTrait>
 typename CacheAllocator<CacheTrait>::ShutDownStatus
 CacheAllocator<CacheTrait>::shutDown() {
@@ -3709,6 +3710,7 @@ bool CacheAllocator<CacheTrait>::autoResizeEnabledForPool(PoolId pid) const {
   }
 }
 
+
 template <typename CacheTrait>
 template <typename T>
 bool CacheAllocator<CacheTrait>::stopWorker(folly::StringPiece name,
@@ -3729,6 +3731,30 @@ bool CacheAllocator<CacheTrait>::stopWorker(folly::StringPiece name,
   worker.reset();
   return ret;
 }
+
+template <typename CacheTrait>
+template <typename T, typename... Args>
+bool CacheAllocator<CacheTrait>::startNewWorkerNC(
+    folly::StringPiece name,
+    std::unique_ptr<T>& worker,
+    std::chrono::milliseconds interval,
+    Args&&... args) {
+  if (!stopWorker(name, worker)) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> l(workersMutex_);
+  worker = std::make_unique<T>(std::forward<Args>(args)...);
+  bool ret = worker->start(interval, name);
+  if (ret) {
+    XLOGF(DBG1, "Started worker '{}'", name);
+  } else {
+    XLOGF(ERR, "Couldn't start worker '{}', interval: {} milliseconds", name,
+          interval.count());
+  }
+  return ret;
+}
+
 
 template <typename CacheTrait>
 template <typename T, typename... Args>
@@ -3839,8 +3865,8 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
 
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::startNewBackgroundManager() {
-  const auto workerInterval = std::chrono::seconds(1);
-  auto result = startNewWorker("BackgroundManager", backgroundManager_, workerInterval, backgroundEvictor_, backgroundPromoter_);
+  const auto workerInterval = std::chrono::seconds(10);
+  auto result = startNewWorkerNC("BackgroundManager", backgroundManager_, workerInterval, backgroundEvictor_, backgroundPromoter_);
   return result;
 }
 

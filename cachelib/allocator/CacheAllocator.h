@@ -950,6 +950,7 @@ class CacheAllocator : public CacheBase {
   bool startNewReaper(std::chrono::milliseconds interval,
                       util::Throttler::Config reaperThrottleConfig);
   
+  bool startNewBackgroundManager();
   bool startNewBackgroundEvictor(std::chrono::milliseconds interval,
                       std::shared_ptr<BackgroundEvictorStrategy> strategy, size_t threads);
   bool startNewBackgroundPromoter(std::chrono::milliseconds interval,
@@ -965,6 +966,7 @@ class CacheAllocator : public CacheBase {
   bool stopReaper(std::chrono::seconds timeout = std::chrono::seconds{0});
   bool stopBackgroundEvictor(std::chrono::seconds timeout = std::chrono::seconds{0});
   bool stopBackgroundPromoter(std::chrono::seconds timeout = std::chrono::seconds{0});
+  bool stopBackgroundManager(std::chrono::seconds timeout = std::chrono::seconds{0});
 
   // Set pool optimization to either true or false
   //
@@ -1972,6 +1974,12 @@ class CacheAllocator : public CacheBase {
         config.enableZeroedSlabAllocs, config.disableFullCoredump,
         config.lockMemory};
   }
+  // starts one of the cache workers passing no instance and the args
+  template <typename T, typename... Args>
+  bool startNewWorkerNC(folly::StringPiece name,
+                      std::unique_ptr<T>& worker,
+                      std::chrono::milliseconds interval,
+                      Args&&... args);
 
   // starts one of the cache workers passing the current instance and the args
   template <typename T, typename... Args>
@@ -1979,12 +1987,14 @@ class CacheAllocator : public CacheBase {
                       std::unique_ptr<T>& worker,
                       std::chrono::milliseconds interval,
                       Args&&... args);
+  
 
   // stops one of the workers belonging to this instance.
   template <typename T>
   bool stopWorker(folly::StringPiece name,
                   std::unique_ptr<T>& worker,
                   std::chrono::seconds timeout = std::chrono::seconds{0});
+  
 
   ShmSegmentOpts createShmCacheOpts(TierId tid);
 
@@ -2178,7 +2188,7 @@ class CacheAllocator : public CacheBase {
   std::unique_ptr<MemoryMonitor> memMonitor_;
  
   // manager of background threads
-  std::unique_ptr<BackgroundManager> backgroundManager_;
+  std::unique_ptr<BackgroundManager<CacheT>> backgroundManager_;
   
   // background evictor
   std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> backgroundEvictor_;

@@ -110,9 +110,10 @@ BackgroundEvictionStats BackgroundEvictor<CacheT>::getStats() const noexcept {
 }
 
 template <typename CacheT>
-void BackgroundEvictor<CacheT>::setLastBatch(std::vector<size_t> batch, std::vector<std::tuple<TierId,PoolId,ClassId>> assignments) const noexcept {
-    assignments_ = assignments;
-    batch_ = batch;
+void BackgroundEvictor<CacheT>::setLastBatch(std::vector<size_t> batch) {
+    //std::vector<std::tuple<TierId,PoolId,ClassId>> assignments) const noexcept {
+    //assignments_ = assignments;
+    batches_ = batch;
 
 }
 
@@ -121,8 +122,8 @@ std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> BackgroundEvictor<CacheT>::
     
     std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> lastBatch;
     int index = 0;
-    for (auto tp : assignments_) {
-        lastBatch[tp] = batches[index];
+    for (auto &tp : assignedMemory_) {
+        lastBatch[tp] = batches_[index];
         index++;
     }
     return lastBatch;
