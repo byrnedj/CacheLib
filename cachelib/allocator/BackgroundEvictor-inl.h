@@ -64,90 +64,84 @@ void BackgroundEvictor<CacheT>::checkAndRun() {
   auto batches = strategy_->calculateBatchSizes(cache_,assignedMemory);
   
   setLastBatch(batches);
-  if (batches.size() == 0) {
-      return;
-  }
-  std::vector<bool> done;
-  for (size_t i = 0; i < batches.size(); i++) {
-      done.push_back(false);
-  }
-  bool empty = false;
-  while (!empty) {
-    for (size_t i = 0; i < batches.size(); i++) {
-      const auto [tid, pid, cid] = assignedMemory[i];
-      auto batch = batches[i];
-    
-      classes.insert(cid);
-      const auto& mpStats = cache_.getPoolByTid(pid,tid).getStats();
-
-      //if this class is done, check if others are done too
-      if (!batch && !done[i]) {
-        done[i] = true;
-        bool alldone = true;
-        for (size_t ii = 0; ii < done.size(); ii++) {
-            if (!done[ii]) {
-                alldone = false;
-            }
-        }
-        if (alldone) {
-            empty = true;
-            break;
-        }
-        continue;
-      }
-      if (batch > 1000) { 
-          batch = 1000;  
-      }
-      //try evicting BATCH items from the class in order to reach free target
-      auto evicted =
-          BackgroundEvictorAPIWrapper<CacheT>::traverseAndEvictItems(cache_,
-              tid,pid,cid,batch);
-      evictions += evicted;
-
-      stats.evictionSize.add(evicted * mpStats.acStats.at(cid).allocSize);
-      //const size_t cid_id = (size_t)mpStats.acStats.at(cid).allocSize;
-      auto it = evictions_per_class_.find(cid);
-      if (it != evictions_per_class_.end()) {
-          it->second += evicted;
-      } else if (evicted > 0) {
-          evictions_per_class_[cid] = evicted;
-      }
-      batches[i] -= evicted;
-
-    }
-
-  }
-  //for (size_t i = 0; i < batches.size(); i++) {
-  //  const auto [tid, pid, cid] = assignedMemory[i];
-  //  auto batch = batches[i];
-  //
-  //  classes.insert(cid);
-  //  const auto& mpStats = cache_.getPoolByTid(pid,tid).getStats();
-
-  //  if (!batch) {
-  //    continue;
-  //  }
-  //  while (batches[i] > 0) {
-  //      if (batch > 40) { 
-  //          batch = 40;  
-  //      }
-  //      //try evicting BATCH items from the class in order to reach free target
-  //      auto evicted =
-  //          BackgroundEvictorAPIWrapper<CacheT>::traverseAndEvictItems(cache_,
-  //              tid,pid,cid,batch);
-  //      evictions += evicted;
-
-  //      stats.evictionSize.add(evicted * mpStats.acStats.at(cid).allocSize);
-  //      //const size_t cid_id = (size_t)mpStats.acStats.at(cid).allocSize;
-  //      auto it = evictions_per_class_.find(cid);
-  //      if (it != evictions_per_class_.end()) {
-  //          it->second += evicted;
-  //      } else if (evicted > 0) {
-  //          evictions_per_class_[cid] = evicted;
-  //      }
-  //      batches[i] -= evicted;
-  //  }
+  //if (batches.size() == 0) {
+  //    return;
   //}
+  //std::vector<bool> done;
+  //for (size_t i = 0; i < batches.size(); i++) {
+  //    done.push_back(false);
+  //}
+  //bool empty = false;
+  //while (!empty) {
+  //  for (size_t i = 0; i < batches.size(); i++) {
+  //    const auto [tid, pid, cid] = assignedMemory[i];
+  //    auto batch = batches[i];
+  //  
+  //    classes.insert(cid);
+  //    const auto& mpStats = cache_.getPoolByTid(pid,tid).getStats();
+
+  //    //if this class is done, check if others are done too
+  //    if (!batch && !done[i]) {
+  //      done[i] = true;
+  //      bool alldone = true;
+  //      for (size_t ii = 0; ii < done.size(); ii++) {
+  //          if (!done[ii]) {
+  //              alldone = false;
+  //          }
+  //      }
+  //      if (alldone) {
+  //          empty = true;
+  //          break;
+  //      }
+  //      continue;
+  //    }
+  //    if (batch > 1000) { 
+  //        batch = 1000;  
+  //    }
+  //    //try evicting BATCH items from the class in order to reach free target
+  //    auto evicted =
+  //        BackgroundEvictorAPIWrapper<CacheT>::traverseAndEvictItems(cache_,
+  //            tid,pid,cid,batch);
+  //    evictions += evicted;
+
+  //    stats.evictionSize.add(evicted * mpStats.acStats.at(cid).allocSize);
+  //    //const size_t cid_id = (size_t)mpStats.acStats.at(cid).allocSize;
+  //    auto it = evictions_per_class_.find(cid);
+  //    if (it != evictions_per_class_.end()) {
+  //        it->second += evicted;
+  //    } else if (evicted > 0) {
+  //        evictions_per_class_[cid] = evicted;
+  //    }
+  //    batches[i] -= evicted;
+
+  //  }
+
+  //}
+  for (size_t i = 0; i < batches.size(); i++) {
+    const auto [tid, pid, cid] = assignedMemory[i];
+    auto batch = batches[i];
+  
+    classes.insert(cid);
+    const auto& mpStats = cache_.getPoolByTid(pid,tid).getStats();
+
+    if (!batch) {
+      continue;
+    }
+    //try evicting BATCH items from the class in order to reach free target
+    auto evicted =
+        BackgroundEvictorAPIWrapper<CacheT>::traverseAndEvictItems(cache_,
+            tid,pid,cid,batch);
+    evictions += evicted;
+
+    stats.evictionSize.add(evicted * mpStats.acStats.at(cid).allocSize);
+    //const size_t cid_id = (size_t)mpStats.acStats.at(cid).allocSize;
+    auto it = evictions_per_class_.find(cid);
+    if (it != evictions_per_class_.end()) {
+        it->second += evicted;
+    } else if (evicted > 0) {
+        evictions_per_class_[cid] = evicted;
+    }
+  }
 
   stats.numTraversals.inc();
   stats.numEvictedItems.add(evictions);
