@@ -34,7 +34,6 @@ std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> BackgroundMana
         std::map<std::tuple<TierId, PoolId, ClassId>,uint32_t> batchesMap, 
         size_t kParts) {
 
-    //TODO memory management etc.
     std::vector<uint32_t> batches;
     std::vector<std::tuple<TierId,PoolId,ClassId>> ids;
     for (auto &entry : batchesMap) {
@@ -66,13 +65,6 @@ std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> BackgroundMana
     for (int j = 1; j <= kParts; j++) {
         M[1][j] = batches[0];
     }
-    //printf("first M\n");
-    //for (int ii = 0; ii <= n; ii++) {
-    //    for (int jj = 0; jj <= kParts; jj++) {
-    //        printf(" %d ",M[ii][jj]);
-    //    }
-    //    printf("\n");
-    //}
     for (int i = 2; i <= n; i++) {
         for (int j = 2; j <= kParts; j++) {
             M[i][j] = std::numeric_limits<int>::max();
@@ -85,20 +77,6 @@ std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> BackgroundMana
             }
         }
     }
-    //printf("final M\n");
-    //for (int ii = 0; ii <= n; ii++) {
-    //    for (int jj = 0; jj <= kParts; jj++) {
-    //        printf(" %d ",M[ii][jj]);
-    //    }
-    //    printf("\n");
-    //}
-    //printf("final D\n");
-    //for (int ii = 0; ii <= n; ii++) {
-    //    for (int jj = 0; jj <= kParts; jj++) {
-    //        printf(" %d ",D[ii][jj]);
-    //    }
-    //    printf("\n");
-    //}
 
     int K = kParts;
     int N = n;
@@ -122,24 +100,38 @@ std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> BackgroundMana
 template <typename CacheT>
 void BackgroundManager<CacheT>::work() {
 
-    bool allzero = true;
-    std::map<std::tuple<TierId, PoolId, ClassId>,uint32_t> batches;
+    bool allzeroEvict = true;
+    bool allzeroPromote = true;
+    std::map<std::tuple<TierId, PoolId, ClassId>,uint32_t> evictBatches;
+    std::map<std::tuple<TierId, PoolId, ClassId>,uint32_t> promoteBatches;
+    
     for (auto &evictor : evictors_) {
         //get batch size for each
         std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> batchset = evictor->getLastBatch();
         for (auto &entry : batchset) {
-            batches[entry.first] = entry.second;
+            evictBatches[entry.first] = entry.second;
             if (entry.second > 0) {
-                allzero = false;
+                allzeroEvict = false;
+            }
+        }
+    }
+    
+    for (auto &promoter : promoters_) {
+        //get batch size for each
+        std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> batchset = promoter->getLastBatch();
+        for (auto &entry : batchset) {
+            promoteBatches[entry.first] = entry.second;
+            if (entry.second > 0) {
+                allzeroPromote = false;
             }
         }
     }
 
-    if (!allzero) {
+    if (!allzeroEvict) {
         // now we have all the last batches - lets get the proper
         // assignment
         std::map<uint32_t,std::vector<std::tuple<TierId, PoolId, ClassId>>> assignments = 
-            doLinearPartition(batches,evictors_.size());
+            doLinearPartition(evictBatches,evictors_.size());
 
 
         for (auto &entry : assignments) {
@@ -148,9 +140,21 @@ void BackgroundManager<CacheT>::work() {
             evictors_[eid]->setAssignedMemory(std::move(assignment));
         }
     }
+    
+    if (!allzeroPromote) {
+        // now we have all the last batches - lets get the proper
+        // assignment
+        std::map<uint32_t,std::vector<std::tuple<TierId, PoolId, ClassId>>> assignments = 
+            doLinearPartition(promoteBatches,promoters_.size());
 
+
+        for (auto &entry : assignments) {
+            auto eid = entry.first;
+            auto &assignment = entry.second;
+            promoters_[eid]->setAssignedMemory(std::move(assignment));
+        }
+    }
 }
-
 
 
 } // namespace cachelib

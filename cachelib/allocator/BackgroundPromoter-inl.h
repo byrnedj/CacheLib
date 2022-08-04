@@ -106,6 +106,32 @@ template <typename CacheT>
    return promoStats;
  }
 
+template <typename CacheT>
+void BackgroundPromoter<CacheT>::setLastBatch(std::vector<size_t> batch) {
+    batches_ = batch; //just copy
+}
+
+template <typename CacheT>
+std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> BackgroundPromoter<CacheT>::getLastBatch() const noexcept {
+    
+    std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> lastBatch;
+    if (batches_.size() > 0) {
+        int index = 0;
+        for (auto &tp : assignedMemory_) {
+            lastBatch[tp] = batches_[index];
+            index++;
+        }
+    } else {
+        int index = 0;
+        for (auto &tp : assignedMemory_) {
+            lastBatch[tp] = 0;
+            index++;
+        }
+    }
+    return lastBatch;
+
+}
+
  template <typename CacheT>
  std::map<uint32_t,uint64_t> BackgroundPromoter<CacheT>::getClassStats() const noexcept {
    return promotions_per_class_;

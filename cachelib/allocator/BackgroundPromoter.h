@@ -70,7 +70,8 @@ class BackgroundPromoter : public PeriodicWorker {
   // TODO
   BackgroundPromotionStats getStats() const noexcept;
   std::map<uint32_t,uint64_t> getClassStats() const noexcept;
-
+  void setLastBatch(std::vector<size_t> batch); 
+  std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> getLastBatch() const noexcept;
   void setAssignedMemory(std::vector<std::tuple<TierId, PoolId, ClassId>> &&assignedMemory);
 
  private:
@@ -88,7 +89,7 @@ class BackgroundPromoter : public PeriodicWorker {
   void checkAndRun();
 
   BackgroundPromoterStats stats;
-
+  std::vector<size_t> batches_;
   std::vector<std::tuple<TierId, PoolId, ClassId>> assignedMemory_;
   folly::DistributedMutex mutex;
 };
