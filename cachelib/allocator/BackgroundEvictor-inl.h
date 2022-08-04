@@ -82,9 +82,7 @@ void BackgroundEvictor<CacheT>::checkAndRun() {
     if (evicted) {
         classes.insert(cid);
         const auto& mpStats = cache_.getPoolByTid(pid,tid).getStats();
-
         stats.evictionSize.add(evicted * mpStats.acStats.at(cid).allocSize);
-        //const size_t cid_id = (size_t)mpStats.acStats.at(cid).allocSize;
         auto it = evictions_per_class_.find(cid);
         if (it != evictions_per_class_.end()) {
             it->second += evicted;
