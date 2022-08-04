@@ -40,29 +40,28 @@ std::vector<size_t> FreeThresholdStrategy::calculateBatchSizes(
     }
   }
 
+
+  if (batches.size() == 0) {
+    return batches;
+  }
+
+  auto maxBatch = *std::max_element(batches.begin(), batches.end());
+  if (maxBatch == 0)
+    return batches;
+
+  std::transform(batches.begin(), batches.end(), batches.begin(), [&](auto numItems){
+    if (numItems == 0) {
+      return 0UL;
+    }
+
+    auto cappedBatchSize = maxEvictionBatch * numItems / maxBatch;
+    if (cappedBatchSize < minEvictionBatch)
+      return minEvictionBatch;
+    else
+      return cappedBatchSize;
+  });
+
   return batches;
-
-  //if (batches.size() == 0) {
-  //  return batches;
-  //}
-
-  //auto maxBatch = *std::max_element(batches.begin(), batches.end());
-  //if (maxBatch == 0)
-  //  return batches;
-
-  //std::transform(batches.begin(), batches.end(), batches.begin(), [&](auto numItems){
-  //  if (numItems == 0) {
-  //    return 0UL;
-  //  }
-
-  //  auto cappedBatchSize = maxEvictionBatch * numItems / maxBatch;
-  //  if (cappedBatchSize < minEvictionBatch)
-  //    return minEvictionBatch;
-  //  else
-  //    return cappedBatchSize;
-  //});
-
-  //return batches;
 }
 
 } // namespace cachelib

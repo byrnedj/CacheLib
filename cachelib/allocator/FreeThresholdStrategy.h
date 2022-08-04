@@ -35,7 +35,7 @@ public:
 private:
   double lowEvictionAcWatermark{2.0}; 
   double highEvictionAcWatermark{5.0};
-  uint64_t maxEvictionBatch{40};
+  uint64_t maxEvictionBatch{100};
   uint64_t minEvictionBatch{5};
 };
 
