@@ -277,6 +277,9 @@ class CacheAllocatorConfig {
   CacheAllocatorConfig& enableBackgroundPromoter(
       std::shared_ptr<BackgroundEvictorStrategy> backgroundEvictorStrategy,
       std::chrono::milliseconds regularInterval, size_t threads);
+  
+  CacheAllocatorConfig& enableBackgroundManager(
+      std::chrono::seconds regularInterval);
 
   // This enables an optimization for Pool rebalancing and resizing.
   // The rough idea is to ensure only the least useful items are evicted when
@@ -358,6 +361,10 @@ class CacheAllocatorConfig {
   bool backgroundPromoterEnabled() const noexcept {
     return backgroundPromoterInterval.count() > 0 &&
            backgroundPromoterStrategy != nullptr;
+  }
+  
+  bool backgroundManagerEnabled() const noexcept {
+    return backgroundManagerInterval.count() > 0;
   }
 
   // @return whether memory monitor is enabled
@@ -460,6 +467,8 @@ class CacheAllocatorConfig {
   std::chrono::milliseconds backgroundEvictorInterval{std::chrono::milliseconds{1000}};
   std::chrono::milliseconds backgroundPromoterInterval{std::chrono::milliseconds{1000}};
 
+  std::chrono::seconds backgroundManagerInterval{std::chrono::seconds{10}};
+  
   size_t backgroundEvictorThreads{1};
   size_t backgroundPromoterThreads{1};
 
@@ -1011,6 +1020,13 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundPromoter(
   backgroundPromoterStrategy = strategy;
   backgroundPromoterInterval = interval;
   backgroundPromoterThreads = promoterThreads;
+  return *this;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundManager(
+    std::chrono::seconds interval) {
+  backgroundManagerInterval = interval;
   return *this;
 }
 

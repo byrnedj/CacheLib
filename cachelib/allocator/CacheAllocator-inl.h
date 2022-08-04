@@ -354,7 +354,7 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                                 config_.backgroundPromoterStrategy,
                                 config_.backgroundPromoterThreads);
   }
-  if (config_.backgroundEvictorEnabled() || config_.backgroundPromoterEnabled()) {
+  if (config_.backgroundManagerEnabled()) {
       startNewBackgroundManager(); 
   }
 }

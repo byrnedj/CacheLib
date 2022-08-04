@@ -76,6 +76,9 @@ Cache<Allocator>::Cache(const CacheConfig& config,
       config_.getBackgroundPromoterStrategy(),
       std::chrono::milliseconds(config_.backgroundPromoterIntervalMilSec),
       config_.promoterThreads);
+  
+  allocatorConfig_.enableBackgroundManager(
+      std::chrono::seconds(config_.backgroundManagerIntervalSec));
 
   if (config_.moveOnSlabRelease && movingSync != nullptr) {
     allocatorConfig_.enableMovingOnSlabRelease(
