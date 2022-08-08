@@ -74,6 +74,7 @@ class BackgroundEvictor : public PeriodicWorker {
   void setLastBatch(std::vector<size_t> batch); 
   std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> getLastBatch() const noexcept;
   void setAssignedMemory(std::vector<std::tuple<TierId, PoolId, ClassId>> &&assignedMemory);
+  std::vector<std::tuple<TierId, PoolId, ClassId>> getAssignedMemory();
 
  private:
    std::map<uint32_t,uint64_t> evictions_per_class_;

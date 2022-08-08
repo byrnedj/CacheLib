@@ -395,8 +395,11 @@ size_t CacheAllocator<CacheTrait>::backgroundWorkerId(TierId tid, PoolId pid, Cl
 {
   XDCHECK(numWorkers);
 
-  // TODO: came up with some better sharding (use some hashing)
-  return (tid + pid + cid) % numWorkers;
+  if (backgroundManager_) {
+    return backgroundManager_->getBackgroundId(tid,pid,cid);
+  } else {
+    return (tid + pid + cid) % numWorkers;
+  }
 }
 
 template <typename CacheTrait>

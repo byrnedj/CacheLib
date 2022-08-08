@@ -35,9 +35,10 @@ class BackgroundManager : public PeriodicWorker {
   BackgroundManager( 
           std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &backgroundEvictors ,
           std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &backgroundPromoters );
-
+ 
   ~BackgroundManager() override;
 
+  uint32_t getBackgroundId(TierId tid, PoolId pid, ClassId cid);
  private:
   // implements the actual logic of running the background evictor
   void work() override final;
@@ -46,7 +47,7 @@ class BackgroundManager : public PeriodicWorker {
         size_t kParts);
   std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &evictors_;
   std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &promoters_; 
-
+  std::map<std::tuple<TierId,PoolId,ClassId>,uint32_t> evictors_ids_;
 
 };
 } // namespace cachelib

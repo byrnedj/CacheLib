@@ -24,10 +24,28 @@ BackgroundManager<CacheT>::BackgroundManager(  std::vector<std::unique_ptr<Backg
     : evictors_(backgroundEvictors),
       promoters_(backgroundPromoters)
 {
+    size_t i = 0;
+    for (auto &evictor : evictors_) {
+        std::vector<std::tuple<TierId,PoolId,ClassId>> assigned = evictor->getAssignedMemory();
+        for (auto tp : assigned) {
+            evictors_ids_[tp] = i;
+        }
+        i++;
+    }
 }
 
 template <typename CacheT>
 BackgroundManager<CacheT>::~BackgroundManager() { stop(std::chrono::seconds(0)); }
+
+template <typename CacheT>
+uint32_t BackgroundManager<CacheT>::getBackgroundId(TierId tid, PoolId pid, ClassId cid) {
+    auto tp = std::tuple<TierId,PoolId,ClassId>(tid,pid,cid);
+    auto entry = evictors_ids_.find(tp);
+    if (entry != evictors_ids_.end()) {
+        return entry->second;
+    } 
+    return (tid+pid+cid) % evictors_.size();
+}
 
 template <typename CacheT>
 std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> BackgroundManager<CacheT>::doLinearPartition(
@@ -137,6 +155,9 @@ void BackgroundManager<CacheT>::work() {
         for (auto &entry : assignments) {
             auto eid = entry.first;
             auto &assignment = entry.second;
+            for (auto tp : assignment) {
+                evictors_ids_[tp] = eid;
+            }
             evictors_[eid]->setAssignedMemory(std::move(assignment));
         }
     }

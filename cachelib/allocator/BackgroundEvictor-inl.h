@@ -51,6 +51,12 @@ void BackgroundEvictor<CacheT>::setAssignedMemory(std::vector<std::tuple<TierId,
   });
 }
 
+template <typename CacheT>
+std::vector<std::tuple<TierId, PoolId, ClassId>>BackgroundEvictor<CacheT>::getAssignedMemory()
+{
+  return this->assignedMemory_;
+}
+
 // Look for classes that exceed the target memory capacity
 // and return those for eviction
 template <typename CacheT>
