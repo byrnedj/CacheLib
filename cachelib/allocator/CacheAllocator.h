@@ -950,7 +950,7 @@ class CacheAllocator : public CacheBase {
   bool startNewReaper(std::chrono::milliseconds interval,
                       util::Throttler::Config reaperThrottleConfig);
   
-  bool startNewBackgroundManager();
+  bool startNewBackgroundManager(std::chrono::seconds interval);
   bool startNewBackgroundEvictor(std::chrono::milliseconds interval,
                       std::shared_ptr<BackgroundEvictorStrategy> strategy, size_t threads);
   bool startNewBackgroundPromoter(std::chrono::milliseconds interval,
@@ -1974,12 +1974,6 @@ class CacheAllocator : public CacheBase {
         config.enableZeroedSlabAllocs, config.disableFullCoredump,
         config.lockMemory};
   }
-  // starts one of the cache workers passing no instance and the args
-  template <typename T, typename... Args>
-  bool startNewWorkerNC(folly::StringPiece name,
-                      std::unique_ptr<T>& worker,
-                      std::chrono::milliseconds interval,
-                      Args&&... args);
 
   // starts one of the cache workers passing the current instance and the args
   template <typename T, typename... Args>

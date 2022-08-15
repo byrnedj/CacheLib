@@ -467,7 +467,7 @@ class CacheAllocatorConfig {
   std::chrono::milliseconds backgroundEvictorInterval{std::chrono::milliseconds{1000}};
   std::chrono::milliseconds backgroundPromoterInterval{std::chrono::milliseconds{1000}};
 
-  std::chrono::seconds backgroundManagerInterval{std::chrono::seconds{10}};
+  std::chrono::seconds backgroundManagerInterval{std::chrono::seconds{1}};
   
   size_t backgroundEvictorThreads{1};
   size_t backgroundPromoterThreads{1};

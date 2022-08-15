@@ -355,7 +355,7 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                                 config_.backgroundPromoterThreads);
   }
   if (config_.backgroundManagerEnabled()) {
-      startNewBackgroundManager(); 
+      startNewBackgroundManager(config_.backgroundManagerInterval); 
   }
 }
 
@@ -3735,29 +3735,6 @@ bool CacheAllocator<CacheTrait>::stopWorker(folly::StringPiece name,
   return ret;
 }
 
-template <typename CacheTrait>
-template <typename T, typename... Args>
-bool CacheAllocator<CacheTrait>::startNewWorkerNC(
-    folly::StringPiece name,
-    std::unique_ptr<T>& worker,
-    std::chrono::milliseconds interval,
-    Args&&... args) {
-  if (!stopWorker(name, worker)) {
-    return false;
-  }
-
-  std::lock_guard<std::mutex> l(workersMutex_);
-  worker = std::make_unique<T>(std::forward<Args>(args)...);
-  bool ret = worker->start(interval, name);
-  if (ret) {
-    XLOGF(DBG1, "Started worker '{}'", name);
-  } else {
-    XLOGF(ERR, "Couldn't start worker '{}', interval: {} milliseconds", name,
-          interval.count());
-  }
-  return ret;
-}
-
 
 template <typename CacheTrait>
 template <typename T, typename... Args>
@@ -3867,9 +3844,8 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::startNewBackgroundManager() {
-  const auto workerInterval = std::chrono::seconds(10);
-  auto result = startNewWorkerNC("BackgroundManager", backgroundManager_, workerInterval, backgroundEvictor_, backgroundPromoter_);
+bool CacheAllocator<CacheTrait>::startNewBackgroundManager(std::chrono::seconds interval) {
+  auto result = startNewWorker("BackgroundManager", backgroundManager_, interval, backgroundEvictor_, backgroundPromoter_);
   return result;
 }
 

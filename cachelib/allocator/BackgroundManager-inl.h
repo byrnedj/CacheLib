@@ -19,18 +19,34 @@ namespace cachelib {
 
 
 template <typename CacheT>
-BackgroundManager<CacheT>::BackgroundManager(  std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &backgroundEvictors ,
-  std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &backgroundPromoters ) 
-    : evictors_(backgroundEvictors),
+BackgroundManager<CacheT>::BackgroundManager(Cache& cache,
+        std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &backgroundEvictors ,
+        std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &backgroundPromoters ) 
+    : cache_(cache),
+      evictors_(backgroundEvictors),
       promoters_(backgroundPromoters)
 {
-    size_t i = 0;
-    for (auto &evictor : evictors_) {
-        std::vector<std::tuple<TierId,PoolId,ClassId>> assigned = evictor->getAssignedMemory();
-        for (auto tp : assigned) {
-            evictors_ids_[tp] = i;
+    //size_t kMaxTiers = 2;
+    //auto kMaxPools = cache_.getPoolIds();
+    //size_t kMaxClasses = 127;
+    //for (int i = 0; i < kMaxTiers; i++) {
+    //    for (auto &j : kMaxPools) {
+    //        for (int k = 0; k < kMaxClasses; k++) {
+    //            auto tp = std::tuple<TierId,PoolId,ClassId>(i,j,k);
+    //            evictors_ids_[tp] = (i+j+k) % evictors_.size();
+    //        }
+    //    }
+    //}
+    size_t kMaxTiers = 2;
+    size_t kMaxPools = 10;
+    size_t kMaxClasses = 127;
+    for (int i = 0; i < kMaxTiers; i++) {
+        for (int j = 0; j < kMaxPools; j++) {
+            for (int k = 0; k < kMaxClasses; k++) {
+                auto tp = std::tuple<TierId,PoolId,ClassId>(i,j,k);
+                evictors_ids_[tp] = (i+j+k) % evictors_.size();
+            }
         }
-        i++;
     }
 }
 
@@ -42,6 +58,7 @@ uint32_t BackgroundManager<CacheT>::getBackgroundId(TierId tid, PoolId pid, Clas
     auto tp = std::tuple<TierId,PoolId,ClassId>(tid,pid,cid);
     auto entry = evictors_ids_.find(tp);
     if (entry != evictors_ids_.end()) {
+         //XLOGF(INFO, "Tid: {}, Pid: {}, Cid: {} -> {}", tid, pid, cid, entry->second);
         return entry->second;
     } 
     return (tid+pid+cid) % evictors_.size();
@@ -55,7 +72,9 @@ std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> BackgroundMana
     std::vector<uint32_t> batches;
     std::vector<std::tuple<TierId,PoolId,ClassId>> ids;
     for (auto &entry : batchesMap) {
-        batches.push_back(entry.second);
+        auto [tid,pid,cid] = entry.first;
+        const auto& mpStats = cache_.getPoolByTid(pid,tid).getStats();
+        batches.push_back(entry.second * mpStats.acStats.at(cid).allocSize);
         ids.push_back(entry.first);
     }
     std::map<uint32_t,std::vector<std::tuple<TierId, PoolId, ClassId>>> assignments;
@@ -151,14 +170,22 @@ void BackgroundManager<CacheT>::work() {
         std::map<uint32_t,std::vector<std::tuple<TierId, PoolId, ClassId>>> assignments = 
             doLinearPartition(evictBatches,evictors_.size());
 
-
+        bool changed = false;
         for (auto &entry : assignments) {
             auto eid = entry.first;
             auto &assignment = entry.second;
             for (auto tp : assignment) {
-                evictors_ids_[tp] = eid;
+                auto oldid = evictors_ids_[tp];
+                auto [tid,pid,cid] = tp;
+                //XLOGF(INFO, "Tid: {}, Pid: {}, Cid: {} -> {} -> {}", tid, pid, cid, oldid, eid);
+                if (oldid != eid) {
+                    changed = true;
+                    evictors_ids_[tp] = eid;
+                }
             }
-            evictors_[eid]->setAssignedMemory(std::move(assignment));
+            if (changed) {
+                evictors_[eid]->setAssignedMemory(std::move(assignment));
+            }
         }
     }
     

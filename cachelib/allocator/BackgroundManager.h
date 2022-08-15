@@ -32,14 +32,17 @@ namespace cachelib {
 template <typename CacheT>
 class BackgroundManager : public PeriodicWorker {
  public:
-  BackgroundManager( 
-          std::vector<std::unique_ptr<BackgroundEvictor<CacheT>>> &backgroundEvictors ,
-          std::vector<std::unique_ptr<BackgroundPromoter<CacheT>>> &backgroundPromoters );
+  using Cache = CacheT;
+  BackgroundManager(Cache& cache, 
+          std::vector<std::unique_ptr<BackgroundEvictor<Cache>>> &backgroundEvictors ,
+          std::vector<std::unique_ptr<BackgroundPromoter<Cache>>> &backgroundPromoters );
  
   ~BackgroundManager() override;
 
   uint32_t getBackgroundId(TierId tid, PoolId pid, ClassId cid);
  private:
+  //for stats, tids, pids, and cids
+  Cache& cache_;
   // implements the actual logic of running the background evictor
   void work() override final;
   std::map<uint32_t,std::vector<std::tuple<TierId,PoolId,ClassId>>> doLinearPartition(
