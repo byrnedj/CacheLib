@@ -39,6 +39,7 @@
 #include "cachelib/common/AtomicCounter.h"
 #include "cachelib/common/EventInterface.h"
 #include "cachelib/common/Exceptions.h"
+#include "cachelib/common/Hash.h"
 #include "cachelib/common/Utils.h"
 #include "cachelib/navy/common/Device.h"
 #include "folly/Range.h"
@@ -81,14 +82,10 @@ class NvmCache {
   // needed.
   using DecodeCB = std::function<void(EncodeDecodeContext)>;
 
-  // call back invoked everytime item inserted back from NVM into RAM
-  // @param it      item we have inserted
-  using MemoryInsertCB = std::function<void(const Item& it)>;
-
   // encrypt everything written to the device and decrypt on every read
   using DeviceEncryptor = navy::DeviceEncryptor;
 
-  using ItemHandle = typename C::ItemHandle;
+  using WriteHandle = typename C::WriteHandle;
   using ReadHandle = typename C::ReadHandle;
   using DeleteTombStoneGuard = typename TombStones::Guard;
   using PutToken = typename InFlightPuts::PutToken;
@@ -102,10 +99,6 @@ class NvmCache {
     // before encryption and after decryption respectively if enabled.
     EncodeCB encodeCb{};
     DecodeCB decodeCb{};
-
-    // (Optional) call back invoked item restored from NVM and inserted to
-    // memory.
-    MemoryInsertCB memoryInsertCb{};
 
     // (Optional) This enables encryption on a device level. Everything we write
     // into the nvm device will be encrypted.
@@ -140,8 +133,8 @@ class NvmCache {
 
   // Look up item by key
   // @param key         key to lookup
-  // @return            ItemHandle
-  ItemHandle find(folly::StringPiece key);
+  // @return            WriteHandle
+  WriteHandle find(HashedKey key);
 
   // Try to mark the key as in process of being evicted from RAM to NVM.
   // This is used to maintain the consistency between the RAM cache and
@@ -159,7 +152,7 @@ class NvmCache {
   // @param token       the put token for the item. this must have been
   //                    obtained before enqueueing the put to maintain
   //                    consistency
-  void put(ItemHandle& hdl, PutToken token);
+  void put(WriteHandle& hdl, PutToken token);
 
   // returns the current state of whether nvmcache is enabled or not. nvmcache
   // can be disabled if the backend implementation ends up in a corrupt state
@@ -168,10 +161,10 @@ class NvmCache {
   // creates a delete tombstone for the key. This will ensure that all
   // concurrent gets and puts to nvmcache can synchronize with an upcoming
   // delete to make the cache consistent.
-  DeleteTombStoneGuard createDeleteTombStone(folly::StringPiece key);
+  DeleteTombStoneGuard createDeleteTombStone(HashedKey hk);
 
   // remove an item by key
-  // @param key         key to remove
+  // @param hk          key to remove with hash
   // @param tombstone   the tombstone guard associated for this key. See
   //                    CacheAllocator::remove on how tombstone maintain
   //                    consistency with presence of concurrent get/puts to the
@@ -183,7 +176,7 @@ class NvmCache {
   //                    the remove called if caller is only removing item in
   //                    nvm; if the caller is also removing the item from ram,
   //                    tombstone should be created before removing item in ram.
-  void remove(folly::StringPiece key, DeleteTombStoneGuard tombstone);
+  void remove(HashedKey hk, DeleteTombStoneGuard tombstone);
 
   // peek the nvmcache without bringing the item into the cache. creates a
   // temporary item handle with the content of the nvmcache. this is intended
@@ -193,7 +186,7 @@ class NvmCache {
   // @return    handle to the item in nvmcache if present. if not, nullptr is
   //            returned. if a handle is returned, it is not inserted into
   //            cache and is temporary.
-  ItemHandle peek(folly::StringPiece key);
+  WriteHandle peek(folly::StringPiece key);
 
   // safely shut down the cache. must be called after stopping all concurrent
   // access to cache. using nvmcache after this will result in no-op.
@@ -223,10 +216,9 @@ class NvmCache {
   // The lock ensures that the items in itemRemoved_ must exist in nvm, and nvm
   // eviction must erase item from itemRemoved_, so there won't memory leak or
   // influence to future item with same key.
-  std::unique_lock<std::mutex> getItemDestructorLock(
-      folly::StringPiece key) const {
+  std::unique_lock<std::mutex> getItemDestructorLock(HashedKey hk) const {
     using LockType = std::unique_lock<std::mutex>;
-    return itemDestructor_ ? LockType{itemDestructorMutex_[getShardForKey(key)]}
+    return itemDestructor_ ? LockType{itemDestructorMutex_[getShardForKey(hk)]}
                            : LockType{};
   }
 
@@ -237,7 +229,7 @@ class NvmCache {
   //
   // caller must make sure itemDestructorLock is locked,
   // and the item is present in NVM (NvmClean set and NvmEvicted flag unset).
-  void markNvmItemRemovedLocked(folly::StringPiece key);
+  void markNvmItemRemovedLocked(HashedKey hk);
 
  private:
   // returns the itemRemoved_ set size
@@ -245,7 +237,7 @@ class NvmCache {
   // and were removed from dram but not yet removed from nvm
   uint64_t getNvmItemRemovedSize() const;
 
-  bool checkAndUnmarkItemRemovedLocked(folly::StringPiece key);
+  bool checkAndUnmarkItemRemovedLocked(HashedKey hk);
 
   detail::Stats& stats() { return CacheAPIWrapperForNvm<C>::getStats(cache_); }
 
@@ -256,7 +248,7 @@ class NvmCache {
   //
   // @param   return an item handle allocated and initialized to the right state
   //          based on the NvmItem
-  ItemHandle createItem(folly::StringPiece key, const NvmItem& nvmItem);
+  WriteHandle createItem(folly::StringPiece key, const NvmItem& nvmItem);
 
   // creates the item into IOBuf from NvmItem, if the item has chained items,
   // chained IOBufs will be created.
@@ -274,9 +266,9 @@ class NvmCache {
   folly::Range<ChainedItemIter> viewAsChainedAllocsRange(folly::IOBuf*) const;
 
   // returns true if there is tombstone entry for the key.
-  bool hasTombStone(folly::StringPiece key);
+  bool hasTombStone(HashedKey hk);
 
-  std::unique_ptr<NvmItem> makeNvmItem(const ItemHandle& handle);
+  std::unique_ptr<NvmItem> makeNvmItem(const WriteHandle& handle);
 
   // wrap an item into a blob for writing into navy.
   Blob makeBlob(const Item& it);
@@ -290,7 +282,7 @@ class NvmCache {
     const std::string key; //< key being fetched
     std::vector<std::shared_ptr<WaitContext<ReadHandle>>> waiters; // list of
                                                                    // waiters
-    ItemHandle it; // will be set when Context is being filled
+    WriteHandle it; // will be set when Context is being filled
     util::LatencyTracker tracker_;
     bool valid_;
 
@@ -319,7 +311,7 @@ class NvmCache {
     // record the item handle. Upon destruction we will wake up the waiters
     // and pass a clone of the handle to the callBack. By default we pass
     // a null handle
-    void setItemHandle(ItemHandle _it) { it = std::move(_it); }
+    void setWriteHandle(WriteHandle _it) { it = std::move(_it); }
 
     // enqueue a waiter into the waiter list
     // @param  waiter       WaitContext
@@ -335,7 +327,7 @@ class NvmCache {
         // If refcount overflowed earlier, then we will return miss to
         // all subsequent waitors.
         if (refcountOverflowed) {
-          w->set(ItemHandle{});
+          w->set(WriteHandle{});
           continue;
         }
 
@@ -357,19 +349,18 @@ class NvmCache {
 
   // Erase entry for the ctx from the fill map
   // @param     ctx   ctx to erase
-  void removeFromFillMap(const GetCtx& ctx) {
-    auto key = ctx.getKey();
-    auto lock = getFillLock(key);
-    getFillMap(key).erase(key);
+  void removeFromFillMap(HashedKey hk) {
+    auto lock = getFillLock(hk);
+    getFillMap(hk).erase(hk.key());
   }
 
   // Erase entry for the ctx from the fill map
   // @param     key   item key
-  void invalidateFill(folly::StringPiece key) {
-    auto shard = getShardForKey(key);
+  void invalidateFill(HashedKey hk) {
+    auto shard = getShardForKey(hk);
     auto lock = getFillLockForShard(shard);
     auto& map = getFillMapForShard(shard);
-    auto it = map.find(key);
+    auto it = map.find(hk.key());
     if (it != map.end() && it->second) {
       it->second->invalidate();
     }
@@ -378,42 +369,38 @@ class NvmCache {
   // Logs and disables navy usage
   void disableNavy(const std::string& msg);
 
-  // returns true if there is a concurrent get request in flight fetching from
-  // nvm.
-  bool mightHaveConcurrentFill(size_t shard, folly::StringPiece key);
-
   // map of concurrent fills by key. The key is a string piece wrapper around
   // GetCtx's std::string. This makes the lookups possible without
   // constructing a string key.
   using FillMap =
       folly::F14ValueMap<folly::StringPiece, std::unique_ptr<GetCtx>>;
 
+  static size_t getShardForKey(HashedKey hk) { return hk.keyHash() % kShards; }
+
   static size_t getShardForKey(folly::StringPiece key) {
-    return folly::Hash()(key) % kShards;
+    return getShardForKey(HashedKey{key});
   }
 
   FillMap& getFillMapForShard(size_t shard) { return fills_[shard].fills_; }
 
-  FillMap& getFillMap(folly::StringPiece key) {
-    return getFillMapForShard(getShardForKey(key));
+  FillMap& getFillMap(HashedKey hk) {
+    return getFillMapForShard(getShardForKey(hk));
   }
 
   std::unique_lock<std::mutex> getFillLockForShard(size_t shard) {
     return std::unique_lock<std::mutex>(fillLock_[shard].fillLock_);
   }
 
-  std::unique_lock<std::mutex> getFillLock(folly::StringPiece key) {
-    return getFillLockForShard(getShardForKey(key));
+  std::unique_lock<std::mutex> getFillLock(HashedKey hk) {
+    return getFillLockForShard(getShardForKey(hk));
   }
 
   void onGetComplete(GetCtx& ctx,
                      navy::Status s,
-                     navy::BufferView key,
+                     HashedKey key,
                      navy::BufferView value);
 
-  void evictCB(navy::BufferView key,
-               navy::BufferView val,
-               navy::DestructorEvent e);
+  void evictCB(HashedKey hk, navy::BufferView val, navy::DestructorEvent e);
 
   static navy::BufferView makeBufferView(folly::ByteRange b) {
     return navy::BufferView{b.size(), b.data()};
@@ -460,6 +447,7 @@ class NvmCache {
   std::unique_ptr<cachelib::navy::AbstractCache> navyCache_;
 
   friend class tests::NvmCacheTest;
+  FRIEND_TEST(CachelibAdminTest, WorkingSetAnalysisLoggingTest);
 };
 
 } // namespace cachelib

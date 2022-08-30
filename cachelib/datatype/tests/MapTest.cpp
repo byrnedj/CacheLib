@@ -376,17 +376,17 @@ class MapTest : public ::testing::Test {
 
     // Test move constructor and assignment operators
     auto map2{std::move(map)};
-    ASSERT_TRUE(map.isNullItemHandle());
+    ASSERT_TRUE(map.isNullWriteHandle());
     ASSERT_TRUE(map2.find(123));
 
     auto map3 = BasicMap::create(*cache, pid, "my_new_map");
     map3 = std::move(map2);
-    ASSERT_TRUE(map2.isNullItemHandle());
+    ASSERT_TRUE(map2.isNullWriteHandle());
     ASSERT_TRUE(map3.find(123));
 
     BasicMap map4 = nullptr;
     map4 = std::move(map3);
-    ASSERT_TRUE(map3.isNullItemHandle());
+    ASSERT_TRUE(map3.isNullWriteHandle());
     ASSERT_TRUE(map4.find(123));
 
     ASSERT_TRUE(map4.erase(123));
@@ -783,10 +783,8 @@ class MapTest : public ::testing::Test {
     }
     ASSERT_EQ(numKey, map.size());
 
-    cache->insert(map.viewItemHandle());
-    // TODO(jiayueb): remove "AccessMode::kRead" after changing fromItemHandle
-    // to take a ReadHandle
-    auto oldHandle = cache->find("my_map", AccessMode::kRead);
+    cache->insert(map.viewWriteHandle());
+    auto oldHandle = cache->findImpl("my_map", AccessMode::kRead);
     ASSERT_NE(nullptr, oldHandle);
     ASSERT_NE(nullptr, cache->find("my_map"));
 
@@ -798,20 +796,18 @@ class MapTest : public ::testing::Test {
     }
 
     // new map is visible
-    // TODO(jiayueb): remove "AccessMode::kRead" after changing fromItemHandle
-    // to take a ReadHandle
-    auto newHandle = cache->find("my_map", AccessMode::kRead);
+    auto newHandle = cache->findImpl("my_map", AccessMode::kRead);
     ASSERT_NE(nullptr, newHandle);
-    auto newMap = BasicMap::fromItemHandle(*cache, std::move(newHandle));
-    ASSERT_FALSE(newMap.isNullItemHandle());
+    auto newMap = BasicMap::fromWriteHandle(*cache, std::move(newHandle));
+    ASSERT_FALSE(newMap.isNullWriteHandle());
     ASSERT_NE(nullptr, newMap.find(numKey));
 
     for (uint32_t key = 0; key < numKey; ++key) {
       ASSERT_TRUE(newMap.erase(key));
     }
 
-    const auto oldMap = BasicMap::fromItemHandle(*cache, std::move(oldHandle));
-    ASSERT_FALSE(oldMap.isNullItemHandle());
+    const auto oldMap = BasicMap::fromWriteHandle(*cache, std::move(oldHandle));
+    ASSERT_FALSE(oldMap.isNullWriteHandle());
     EXPECT_EQ(numKey, oldMap.size());
     for (uint32_t key = 0; key < numKey; ++key) {
       auto* v = oldMap.find(key);
@@ -844,10 +840,8 @@ class MapTest : public ::testing::Test {
     }
     ASSERT_EQ(numKey, map.size());
 
-    cache->insert(map.viewItemHandle());
-    // TODO(jiayueb): remove "AccessMode::kRead" after changing fromItemHandle
-    // to take a ReadHandle
-    auto oldHandle = cache->find("my_map", AccessMode::kRead);
+    cache->insert(map.viewWriteHandle());
+    auto oldHandle = cache->findImpl("my_map", AccessMode::kRead);
     ASSERT_NE(nullptr, oldHandle);
     ASSERT_NE(nullptr, cache->find("my_map"));
 
@@ -858,12 +852,10 @@ class MapTest : public ::testing::Test {
     }
 
     // new map is visible
-    // TODO(jiayueb): remove "AccessMode::kRead" after changing fromItemHandle
-    // to take a ReadHandle
-    auto newHandle = cache->find("my_map", AccessMode::kRead);
+    auto newHandle = cache->findImpl("my_map", AccessMode::kRead);
     ASSERT_NE(nullptr, newHandle);
-    auto newMap = BasicMap::fromItemHandle(*cache, std::move(newHandle));
-    ASSERT_FALSE(newMap.isNullItemHandle());
+    auto newMap = BasicMap::fromWriteHandle(*cache, std::move(newHandle));
+    ASSERT_FALSE(newMap.isNullWriteHandle());
     ASSERT_NE(nullptr, newMap.find(numKey));
 
     for (uint32_t key = 0; key < numKey + 1; ++key) {
@@ -876,8 +868,8 @@ class MapTest : public ::testing::Test {
       ASSERT_TRUE(newMap.insert(key, *v));
     }
 
-    const auto oldMap = BasicMap::fromItemHandle(*cache, std::move(oldHandle));
-    ASSERT_FALSE(oldMap.isNullItemHandle());
+    const auto oldMap = BasicMap::fromWriteHandle(*cache, std::move(oldHandle));
+    ASSERT_FALSE(oldMap.isNullWriteHandle());
     EXPECT_EQ(numKey, oldMap.size());
     for (uint32_t key = 0; key < numKey; ++key) {
       auto* v = oldMap.find(key);

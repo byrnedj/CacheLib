@@ -89,6 +89,9 @@ class CacheBase {
   // Get a string referring to the cache name for this cache
   virtual const std::string getCacheName() const = 0;
 
+  // Returns true for ObjectCacheBase, false for CacheAllocator.
+  virtual bool isObjectCache() const = 0;
+
   // Get the reference  to a memory pool, for stats purposes
   //
   // @param poolId    The pool id to query
@@ -192,6 +195,10 @@ class CacheBase {
   // return the virtual interface of an attached  compact cache for a particular
   // pool id
   virtual const ICompactCache& getCompactCache(PoolId pid) const = 0;
+
+  // return object cache stats
+  virtual void getObjectCacheCounters(
+      std::function<void(folly::StringPiece, uint64_t)>) const {}
 
  protected:
   // move bytes from one pool to another. The source pool should be at least

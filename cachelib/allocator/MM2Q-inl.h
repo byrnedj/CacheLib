@@ -21,9 +21,9 @@ namespace cachelib {
 template <typename T, MM2Q::Hook<T> T::*HookPtr>
 MM2Q::Container<T, HookPtr>::Container(const serialization::MM2QObject& object,
                                        PtrCompressor compressor)
-    : lru_(*object.lrus_ref(), compressor),
-      tailTrackingEnabled_(*object.tailTrackingEnabled_ref()),
-      config_(*object.config_ref()) {
+    : lru_(*object.lrus(), compressor),
+      tailTrackingEnabled_(*object.tailTrackingEnabled()),
+      config_(*object.config()) {
   lruRefreshTime_ = config_.lruRefreshTime;
   nextReconfigureTime_ = config_.mmReconfigureIntervalSecs.count() == 0
                              ? std::numeric_limits<Time>::max()
@@ -32,9 +32,9 @@ MM2Q::Container<T, HookPtr>::Container(const serialization::MM2QObject& object,
 
   // We need to adjust list positions if the previous version does not have
   // tail lists (WarmTail & ColdTail), in order to potentially avoid cold roll
-  if (object.lrus_ref()->lists_ref()->size() < LruType::NumTypes) {
+  if (object.lrus()->lists()->size() < LruType::NumTypes) {
     XDCHECK_EQ(false, tailTrackingEnabled_);
-    XDCHECK_EQ(object.lrus_ref()->lists_ref()->size() + 2, LruType::NumTypes);
+    XDCHECK_EQ(object.lrus()->lists()->size() + 2, LruType::NumTypes);
     lru_.insertEmptyListAt(LruType::WarmTail, compressor);
     lru_.insertEmptyListAt(LruType::ColdTail, compressor);
   }
@@ -120,29 +120,41 @@ cachelib::EvictionAgeStat MM2Q::Container<T, HookPtr>::getEvictionAgeStat(
 template <typename T, MM2Q::Hook<T> T::*HookPtr>
 cachelib::EvictionAgeStat MM2Q::Container<T, HookPtr>::getEvictionAgeStatLocked(
     uint64_t projectedLength) const noexcept {
-  EvictionAgeStat stat;
-  const auto curr = static_cast<Time>(util::getCurrentTimeSec());
+  const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
 
-  stat.hotQueueStat.oldestElementAge = getOldestAgeLocked(LruType::Hot, curr);
+  auto getProjectedAge = [this, currTime, projectedLength](
+                             auto lruType, auto oldestElementAge) {
+    auto it = lru_.rbegin(lruType);
+    for (size_t numSeen = 0; numSeen < projectedLength && it != lru_.rend();
+         ++numSeen, ++it) {
+    }
+    return (it != lru_.rend()) ? currTime - getUpdateTime(*it)
+                               : oldestElementAge;
+  };
+
+  EvictionAgeStat stat;
+
+  stat.hotQueueStat.oldestElementAge =
+      getOldestAgeLocked(LruType::Hot, currTime);
   stat.hotQueueStat.size = lru_.getList(LruType::Hot).size();
+  stat.hotQueueStat.projectedAge =
+      getProjectedAge(LruType::Hot, stat.hotQueueStat.oldestElementAge);
 
   // sum the tail and the main list for the ones that have tail.
   stat.warmQueueStat.oldestElementAge =
-      getOldestAgeLocked(LruType::WarmTail, curr);
+      getOldestAgeLocked(LruType::WarmTail, currTime);
   stat.warmQueueStat.size = lru_.getList(LruType::Warm).size() +
                             lru_.getList(LruType::WarmTail).size();
+  stat.warmQueueStat.projectedAge =
+      getProjectedAge(LruType::WarmTail, stat.warmQueueStat.oldestElementAge);
 
   stat.coldQueueStat.oldestElementAge =
-      getOldestAgeLocked(LruType::ColdTail, curr);
+      getOldestAgeLocked(LruType::ColdTail, currTime);
   stat.coldQueueStat.size = lru_.getList(LruType::ColdTail).size() +
                             lru_.getList(LruType::Cold).size();
+  stat.coldQueueStat.projectedAge =
+      getProjectedAge(LruType::ColdTail, stat.coldQueueStat.oldestElementAge);
 
-  auto it = lru_.rbegin(LruType::WarmTail);
-  for (size_t numSeen = 0; numSeen < projectedLength && it != lru_.rend();
-       ++numSeen, ++it) {
-  }
-  stat.projectedAge = (it != lru_.rend()) ? curr - getUpdateTime(*it)
-                                          : stat.warmQueueStat.oldestElementAge;
   return stat;
 }
 
@@ -388,18 +400,18 @@ template <typename T, MM2Q::Hook<T> T::*HookPtr>
 serialization::MM2QObject MM2Q::Container<T, HookPtr>::saveState()
     const noexcept {
   serialization::MM2QConfig configObject;
-  *configObject.lruRefreshTime_ref() = lruRefreshTime_;
-  *configObject.lruRefreshRatio_ref() = config_.lruRefreshRatio;
-  *configObject.updateOnWrite_ref() = config_.updateOnWrite;
-  *configObject.updateOnRead_ref() = config_.updateOnRead;
-  *configObject.hotSizePercent_ref() = config_.hotSizePercent;
-  *configObject.coldSizePercent_ref() = config_.coldSizePercent;
-  *configObject.rebalanceOnRecordAccess_ref() = config_.rebalanceOnRecordAccess;
+  *configObject.lruRefreshTime() = lruRefreshTime_;
+  *configObject.lruRefreshRatio() = config_.lruRefreshRatio;
+  *configObject.updateOnWrite() = config_.updateOnWrite;
+  *configObject.updateOnRead() = config_.updateOnRead;
+  *configObject.hotSizePercent() = config_.hotSizePercent;
+  *configObject.coldSizePercent() = config_.coldSizePercent;
+  *configObject.rebalanceOnRecordAccess() = config_.rebalanceOnRecordAccess;
 
   serialization::MM2QObject object;
-  *object.config_ref() = configObject;
-  *object.tailTrackingEnabled_ref() = tailTrackingEnabled_;
-  *object.lrus_ref() = lru_.saveState();
+  *object.config() = configObject;
+  *object.tailTrackingEnabled() = tailTrackingEnabled_;
+  *object.lrus() = lru_.saveState();
   return object;
 }
 

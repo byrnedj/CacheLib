@@ -74,7 +74,7 @@ struct ItemRecord {
 template <typename Allocator>
 class ItemRecords {
   using Item = typename Allocator::Item;
-  using ItemHandle = typename Allocator::ItemHandle;
+  using WriteHandle = typename Allocator::WriteHandle;
   using DestructorData = typename Allocator::DestructorData;
 
  public:
@@ -115,7 +115,7 @@ class ItemRecords {
     return result;
   }
 
-  void addItemRecord(ItemHandle& handle) {
+  void addItemRecord(WriteHandle& handle) {
     if (!enable_ || !handle) {
       return;
     }
@@ -128,7 +128,8 @@ class ItemRecords {
     ptr->setIdx(idx);
     ptr->setVersion(0);
     auto [lock, records] = getItemRecords(idx);
-    records.resize(std::max(idx / itemRecords_.size() + 1, records.size()));
+    records.resize(
+        std::max<size_t>(idx / itemRecords_.size() + 1, records.size()));
     records[idx / itemRecords_.size()].key = handle->getKey().toString();
   }
 

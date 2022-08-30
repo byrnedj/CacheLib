@@ -86,10 +86,6 @@ class BlockCacheProtoImpl final : public BlockCacheProto {
         std::make_unique<SegmentedFifoPolicy>(std::move(segmentRatio));
   }
 
-  void setSizeClasses(std::vector<uint32_t> sizeClasses) override {
-    config_.sizeClasses = std::move(sizeClasses);
-  }
-
   void setReadBufferSize(uint32_t size) override {
     config_.readBufferSize = size;
   }
@@ -111,6 +107,10 @@ class BlockCacheProtoImpl final : public BlockCacheProto {
 
   void setItemDestructorEnabled(bool itemDestructorEnabled) override {
     config_.itemDestructorEnabled = itemDestructorEnabled;
+  }
+
+  void setPreciseRemove(bool preciseRemove) override {
+    config_.preciseRemove = preciseRemove;
   }
 
   std::unique_ptr<Engine> create(JobScheduler& scheduler,

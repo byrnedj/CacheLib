@@ -18,12 +18,12 @@ mod abomonation_cache;
 mod errors;
 mod lrucache;
 
+// export Abomonation so that users of this crate don't need to add abomination as dependency
+pub use abomonation::Abomonation;
+
 pub use crate::abomonation_cache::*;
 pub use crate::errors::*;
 pub use crate::lrucache::*;
-
-// export Abomonation so that users of this crate don't need to add abomination as dependency
-pub use abomonation::Abomonation;
 
 #[cxx::bridge(namespace = "facebook::rust::cachelib")]
 mod ffi {
@@ -138,6 +138,7 @@ mod ffi {
             id: i8,
             key: StringPiece<'_>,
             size: usize,
+            ttl_secs: u32,
         ) -> Result<UniquePtr<LruItemHandle>>;
 
         fn insert_handle(cache: &LruAllocator, handle: Pin<&mut LruItemHandle>) -> Result<bool>;

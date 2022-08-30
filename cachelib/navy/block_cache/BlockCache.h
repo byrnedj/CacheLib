@@ -57,8 +57,6 @@ class BlockCache final : public Engine {
     // Eviction policy
     std::unique_ptr<EvictionPolicy> evictionPolicy;
     BlockCacheReinsertionConfig reinsertionConfig{};
-    // Sorted list of size classes (empty means stack allocator)
-    std::vector<uint32_t> sizeClasses;
     // Region size, bytes
     uint64_t regionSize{16 * 1024 * 1024};
     // See AbstractCacheProto::setReadBufferSize
@@ -69,7 +67,7 @@ class BlockCache final : public Engine {
     uint32_t cleanRegionsPool{1};
     // Number of in-memory buffers where writes are buffered before flushed
     // on to the device
-    uint32_t numInMemBuffers{};
+    uint32_t numInMemBuffers{1};
     // whether ItemDestructor is enabled
     bool itemDestructorEnabled{false};
 
@@ -82,6 +80,9 @@ class BlockCache final : public Engine {
     // the same reigon. The effect of priorities will be up to the particular
     // eviction policy. There must be at least one priority.
     uint16_t numPriorities{1};
+
+    // whether to remove an item by checking the full key.
+    bool preciseRemove{false};
 
     // Calculates the total region number.
     uint32_t getNumRegions() const { return cacheSize / regionSize; }
@@ -221,7 +222,7 @@ class BlockCache final : public Engine {
   BlockCache(Config&& config, ValidConfigTag);
 
   // Entry disk size (with aux data and aligned)
-  uint32_t serializedSize(uint32_t keySize, uint32_t valueSize, bool aligned);
+  uint32_t serializedSize(uint32_t keySize, uint32_t valueSize);
 
   // Read and write are time consuming. It doesn't worth inlining them from
   // the performance point of view, but makes sense to track them for perf:
@@ -247,10 +248,10 @@ class BlockCache final : public Engine {
 
   // Allocator reclaim callback
   // Returns number of slots that were successfully evicted
-  uint32_t onRegionReclaim(RegionId rid, uint32_t slotSize, BufferView buffer);
+  uint32_t onRegionReclaim(RegionId rid, BufferView buffer);
 
   // Allocator cleanup callback
-  void onRegionCleanup(RegionId rid, uint32_t slotSize, BufferView buffer);
+  void onRegionCleanup(RegionId rid, BufferView buffer);
 
   // Returns true if @config matches this cache's config_
   bool isValidRecoveryData(const serialization::BlockCacheConfig& config) const;
@@ -261,15 +262,9 @@ class BlockCache final : public Engine {
   void tryRecover(RecordReader& rr);
 
   // The alloc alignment indicates the granularity of read/write. This
-  // granuality is less than the device io alignment size that can be supported
-  // when in memory buffers are used. Without the in memory buffers the
-  // minimum granularity would be the device io alignment size.
+  // granuality is less than the device io alignment size because we buffer
+  // writes in memory until we fill up a region.
   uint32_t calcAllocAlignSize() const;
-
-  // returns size aligned to alloc alignment size
-  uint32_t getAlignedSize(uint32_t size) const {
-    return powTwoAlign(size, allocAlignSize_);
-  }
 
   // Size hint is computed by aligning size up to kMinAllocAlignSize,
   // and then divide by it. It is loosely compressing the size as
@@ -331,19 +326,17 @@ class BlockCache final : public Engine {
   const bool checksumData_{};
   // reference to the under-lying device.
   const Device& device_;
-  // Indicates if in memory buffers are enabled or not
-  const bool inMemBuffersEnabled_{false};
   // alloc alignment size indicates the granularity of entry sizes on device.
-  // When in memory buffers are not enabled, this would
-  // be same as device IO alignment size. When in memory buffers are enabled,
-  // this can be as small as 1 and is determined by the size of the device
-  // and size of the address (which is 32-bits).
+  // this is at least kMinAllocAlignSize and is determined by the size of the
+  // device and size of the address (which is 32-bits).
   const uint32_t allocAlignSize_{};
   const uint32_t readBufferSize_{};
   // number of bytes in a region
   const uint64_t regionSize_{};
   // whether ItemDestructor is enabled
   const bool itemDestructorEnabled_{false};
+  // whether preciseRemove is enabled
+  const bool preciseRemove_{false};
 
   // Index stores offset of the slot *end*. This enables efficient paradigm
   // "buffer pointer is value pointer", which means value has to be at offset 0
@@ -385,6 +378,7 @@ class BlockCache final : public Engine {
   mutable AtomicCounter reinsertionBytes_;
   mutable AtomicCounter reclaimEntryHeaderChecksumErrorCount_;
   mutable AtomicCounter reclaimValueChecksumErrorCount_;
+  mutable AtomicCounter removeAttemptCollisions_;
   mutable AtomicCounter cleanupEntryHeaderChecksumErrorCount_;
   mutable AtomicCounter cleanupValueChecksumErrorCount_;
   mutable SizeDistribution sizeDist_;

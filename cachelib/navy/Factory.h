@@ -62,9 +62,6 @@ class BlockCacheProto {
   virtual void setSegmentedFifoEvictionPolicy(
       std::vector<unsigned int> segmentRatio) = 0;
 
-  // (Optional) Size classes list. Stack allocator used if not set.
-  virtual void setSizeClasses(std::vector<uint32_t> sizeClasses) = 0;
-
   // (Optional) In case of stack alloc, determines recommended size of the
   // read buffer. Must be multiple of block size.
   virtual void setReadBufferSize(uint32_t size) = 0;
@@ -82,6 +79,9 @@ class BlockCacheProto {
 
   // (Optional) Set if the item destructor feature is enabled.
   virtual void setItemDestructorEnabled(bool itemDestructorEnabled) = 0;
+
+  // (Optional) Set if the preciseRemove flag.
+  virtual void setPreciseRemove(bool preciseRemove) = 0;
 };
 
 // BigHash engine proto. BigHash is used to cache small objects (under 2KB)

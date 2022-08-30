@@ -97,22 +97,51 @@ bool insertIOBufInCache(T& cache,
 // @return      the handle for the item or an invalid handle(nullptr) if the
 //              allocation/insertion failed.
 template <typename T>
-typename T::ItemHandle allocateAccessible(T& cache,
-                                          PoolId poolId,
-                                          typename T::Item::Key key,
-                                          uint32_t size,
-                                          uint32_t ttlSecs = 0) {
+typename T::WriteHandle allocateAccessible(T& cache,
+                                           PoolId poolId,
+                                           typename T::Item::Key key,
+                                           uint32_t size,
+                                           uint32_t ttlSecs = 0) {
   auto allocHandle = cache.allocate(poolId, key, size, ttlSecs);
   if (!allocHandle) {
-    return typename T::ItemHandle{};
+    return typename T::WriteHandle{};
   }
 
   const auto inserted = cache.insert(allocHandle);
   if (!inserted) {
     // this will destroy the allocated handle and release it back to the
     // allocator.
-    return typename T::ItemHandle{};
+    return typename T::WriteHandle{};
   }
+
+  return allocHandle;
+}
+
+// Allocates and inserts an item in the cache without initializing the memory
+// via insertOrReplace.
+// Typically used for tests where we dont have synchronous readers/writers.
+//
+// @param cache     the cache to make the allocations from
+// @param poolId    the pool id for allocation
+// @param key       the key for the allocation
+// @param size      the size of the allocation
+// @param ttlSecs   Time To Live (second) for the item,
+//                  default with 0 means no expiration time
+//
+// @return      the handle for the item or an invalid handle(nullptr) if the
+//              allocation failed.
+template <typename T>
+typename T::WriteHandle allocateAndReplace(T& cache,
+                                           PoolId poolId,
+                                           typename T::Item::Key key,
+                                           uint32_t size,
+                                           uint32_t ttlSecs = 0) {
+  auto allocHandle = cache.allocate(poolId, key, size, ttlSecs);
+  if (!allocHandle) {
+    return typename T::WriteHandle{};
+  }
+
+  cache.insertOrReplace(allocHandle);
 
   return allocHandle;
 }

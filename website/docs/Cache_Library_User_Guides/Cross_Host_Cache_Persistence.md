@@ -162,7 +162,7 @@ incompatible.
 
 ### Stream APIs
 
-```
+```cpp
 #include <fstream>
 #include "folly/io/IOBufQueue.h"
 #include "folly/io/IOBuf.h"
@@ -233,14 +233,13 @@ class FileWriter : public PersistenceStreamWriter {
 
 ### Persist Cache
 
-```
+```cpp
 #include "cachelib/persistence/PersistenceManager.h"
 using namespace facebook::cachelib;
 
 using Cache = cachelib::LruAllocator;
 using CacheConfig = typename Cache::Config;
 using CacheKey = typename Cache::Key;
-using CacheItemHandle = typename Cache::ItemHandle;
 
 // cache config
 CacheConfig config;
@@ -276,14 +275,13 @@ try {
 
 ### Restore Cache
 
-```
+```cpp
 #include "cachelib/persistence/PersistenceManager.h"
 using namespace facebook::cachelib;
 
 using Cache = cachelib::LruAllocator;
 using CacheConfig = typename Cache::Config;
 using CacheKey = typename Cache::Key;
-using CacheItemHandle = typename Cache::ItemHandle;
 
 // cache config
 CacheConfig config;

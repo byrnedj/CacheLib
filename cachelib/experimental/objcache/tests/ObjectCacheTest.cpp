@@ -277,13 +277,13 @@ TEST(ObjectCache, ObjectHandleInvalid) {
 
   EXPECT_THROW(objcache->find<Vector>("test key"), std::invalid_argument);
   {
-    auto it = objcache->getCacheAlloc().find("test key", AccessMode::kRead);
+    auto it = objcache->getCacheAlloc().findImpl("test key", AccessMode::kRead);
     ASSERT_TRUE(it);
     EXPECT_THROW(LruObjectCache::toObjectHandle<Vector>(std::move(it)),
                  std::invalid_argument);
   }
   {
-    auto it = objcache->getCacheAlloc().find("test key", AccessMode::kRead);
+    auto it = objcache->getCacheAlloc().findImpl("test key", AccessMode::kRead);
     ASSERT_TRUE(it);
     EXPECT_THROW(LruObjectCache::toSharedPtr<Vector>(std::move(it)),
                  std::invalid_argument);
@@ -658,9 +658,13 @@ TEST(ObjectCache, PersistenceSimple) {
   cacheAllocatorConfig.setCacheSize(100 * 1024 * 1024);
   LruObjectCache::Config config;
   config.setCacheAllocatorConfig(cacheAllocatorConfig);
+  std::string tmpFilePath = std::tmpnam(nullptr);
   config.enablePersistence(
+      5 /* persistorRestorerThreadCount */,
+      0 /* restorerTimeOutDurationInSec */,
+      tmpFilePath /* persistFullPathFile */,
       [](folly::StringPiece key, void* unalignedMem) {
-        if (key == "my obj") {
+        if (key.startsWith("my obj")) {
           auto* vec =
               getType<Vector,
                       MonotonicBufferResource<CacheDescriptor<LruAllocator>>>(
@@ -672,8 +676,10 @@ TEST(ObjectCache, PersistenceSimple) {
       [](PoolId poolId,
          folly::StringPiece key,
          folly::StringPiece payload,
+         uint32_t creationTime,
+         uint32_t expiryTime,
          LruObjectCache& cache) {
-        if (key == "my obj") {
+        if (key.toString().starts_with("my obj")) {
           Deserializer deserializer{
               reinterpret_cast<const uint8_t*>(payload.begin()),
               reinterpret_cast<const uint8_t*>(payload.end())};
@@ -686,7 +692,122 @@ TEST(ObjectCache, PersistenceSimple) {
           if (!vecTmp) {
             return LruObjectCache::ItemHandle{};
           }
-          auto vec = cache.createCompact<Vector>(poolId, key, *vecTmp);
+
+          std::chrono::seconds ttl = std::chrono::seconds(
+              expiryTime > 0 ? expiryTime - creationTime : 0);
+          auto vec = cache.createCompact<Vector>(poolId, key, *vecTmp,
+                                                 ttl.count(), creationTime);
+          if (!vec) {
+            return LruObjectCache::ItemHandle{};
+          }
+          return std::move(vec).releaseItemHandle();
+        }
+        return LruObjectCache::ItemHandle{};
+      },
+      2 /* persistorQueueBatchSize */);
+
+  // Create few vector in the cache
+  const auto ttl = std::chrono::seconds(5);
+  size_t numOfItemInCache = 10;
+  {
+    auto objcache = createCache(config);
+    for (size_t j = 0; j < numOfItemInCache; j++) {
+      auto vec = objcache->create<Vector>(
+          0 /* poolId */, "my obj " + folly::to<std::string>(j));
+      ASSERT_TRUE(vec);
+      EXPECT_EQ(0, vec->size());
+      vec->push_back(123);
+      EXPECT_EQ(1, vec->size());
+      for (int i = 0; i < 1000; i++) {
+        vec->push_back(i);
+      }
+      EXPECT_EQ(1001, vec->size());
+
+      // Insert into cache
+      objcache->insertOrReplace(vec);
+      // extend ttl
+      vec.viewItemHandle()->extendTTL(ttl);
+      EXPECT_NE(0, vec.viewItemHandle()->getExpiryTime());
+      EXPECT_EQ(ttl, vec.viewItemHandle()->getConfiguredTTL());
+    }
+
+    // Persist
+    objcache->persist();
+  }
+
+  {
+    auto objcache = createCache(config);
+    objcache->recover();
+
+    for (size_t j = 0; j < numOfItemInCache; j++) {
+      auto vec = objcache->find<Vector>("my obj " + folly::to<std::string>(j));
+      ASSERT_TRUE(vec);
+      EXPECT_NE(0, vec.viewItemHandle()->getExpiryTime());
+      EXPECT_EQ(ttl, vec.viewItemHandle()->getConfiguredTTL());
+      EXPECT_EQ(1001, vec->size());
+
+      for (int i = 999; i >= 0; i--) {
+        ASSERT_EQ(i, vec->back());
+        vec->pop_back();
+      }
+      EXPECT_EQ(1, vec->size());
+      EXPECT_EQ(123, vec->back());
+    }
+  }
+}
+
+TEST(ObjectCache, PersistenceSimpleWithRecoverTimeOut) {
+  using Vector = std::vector<int, LruObjectCache::Alloc<int>>;
+
+  LruAllocator::Config cacheAllocatorConfig;
+  cacheAllocatorConfig.setCacheSize(100 * 1024 * 1024);
+  std::string tmpFilePath = std::tmpnam(nullptr);
+  LruObjectCache::Config config;
+  config.setCacheAllocatorConfig(cacheAllocatorConfig);
+  config.enablePersistence(
+      1 /* persistorRestorerThreadCount */,
+      4 /* restorerTimeOutDurationInSec */,
+      tmpFilePath /* persistFullPathFile */,
+      [](folly::StringPiece key, void* unalignedMem) {
+        if (key == "my obj one" || key == "my obj two") {
+          auto* vec =
+              getType<Vector,
+                      MonotonicBufferResource<CacheDescriptor<LruAllocator>>>(
+                  unalignedMem);
+          return Serializer::serializeToIOBuf(*vec);
+        }
+        return std::unique_ptr<folly::IOBuf>(nullptr);
+      },
+      [](PoolId poolId,
+         folly::StringPiece key,
+         folly::StringPiece payload,
+         uint32_t creationTime,
+         uint32_t expiryTime,
+         LruObjectCache& cache) {
+        // add a sleep to mimic delay in deserialization and recovery of
+        // cache
+        // content.
+        /* sleep override */
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+
+        if (key == "my obj one" || key == "my obj two") {
+          Deserializer deserializer{
+              reinterpret_cast<const uint8_t*>(payload.begin()),
+              reinterpret_cast<const uint8_t*>(payload.end())};
+          auto tmp = deserializer.deserialize<Vector>();
+
+          // TODO: we're compacting here for better space efficiency.
+          // However, this requires 3 copies. Deserialize -> first object ->
+          // compacted object. It's wasteful. Can we do better?
+          auto vecTmp = cache.create<Vector>(poolId, key, tmp);
+          if (!vecTmp) {
+            return LruObjectCache::ItemHandle{};
+          }
+
+          std::chrono::seconds ttl = std::chrono::seconds(
+              expiryTime > 0 ? expiryTime - creationTime : 0);
+          auto vec = cache.createCompact<Vector>(poolId, key, *vecTmp,
+                                                 ttl.count(), creationTime);
           if (!vec) {
             return LruObjectCache::ItemHandle{};
           }
@@ -695,44 +816,57 @@ TEST(ObjectCache, PersistenceSimple) {
         return LruObjectCache::ItemHandle{};
       });
 
-  folly::IOBufQueue queue;
-  // Create a new vector in cache
+  // Create two vectors in cache
+  const auto ttl = std::chrono::seconds(5);
   {
     auto objcache = createCache(config);
-    auto vec = objcache->create<Vector>(0 /* poolId */, "my obj");
-    ASSERT_TRUE(vec);
-    EXPECT_EQ(0, vec->size());
-    vec->push_back(123);
-    EXPECT_EQ(1, vec->size());
+    auto vecOne = objcache->create<Vector>(0 /* poolId */, "my obj one");
+    ASSERT_TRUE(vecOne);
+    EXPECT_EQ(0, vecOne->size());
+    vecOne->push_back(123);
+    EXPECT_EQ(1, vecOne->size());
     for (int i = 0; i < 1000; i++) {
-      vec->push_back(i);
+      vecOne->push_back(i);
     }
-    EXPECT_EQ(1001, vec->size());
+    EXPECT_EQ(1001, vecOne->size());
 
     // Insert into cache
-    objcache->insertOrReplace(vec);
+    objcache->insertOrReplace(vecOne);
+    // extend ttl
+    vecOne.viewItemHandle()->extendTTL(ttl);
+    EXPECT_NE(0, vecOne.viewItemHandle()->getExpiryTime());
+    EXPECT_EQ(ttl, vecOne.viewItemHandle()->getConfiguredTTL());
+
+    auto vecTwo = objcache->create<Vector>(0 /* poolId */, "my obj two");
+    ASSERT_TRUE(vecTwo);
+    EXPECT_EQ(0, vecTwo->size());
+    vecTwo->push_back(123);
+    EXPECT_EQ(1, vecTwo->size());
+    for (int i = 0; i < 1000; i++) {
+      vecTwo->push_back(i);
+    }
+    EXPECT_EQ(1001, vecTwo->size());
+
+    // Insert into cache
+    objcache->insertOrReplace(vecTwo);
+    // extend ttl
+    vecTwo.viewItemHandle()->extendTTL(ttl);
+    EXPECT_NE(0, vecTwo.viewItemHandle()->getExpiryTime());
+    EXPECT_EQ(ttl, vecTwo.viewItemHandle()->getConfiguredTTL());
 
     // Persist
-    auto rw = createMemoryRecordWriter(queue);
-    objcache->persist(*rw);
+    objcache->persist();
   }
 
   {
     auto objcache = createCache(config);
-    auto rr = createMemoryRecordReader(queue);
-    objcache->recover(*rr);
+    objcache->recover();
 
-    auto vec = objcache->find<Vector>("my obj");
-    ASSERT_TRUE(vec);
-
-    EXPECT_EQ(1001, vec->size());
-
-    for (int i = 999; i >= 0; i--) {
-      ASSERT_EQ(i, vec->back());
-      vec->pop_back();
-    }
-    EXPECT_EQ(1, vec->size());
-    EXPECT_EQ(123, vec->back());
+    // due to time out at least one of the vectors won't be retrieved given
+    // recovery happens through one thread.
+    auto vecOne = objcache->find<Vector>("my obj one");
+    auto vecTwo = objcache->find<Vector>("my obj two");
+    ASSERT_FALSE(vecOne && vecTwo);
   }
 }
 
@@ -744,11 +878,15 @@ TEST(ObjectCache, PersistenceMultipleTypes) {
       ObjCacheString, ObjCacheString, std::less<ObjCacheString>,
       LruObjectCache::Alloc<std::pair<const ObjCacheString, ObjCacheString>>>;
 
+  std::string tmpFilePath = std::tmpnam(nullptr);
   LruAllocator::Config cacheAllocatorConfig;
   cacheAllocatorConfig.setCacheSize(100 * 1024 * 1024);
   LruObjectCache::Config config;
   config.setCacheAllocatorConfig(cacheAllocatorConfig);
   config.enablePersistence(
+      5 /* persistorRestorerThreadCount */,
+      0 /* restorerTimeOutDurationInSec, no time out */,
+      tmpFilePath /* persistFullPathFile */,
       [](folly::StringPiece key, void* unalignedMem) {
         if (key.startsWith("vec_int")) {
           auto* obj =
@@ -774,6 +912,8 @@ TEST(ObjectCache, PersistenceMultipleTypes) {
       [](PoolId poolId,
          folly::StringPiece key,
          folly::StringPiece payload,
+         uint32_t /* unused creationTime */,
+         uint32_t /* unused expiryTime */,
          LruObjectCache& cache) {
         Deserializer deserializer{
             reinterpret_cast<const uint8_t*>(payload.begin()),
@@ -801,46 +941,55 @@ TEST(ObjectCache, PersistenceMultipleTypes) {
           return std::move(obj).releaseItemHandle();
         }
         return LruObjectCache::ItemHandle{};
-      });
+      },
+      2 /* persistorQueueBatchSize */);
 
   folly::IOBufQueue queue;
   // Create a new vector in cache
+  size_t numOfItemInCache = 10;
   {
     auto objcache = createCache(config);
+    for (size_t j = 0; j < numOfItemInCache; j++) {
+      auto vecInt = objcache->create<VecInt>(
+          0 /* poolId */, "vec_int test " + folly::to<std::string>(j));
+      vecInt->push_back(123);
+      objcache->insertOrReplace(vecInt);
 
-    auto vecInt = objcache->create<VecInt>(0 /* poolId */, "vec_int test");
-    vecInt->push_back(123);
-    objcache->insertOrReplace(vecInt);
+      auto vecStr = objcache->create<VecStr>(
+          0 /* poolId */, "vec_str test " + folly::to<std::string>(j));
+      vecStr->push_back("hello world 1234567890");
+      objcache->insertOrReplace(vecStr);
 
-    auto vecStr = objcache->create<VecStr>(0 /* poolId */, "vec_str test");
-    vecStr->push_back("hello world 1234567890");
-    objcache->insertOrReplace(vecStr);
-
-    auto mapStr = objcache->create<MapStr>(0 /* poolId */, "map_str test");
-    (*mapStr)["random key 123"] = ("hello world 1234567890");
-    objcache->insertOrReplace(mapStr);
+      auto mapStr = objcache->create<MapStr>(
+          0 /* poolId */, "map_str test " + folly::to<std::string>(j));
+      (*mapStr)["random key 123"] = ("hello world 1234567890");
+      objcache->insertOrReplace(mapStr);
+    }
 
     // Persist
-    auto rw = createMemoryRecordWriter(queue);
-    objcache->persist(*rw);
+    objcache->persist();
   }
 
   {
     auto objcache = createCache(config);
-    auto rr = createMemoryRecordReader(queue);
-    objcache->recover(*rr);
+    objcache->recover();
 
-    auto vecInt = objcache->find<VecInt>("vec_int test");
-    ASSERT_TRUE(vecInt);
-    EXPECT_EQ(123, vecInt->back());
+    for (size_t j = 0; j < numOfItemInCache; j++) {
+      auto vecInt =
+          objcache->find<VecInt>("vec_int test " + folly::to<std::string>(j));
+      ASSERT_TRUE(vecInt);
+      EXPECT_EQ(123, vecInt->back());
 
-    auto vecStr = objcache->find<VecStr>("vec_str test");
-    ASSERT_TRUE(vecStr);
-    EXPECT_EQ("hello world 1234567890", vecStr->back());
+      auto vecStr =
+          objcache->find<VecStr>("vec_str test " + folly::to<std::string>(j));
+      ASSERT_TRUE(vecStr);
+      EXPECT_EQ("hello world 1234567890", vecStr->back());
 
-    auto mapStr = objcache->find<MapStr>("map_str test");
-    ASSERT_TRUE(mapStr);
-    EXPECT_EQ("hello world 1234567890", (*mapStr)["random key 123"]);
+      auto mapStr =
+          objcache->find<MapStr>("map_str test " + folly::to<std::string>(j));
+      ASSERT_TRUE(mapStr);
+      EXPECT_EQ("hello world 1234567890", (*mapStr)["random key 123"]);
+    }
   }
 }
 
@@ -984,6 +1133,7 @@ TEST(ObjectCache, SharedPromiseColocateObject) {
     }
   });
   auto objcache = createCache(config);
+  const auto ttl = std::chrono::seconds(5);
 
   std::vector<folly::SemiFuture<
       std::pair<ObjCacheString*, std::shared_ptr<StrPromiseWrapper>>>>
@@ -992,6 +1142,13 @@ TEST(ObjectCache, SharedPromiseColocateObject) {
     auto p = objcache->create<StrPromiseWrapper>(
         0 /* poolId */, "promise str", folly::SharedPromise<ObjCacheString*>{});
     objcache->insertOrReplace(p);
+
+    EXPECT_EQ(0, p.viewItemHandle()->getExpiryTime());
+    EXPECT_EQ(0, p.viewItemHandle()->getConfiguredTTL().count());
+    // extend ttl
+    p.viewItemHandle()->extendTTL(ttl);
+    EXPECT_NE(0, p.viewItemHandle()->getExpiryTime());
+    EXPECT_EQ(ttl, p.viewItemHandle()->getConfiguredTTL());
 
     auto sp = std::move(p).toSharedPtr();
 
@@ -1020,6 +1177,9 @@ TEST(ObjectCache, SharedPromiseColocateObject) {
 
   {
     auto p = objcache->find<StrPromiseWrapper>("promise str");
+
+    EXPECT_NE(0, p.viewItemHandle()->getExpiryTime());
+    EXPECT_EQ(ttl, p.viewItemHandle()->getConfiguredTTL());
 
     // Create a string backed by the same allocator
     ObjCacheString* str =

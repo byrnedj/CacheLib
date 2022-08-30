@@ -14,24 +14,31 @@
  * limitations under the License.
  */
 
-use std::{
-    collections::HashMap,
-    io::{self, Cursor, Read, Write},
-    marker::PhantomData,
-    os::unix::ffi::OsStrExt,
-    path::{Path, PathBuf},
-    slice,
-    sync::{Mutex, RwLock},
-    time::Duration,
-};
+use std::collections::HashMap;
+use std::io;
+use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
+use std::marker::PhantomData;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+use std::path::PathBuf;
+use std::slice;
+use std::sync::Mutex;
+use std::sync::RwLock;
+use std::time::Duration;
 
-use anyhow::{Error, Result};
-use bytes::{buf::UninitSlice, Buf, BufMut, Bytes, BytesMut};
+use anyhow::Error;
+use anyhow::Result;
+use bytes::buf::UninitSlice;
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::Bytes;
+use bytes::BytesMut;
 use cxx::let_cxx_string;
+use fbinit::FacebookInit;
 use folly::StringPiece;
 use once_cell::sync::OnceCell;
-
-use fbinit::FacebookInit;
 
 use crate::errors::ErrorKind;
 use crate::ffi;
@@ -693,10 +700,11 @@ impl LruCachePool {
     /// Note that if you do not insert the handle, it will not be visible to `get`, and the
     /// associated memory will be pinned until the handle is inserted or dropped. Do not hold onto
     /// handles for long time periods, as this will reduce cachelib's efficiency.
-    pub fn allocate<K>(
+    pub fn allocate_with_ttl<K>(
         &self,
         key: K,
         size: usize,
+        ttl: Option<Duration>,
     ) -> Result<Option<LruCacheHandle<ReadWriteShared>>>
     where
         K: AsRef<[u8]>,
@@ -705,7 +713,14 @@ impl LruCachePool {
         let mut full_key = self.pool_name.clone().into_bytes();
         full_key.extend_from_slice(key.as_ref());
         let key = StringPiece::from(full_key.as_slice());
-        let handle = ffi::allocate_item(cache, self.pool, key, size)?;
+        // Cachelib uses a 0 TTL for "infinite". Turn larger than 2**32 seconds
+        // into 2**32, and no TTL into infinite
+        // If you ask for a TTL less than 1 second, turn it into 1 second
+        let ttl_secs = ttl
+            .map_or(0, |d| std::cmp::min(d.as_secs(), 1))
+            .try_into()
+            .unwrap_or(u32::MAX);
+        let handle = ffi::allocate_item(cache, self.pool, key, size, ttl_secs)?;
         if handle.is_null() {
             Ok(None)
         } else {
@@ -714,6 +729,18 @@ impl LruCachePool {
                 _marker: PhantomData,
             }))
         }
+    }
+
+    /// As allocate_with_ttl, but implicit infinite TTL
+    pub fn allocate<K>(
+        &self,
+        key: K,
+        size: usize,
+    ) -> Result<Option<LruCacheHandle<ReadWriteShared>>>
+    where
+        K: AsRef<[u8]>,
+    {
+        self.allocate_with_ttl(key, size, None)
     }
 
     /// Insert a previously allocated handle into the cache, making it visible to `get`
@@ -750,6 +777,28 @@ impl LruCachePool {
     }
 
     /// Allocate a new handle, and write value to it.
+    pub fn allocate_populate_with_ttl<K, V>(
+        &self,
+        key: K,
+        value: V,
+        ttl: Option<Duration>,
+    ) -> Result<Option<LruCacheHandle<ReadWriteShared>>>
+    where
+        K: AsRef<[u8]>,
+        V: Buf,
+    {
+        let datalen = value.remaining();
+
+        match self.allocate_with_ttl(key, datalen, ttl)? {
+            None => Ok(None),
+            Some(mut handle) => {
+                handle.get_writer()?.put(value);
+                Ok(Some(handle))
+            }
+        }
+    }
+
+    /// Allocate a new handle, and write value to it. TTL is implicitly infinite
     pub fn allocate_populate<K, V>(
         &self,
         key: K,
@@ -759,44 +808,61 @@ impl LruCachePool {
         K: AsRef<[u8]>,
         V: Buf,
     {
-        let datalen = value.remaining();
-
-        match self.allocate(key, datalen)? {
-            None => Ok(None),
-            Some(mut handle) => {
-                handle.get_writer()?.put(value);
-                Ok(Some(handle))
-            }
-        }
+        self.allocate_populate_with_ttl(key, value, None)
     }
 
     /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
     /// false otherwise. This will not overwrite existing data.
-    pub fn set<K, V>(&self, key: K, value: V) -> Result<bool>
+    pub fn set_with_ttl<K, V>(&self, key: K, value: V, ttl: Option<Duration>) -> Result<bool>
     where
         K: AsRef<[u8]>,
         V: Buf,
     {
-        match self.allocate_populate(key, value)? {
+        match self.allocate_populate_with_ttl(key, value, ttl)? {
             None => Ok(false),
             Some(handle) => self.insert_handle(handle),
         }
     }
 
     /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
-    /// false otherwise. This will overwrite existing data.
-    pub fn set_or_replace<K, V>(&self, key: K, value: V) -> Result<bool>
+    /// false otherwise. This will not overwrite existing data, and sets the TTL to infinite
+    pub fn set<K, V>(&self, key: K, value: V) -> Result<bool>
     where
         K: AsRef<[u8]>,
         V: Buf,
     {
-        match self.allocate_populate(key, value)? {
+        self.set_with_ttl(key, value, None)
+    }
+
+    /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
+    /// false otherwise. This will overwrite existing data.
+    pub fn set_or_replace_with_ttl<K, V>(
+        &self,
+        key: K,
+        value: V,
+        ttl: Option<Duration>,
+    ) -> Result<bool>
+    where
+        K: AsRef<[u8]>,
+        V: Buf,
+    {
+        match self.allocate_populate_with_ttl(key, value, ttl)? {
             None => Ok(false),
             Some(handle) => {
                 self.insert_or_replace_handle(handle)?;
                 Ok(true)
             }
         }
+    }
+
+    /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
+    /// false otherwise. This will overwrite existing data, and sets the TTL to infinite
+    pub fn set_or_replace<K, V>(&self, key: K, value: V) -> Result<bool>
+    where
+        K: AsRef<[u8]>,
+        V: Buf,
+    {
+        self.set_or_replace_with_ttl(key, value, None)
     }
 
     /// Fetch a read handle for a key. Returns None if the key could not be found in the pool,
@@ -910,15 +976,28 @@ impl VolatileLruCachePool {
     /// Note that if you do not insert the handle, it will not be visible to `get`, and the
     /// associated memory will be pinned until the handle is inserted or dropped. Do not hold onto
     /// handles for long time periods, as this will reduce cachelib's efficiency.
-    pub fn allocate<K>(&self, key: K, size: usize) -> Result<Option<LruCacheHandle<ReadWrite>>>
+    pub fn allocate_with_ttl<K>(
+        &self,
+        key: K,
+        size: usize,
+        ttl: Option<Duration>,
+    ) -> Result<Option<LruCacheHandle<ReadWrite>>>
     where
         K: AsRef<[u8]>,
     {
-        let result = self.inner.allocate(key, size)?;
+        let result = self.inner.allocate_with_ttl(key, size, ttl)?;
         Ok(result.map(|cache_handle| LruCacheHandle {
             handle: cache_handle.handle,
             _marker: PhantomData,
         }))
+    }
+
+    /// As allocate_with_ttl, but sets the TTL to infinite
+    pub fn allocate<K>(&self, key: K, size: usize) -> Result<Option<LruCacheHandle<ReadWrite>>>
+    where
+        K: AsRef<[u8]>,
+    {
+        self.allocate_with_ttl(key, size, None)
     }
 
     /// Insert a previously allocated handle into the cache, making it visible to `get`
@@ -934,6 +1013,16 @@ impl VolatileLruCachePool {
 
     /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
     /// false otherwise. This will not overwrite existing data.
+    pub fn set_with_ttl<K, V>(&self, key: K, value: V, ttl: Option<Duration>) -> Result<bool>
+    where
+        K: AsRef<[u8]>,
+        V: Buf,
+    {
+        self.inner.set_with_ttl(key, value, ttl)
+    }
+
+    /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
+    /// false otherwise. This will not overwrite existing data, and uses an infinite TTL
     pub fn set<K, V>(&self, key: K, value: V) -> Result<bool>
     where
         K: AsRef<[u8]>,
@@ -944,6 +1033,21 @@ impl VolatileLruCachePool {
 
     /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
     /// false otherwise. This will overwrite existing data.
+    pub fn set_or_replace_with_ttl<K, V>(
+        &self,
+        key: K,
+        value: V,
+        ttl: Option<Duration>,
+    ) -> Result<bool>
+    where
+        K: AsRef<[u8]>,
+        V: Buf,
+    {
+        self.inner.set_or_replace_with_ttl(key, value, ttl)
+    }
+
+    /// Insert a key->value mapping into the pool. Returns true if the insertion was successful,
+    /// false otherwise. This will overwrite existing data, and uses an infinite TTL
     pub fn set_or_replace<K, V>(&self, key: K, value: V) -> Result<bool>
     where
         K: AsRef<[u8]>,
@@ -1017,9 +1121,9 @@ impl VolatileLruCachePool {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
     use tempdir::TempDir;
+
+    use super::*;
 
     fn create_cache(fb: FacebookInit) {
         let config = LruCacheConfig::new(128 * 1024 * 1024)

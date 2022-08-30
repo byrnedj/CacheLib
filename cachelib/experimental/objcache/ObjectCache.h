@@ -16,11 +16,13 @@
 
 #pragma once
 
+#include <chrono>
 #include <scoped_allocator>
 
 #include "cachelib/common/PeriodicWorker.h"
 #include "cachelib/common/Serialization.h"
 #include "cachelib/experimental/objcache/Allocator.h"
+#include "cachelib/experimental/objcache/Persistence.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion"
@@ -97,6 +99,8 @@ class CacheObjectHandle {
   // View item handle. This is useful if user wants to work with the
   // underlying CacheAllocator directly with an ItemHandle
   const ItemHandle& viewItemHandle() const noexcept { return handle_; }
+
+  ItemHandle& viewItemHandle() { return handle_; }
 
   // Moves ownership into a regular item handle.
   ItemHandle releaseItemHandle() && {
@@ -247,17 +251,39 @@ class ObjectCacheConfig {
   // TODO: add comments for persistence
   using SerializationCallback = typename ObjectCache::SerializationCallback;
   using DeserializationCallback = typename ObjectCache::DeserializationCallback;
-  ObjectCacheConfig& enablePersistence(SerializationCallback scb,
-                                       DeserializationCallback dcb) {
+  ObjectCacheConfig& enablePersistence(
+      uint32_t persistorRestorerThreadCount,
+      uint32_t restorerTimeOutDurationInSec,
+      std::string persistFullPathFile,
+      SerializationCallback scb,
+      DeserializationCallback dcb,
+      uint32_t persistorQueueBatchSize = 1000) {
     serializationCallback_ = std::move(scb);
     deserializationCallback_ = std::move(dcb);
+    persistorRestorerThreadCount_ = persistorRestorerThreadCount;
+    restorerTimeOutDurationInSec_ = restorerTimeOutDurationInSec;
+    persistFullPathFile_ = std::move(persistFullPathFile);
+    persistorQueueBatchSize_ = persistorQueueBatchSize;
     return *this;
   }
+
   const SerializationCallback& getSerializationCallback() const {
     return serializationCallback_;
   }
   const DeserializationCallback& getDeserializationCallback() const {
     return deserializationCallback_;
+  }
+  [[nodiscard]] uint32_t getPersistorRestorerThreadCount() const {
+    return persistorRestorerThreadCount_;
+  }
+  [[nodiscard]] uint32_t getRestorerTimeOut() const {
+    return restorerTimeOutDurationInSec_;
+  }
+  [[nodiscard]] const std::string& getPersistFullPathFile() const {
+    return persistFullPathFile_;
+  }
+  [[nodiscard]] uint32_t getPersistorQueueBatchSize() const {
+    return persistorQueueBatchSize_;
   }
 
  private:
@@ -272,6 +298,10 @@ class ObjectCacheConfig {
 
   SerializationCallback serializationCallback_;
   DeserializationCallback deserializationCallback_;
+  uint32_t persistorRestorerThreadCount_;
+  uint32_t restorerTimeOutDurationInSec_;
+  std::string persistFullPathFile_;
+  uint32_t persistorQueueBatchSize_;
 };
 
 struct ObjectCacheStats {
@@ -370,6 +400,8 @@ class ObjectCache {
       std::function<typename ObjectCache::ItemHandle(PoolId poolId,
                                                      folly::StringPiece key,
                                                      folly::StringPiece payload,
+                                                     uint32_t creationTime,
+                                                     uint32_t expiryTime,
                                                      ObjectCache& cache)>;
 
   template <typename T>
@@ -397,6 +429,10 @@ class ObjectCache {
   explicit ObjectCache(Config config) : ObjectCache(createCache(config), true) {
     serializationCallback_ = config.getSerializationCallback();
     deserializationCallback_ = config.getDeserializationCallback();
+    persistorRestorerThreadCount_ = config.getPersistorRestorerThreadCount();
+    restorerTimeOutDurationInSec_ = config.getRestorerTimeOut();
+    persistFullPathFile_ = config.getPersistFullPathFile();
+    persistorQueueBatchSize_ = config.getPersistorQueueBatchSize();
 
     if (config.getCompactionCallback()) {
       compactionWorker_ =
@@ -431,50 +467,20 @@ class ObjectCache {
   // Get the underlying CacheAllocator
   CacheAlloc& getCacheAlloc() { return *cache_; }
 
-  void persist(RecordWriter& rw) {
+  void persist() {
     XDCHECK(serializationCallback_);
-    for (auto it = cache_->begin(); it != cache_->end(); ++it) {
-      auto iobuf = serializationCallback_(it->getKey(), it->getMemory());
-      if (!iobuf) {
-        XLOG(ERR) << "Failed to serialize for key: " << it->getKey();
-        continue;
-      }
-      serialization::Item item;
-      item.poolId_ref().value() = cache_->getAllocInfo(it->getMemory()).poolId;
-      // TODO: we need to actually recover creation and persistence as well
-      //       we need to modify the create allocator resource logic to allow
-      //       us to pass in creation and expiry times.
-      item.creationTime_ref().value() = it->getCreationTime();
-      item.expiryTime_ref().value() = it->getExpiryTime();
-      item.key_ref().value() = it->getKey().str();
-      item.payload_ref().value().resize(iobuf->length());
-      std::memcpy(
-          item.payload_ref().value().data(), iobuf->data(), iobuf->length());
-      rw.writeRecord(Serializer::serializeToIOBuf(item));
-    }
+    ObjectCachePersistor<ObjectCache> persistor(
+        persistorRestorerThreadCount_, serializationCallback_, *this,
+        persistFullPathFile_, persistorQueueBatchSize_);
+    persistor.run();
   }
 
-  void recover(RecordReader& rr) {
+  void recover() {
     XDCHECK(deserializationCallback_);
-    while (!rr.isEnd()) {
-      auto iobuf = rr.readRecord();
-      XDCHECK(iobuf);
-      Deserializer deserializer(iobuf->data(), iobuf->data() + iobuf->length());
-      auto item = deserializer.deserialize<serialization::Item>();
-
-      // TODO: support creationTime and expiryTime
-
-      auto hdl = deserializationCallback_(item.poolId_ref().value(),
-                                          item.key_ref().value(),
-                                          item.payload_ref().value(),
-                                          *this);
-      if (!hdl) {
-        XLOG(ERR) << "Failed to deserialize for key: "
-                  << item.key_ref().value();
-        continue;
-      }
-      cache_->insertOrReplace(hdl);
-    }
+    ObjectCacheRestorer<ObjectCache> restorer(
+        persistorRestorerThreadCount_, deserializationCallback_, *this,
+        persistFullPathFile_, restorerTimeOutDurationInSec_);
+    restorer.run();
   }
 
   // Create a new object backed by cachelib-memory. This behaves similar to
@@ -492,14 +498,30 @@ class ObjectCache {
   ObjectHandle<T> create(PoolId poolId,
                          folly::StringPiece key,
                          Args&&... args) {
+    return createWithTtl<T>(poolId, key, 0 /* ttlSecs*/, 0 /* creationTime */,
+                            std::forward<Args>(args)...);
+  }
+
+  // Same as above where you can pass ttl and creation time of the object.
+  // @param poolId    Cache pool this object will be allocated from.
+  // @param key       Key associated with the object
+  // @param ttlSecs   Time To Live(second) for the item,
+  // @param args...   Arguments for T's constructor
+  // @return  a handle to an object
+  // @throw   ObjectCacheAllocationError on allocation error
+  //          Any exceptions from within T's constructor
+  template <typename T, typename... Args>
+  ObjectHandle<T> createWithTtl(PoolId poolId,
+                                folly::StringPiece key,
+                                uint32_t ttlSecs,
+                                uint32_t creationTime,
+                                Args&&... args) {
     // TODO: Allow user to specify any compatible allocator resource
     auto [handle, mbr] = createMonotonicBufferResource<AllocatorResource>(
-        *cache_,
-        poolId,
-        key,
+        *cache_, poolId, key,
         getTypeSize<T>() /* reserve minimum space for this object */,
-        0 /* additional bytes for storage */,
-        std::alignment_of<T>());
+        0 /* additional bytes for storage */, std::alignment_of<T>(), ttlSecs,
+        creationTime);
     new (getType<T, AllocatorResource>(handle->getMemory()))
         T(std::forward<Args>(args)..., Alloc<char>{mbr});
 
@@ -517,7 +539,9 @@ class ObjectCache {
   template <typename T>
   ObjectHandle<T> createCompact(PoolId poolId,
                                 folly::StringPiece key,
-                                const T& oldObject) {
+                                const T& oldObject,
+                                uint32_t ttlSecs = 0,
+                                uint32_t creationTime = 0) {
     // TODO: handle when this is bigger than 4MB
     const uint32_t usedBytes = oldObject.get_allocator()
                                    .getAllocatorResource()
@@ -526,12 +550,10 @@ class ObjectCache {
 
     // TODO: Allow user to specify any compatible allocator resource
     auto [handle, mbr] = createMonotonicBufferResource<AllocatorResource>(
-        *cache_,
-        poolId,
-        key,
+        *cache_, poolId, key,
         getTypeSize<T>() /* reserve minimum space for this object */,
-        usedBytes /* additional bytes for storage */,
-        std::alignment_of<T>());
+        usedBytes /* additional bytes for storage */, std::alignment_of<T>(),
+        ttlSecs, creationTime);
     new (getType<T, AllocatorResource>(handle->getMemory()))
         T(oldObject, Alloc<char>{mbr});
 
@@ -548,7 +570,7 @@ class ObjectCache {
   template <typename T>
   ObjectHandle<T> find(folly::StringPiece key,
                        AccessMode mode = AccessMode::kRead) {
-    auto handle = cache_->find(key, mode);
+    auto handle = cache_->findImpl(key, mode);
     return toObjectHandle<T>(std::move(handle));
   }
 
@@ -665,6 +687,10 @@ class ObjectCache {
   std::unique_ptr<CompactionWorker> compactionWorker_;
   SerializationCallback serializationCallback_;
   DeserializationCallback deserializationCallback_;
+  uint32_t persistorRestorerThreadCount_;
+  uint32_t restorerTimeOutDurationInSec_;
+  std::string persistFullPathFile_;
+  uint32_t persistorQueueBatchSize_;
 };
 } // namespace objcache
 } // namespace cachelib

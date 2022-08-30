@@ -22,11 +22,11 @@ namespace detail {
 // pending for this, because the contract of ObjectCache is that user must
 // hold an outstanding refcount (via an ItemHandle or ObjectHandle) at any
 // time when they're accessing the data structures backed by the item.
-template <typename ItemHandle, typename Item, typename Cache>
-ItemHandle* objcacheInitializeZeroRefcountHandle(void* handleStorage,
+template <typename WriteHandle, typename Item, typename Cache>
+WriteHandle* objcacheInitializeZeroRefcountHandle(void* handleStorage,
                                                  Item* it,
                                                  Cache& alloc) {
-  return new (handleStorage) typename Cache::ItemHandle{it, alloc};
+  return new (handleStorage) typename Cache::WriteHandle{it, alloc};
 }
 
 // Object-cache's c++ allocator needs to access CacheAllocator directly from
@@ -185,13 +185,15 @@ void* MonotonicBufferResource<CacheDescriptor>::allocateSlow(size_t bytes,
 }
 
 template <typename MonotonicBufferResource, typename Cache>
-std::pair<typename Cache::ItemHandle, MonotonicBufferResource>
+std::pair<typename Cache::WriteHandle, MonotonicBufferResource>
 createMonotonicBufferResource(Cache& cache,
                               PoolId poolId,
                               folly::StringPiece key,
                               uint32_t reservedBytes,
                               uint32_t additionalBytes,
-                              size_t alignment) {
+                              size_t alignment,
+                              uint32_t ttlSecs = 0,
+                              uint32_t creationTime = 0) {
   // The layout in our parent item is as follows.
   //
   // |-header-|-key-|-metadata-|-GAP-|-reserved-|-additional-|
@@ -213,7 +215,8 @@ createMonotonicBufferResource(Cache& cache,
     extraBytes = alignment + 8 * (alignment > std::alignment_of<uint64_t>());
   }
 
-  auto hdl = cache.allocate(poolId, key, bytes + extraBytes);
+  auto hdl =
+      cache.allocate(poolId, key, bytes + extraBytes, ttlSecs, creationTime);
   if (!hdl) {
     throw exception::ObjectCacheAllocationError(folly::sformat(
         "Unable to allocate a new item for allocator. Key: {}, Requested "
@@ -231,7 +234,7 @@ createMonotonicBufferResource(Cache& cache,
   metadata->buffer = bufferStart;
 
   auto sharedHdl =
-      detail::objcacheInitializeZeroRefcountHandle<typename Cache::ItemHandle>(
+      detail::objcacheInitializeZeroRefcountHandle<typename Cache::WriteHandle>(
           &metadata->itemHandleStorage, hdl.get(), cache);
 
   return {std::move(hdl), MonotonicBufferResource{sharedHdl}};

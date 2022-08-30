@@ -68,6 +68,10 @@ struct CacheConfig : public JSONConfig {
   // by defaullt, lru allocator. can be set to LRU-2Q.
   std::string allocator{"LRU"};
 
+  // if set, we will persist the cache across cachebench runs. The directory
+  // is used to store some metadata about the cache.
+  std::string cacheDir{""};
+
   uint64_t cacheSizeMB{0};
   uint64_t poolRebalanceIntervalSec{0};
   std::string rebalanceStrategy;
@@ -124,6 +128,9 @@ struct CacheConfig : public JSONConfig {
   // specified, this is the size per device path. When this is non-zero and
   // nvmCachePaths is empty, an in-memory block device is used.
   uint64_t nvmCacheSizeMB{0};
+
+  // if 0, use the default. Note this takes away space from NvmCache
+  uint64_t nvmCacheMetadataSizeMB{0};
 
   // list of device identifiers for the device path that can be used to
   // monitor the physical write amplification. If empty, physical write amp is
@@ -207,7 +214,7 @@ struct CacheConfig : public JSONConfig {
   bool navyEncryption = false;
 
   // number of navy in-memory buffers
-  uint32_t navyNumInmemBuffers{0};
+  uint32_t navyNumInmemBuffers{30};
 
   // By default Navy will only flush to device at most 1MB, if larger than 1MB,
   // Navy will split it into multiple IOs.
@@ -251,6 +258,15 @@ struct CacheConfig : public JSONConfig {
   // When set to 0, TimeStampTicker is not used.
   uint64_t tickerSynchingSeconds{0};
 
+  // Check if ItemDestructor is triggered properly for every item.
+  // Be careful that this will keep a record of every item allocated,
+  // and won't be dropped after item is removed from cache, it the size
+  // is not bounded by the size of cache.
+  bool enableItemDestructorCheck{false};
+  // enable the ItemDestructor feature, but not check correctness,
+  // this verifies whether the feature affects throughputs.
+  bool enableItemDestructor{false};
+
   //
   // Options below are not to be populated with JSON
   //
@@ -273,14 +289,9 @@ struct CacheConfig : public JSONConfig {
   // simulation. Stressor uses this to pass the ticker into the cache.
   std::shared_ptr<cachelib::Ticker> ticker;
 
-  // Check if ItemDestructor is triggered properly for every item.
-  // Be careful that this will keep a record of every item allocated,
-  // and won't be dropped after item is removed from cache, it the size
-  // is not bounded by the size of cache.
-  bool enableItemDestructorCheck{false};
-  // enable the ItemDestructor feature, but not check correctness,
-  // this verifies whether the feature affects throughputs.
-  bool enableItemDestructor{false};
+  // A nested dynamic for custom config. Customized configs can be put under
+  // this field and be consumed during the initialization of the cache.
+  folly::dynamic customConfigJson;
 
   explicit CacheConfig(const folly::dynamic& configJson);
 

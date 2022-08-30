@@ -28,8 +28,9 @@ class CacheAPIWrapperForNvm {
   using Item = typename C::Item;
   using ChainedItemIter = typename C::ChainedItemIter;
   using Key = typename Item::Key;
-  using ItemHandle = typename C::ItemHandle;
+  using WriteHandle = typename C::WriteHandle;
   using ReadHandle = typename C::ReadHandle;
+  using EventTracker = typename C::EventTracker;
 
  public:
   // Get chained allocation on the item.
@@ -50,7 +51,7 @@ class CacheAPIWrapperForNvm {
   // @return handle if item is found, nullptr otherwise
   // @throw  std::overflow_error is the maximum item refcount is execeeded by
   //         creating this item handle.
-  static ItemHandle findInternal(C& cache, Key key) {
+  static WriteHandle findInternal(C& cache, Key key) {
     return cache.findInternal(key);
   }
 
@@ -74,12 +75,12 @@ class CacheAPIWrapperForNvm {
   // @throw   std::invalid_argument if the poolId is invalid or the size
   //          requested is invalid or if the key is invalid(key.size() == 0 or
   //          key.size() > 255)
-  static ItemHandle allocateInternal(C& cache,
-                                     PoolId id,
-                                     Key key,
-                                     uint32_t size,
-                                     uint32_t creationTime,
-                                     uint32_t expiryTime) {
+  static WriteHandle allocateInternal(C& cache,
+                                      PoolId id,
+                                      Key key,
+                                      uint32_t size,
+                                      uint32_t creationTime,
+                                      uint32_t expiryTime) {
     return cache.allocateInternal(id, key, size, creationTime, expiryTime);
   }
 
@@ -94,7 +95,7 @@ class CacheAPIWrapperForNvm {
   //         and is now accessible to everyone. False if there was an error.
   // @throw  std::invalid_argument if the handle is already accessible or
   //         invalid
-  static bool insertFromNvm(C& cache, const ItemHandle& handle) {
+  static bool insertFromNvm(C& cache, const WriteHandle& handle) {
     return cache.insertImpl(handle, AllocatorApiEvent::INSERT_FROM_NVM);
   }
 
@@ -105,7 +106,7 @@ class CacheAPIWrapperForNvm {
   // @param handle the handle to acquire the wait context
   // @return the wait context for the handle
   static std::shared_ptr<WaitContext<ReadHandle>> getWaitContext(
-      C& cache, ItemHandle& handle) {
+      C& cache, ReadHandle& handle) {
     return cache.getWaitContext(handle);
   }
 
@@ -113,7 +114,7 @@ class CacheAPIWrapperForNvm {
   //
   // @param cache the cache instance using nvmcache
   // @return the created item handle
-  static ItemHandle createNvmCacheFillHandle(C& cache) {
+  static WriteHandle createNvmCacheFillHandle(C& cache) {
     return cache.createNvmCacheFillHandle();
   }
 
@@ -122,6 +123,10 @@ class CacheAPIWrapperForNvm {
   // @param cache the cache instance using nvmcache
   // @return Stats of the nvmcache
   static detail::Stats& getStats(C& cache) { return cache.stats(); }
+
+  static EventTracker* getEventTracker(C& cache) {
+    return cache.getEventTracker();
+  }
 };
 
 } // namespace cachelib

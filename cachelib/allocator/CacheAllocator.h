@@ -84,6 +84,17 @@ namespace cachelib {
 template <typename AllocatorT>
 class FbInternalRuntimeUpdateWrapper;
 
+template <typename K, typename V, typename C>
+class ReadOnlyMap;
+
+namespace objcache2 {
+template <typename AllocatorT>
+class ObjectCache;
+
+template <typename AllocatorT>
+class ObjectCacheBase;
+} // namespace objcache2
+
 namespace cachebench {
 template <typename Allocator>
 class Cache;
@@ -102,6 +113,12 @@ class AllocatorHitStatsTest;
 template <typename AllocatorT>
 class AllocatorResizeTest;
 
+template <typename AllocatorT>
+class FixedSizeArrayTest;
+
+template <typename AllocatorT>
+class MapTest;
+
 class NvmCacheTest;
 
 template <typename AllocatorT>
@@ -112,6 +129,20 @@ class NvmAdmissionPolicyTest;
 class CacheAllocatorTestWrapper;
 class PersistenceCache;
 } // namespace tests
+
+namespace objcache {
+template <typename CacheDescriptor, typename AllocatorRes>
+class ObjectCache;
+namespace test {
+#define GET_CLASS_NAME(test_case_name, test_name) \
+  test_case_name##_##test_name##_Test
+
+#define GET_DECORATED_CLASS_NAME(namespace, test_case_name, test_name) \
+  namespace ::GET_CLASS_NAME(test_case_name, test_name)
+
+class GET_CLASS_NAME(ObjectCache, ObjectHandleInvalid);
+} // namespace test
+} // namespace objcache
 
 // CacheAllocator can provide an interface to make Keyed Allocations(Item) and
 // takes two templated types that control how the allocation is
@@ -156,13 +187,16 @@ class CacheAllocator : public CacheBase {
 
   // the holder for the item when we hand it to the caller. This ensures
   // that the reference count is maintained when the caller is done with the
-  // item. The ItemHandle provides a getMemory() and getKey() interface. The
-  // caller is free to use the result of these two as long as the handle is
-  // active/alive. Using the result of the above interfaces after destroying
-  // the ItemHandle is UB. The ItemHandle safely wraps a pointer to the Item.
+  // item. The ReadHandle/WriteHandle provides a getMemory() and getKey()
+  // interface. The caller is free to use the result of these two as long as the
+  // handle is active/alive. Using the result of the above interfaces after
+  // destroying the ReadHandle/WriteHandle is UB. The ReadHandle/WriteHandle
+  // safely wraps a pointer to the "const Item"/"Item".
   using ReadHandle = typename Item::ReadHandle;
   using WriteHandle = typename Item::WriteHandle;
-  using ItemHandle = WriteHandle;
+  // Following is deprecated as of allocator version 17 and this line will be
+  // removed at a future date
+  // using ItemHandle = WriteHandle;
   template <typename UserType,
             typename Converter =
                 detail::DefaultUserTypeConverter<Item, UserType>>
@@ -329,11 +363,11 @@ class CacheAllocator : public CacheBase {
   // @throw   std::invalid_argument if the poolId is invalid or the size
   //          requested is invalid or if the key is invalid(key.size() == 0 or
   //          key.size() > 255)
-  ItemHandle allocate(PoolId id,
-                      Key key,
-                      uint32_t size,
-                      uint32_t ttlSecs = 0,
-                      uint32_t creationTime = 0);
+  WriteHandle allocate(PoolId id,
+                       Key key,
+                       uint32_t size,
+                       uint32_t ttlSecs = 0,
+                       uint32_t creationTime = 0);
 
   // Allocate a chained item
   //
@@ -360,7 +394,7 @@ class CacheAllocator : public CacheBase {
   // @param child   chained item that will be linked to the parent
   //
   // @throw std::invalid_argument if parent is nullptr
-  void addChainedItem(ItemHandle& parent, ItemHandle child);
+  void addChainedItem(WriteHandle& parent, WriteHandle child);
 
   // Pop the first chained item assocaited with this parent and unmark this
   // parent handle as having chained allocations.
@@ -371,7 +405,7 @@ class CacheAllocator : public CacheBase {
   //
   // @return ChainedItem  head if there exists one
   //         nullptr      otherwise
-  ItemHandle popChainedItem(ItemHandle& parent);
+  WriteHandle popChainedItem(WriteHandle& parent);
 
   // Return the key to the parent item.
   //
@@ -397,9 +431,9 @@ class CacheAllocator : public CacheBase {
   // @return  handle to the oldItem on return.
   //
   // @throw std::invalid_argument if any of the pre-conditions fails
-  ItemHandle replaceChainedItem(Item& oldItem,
-                                ItemHandle newItem,
-                                Item& parent);
+  WriteHandle replaceChainedItem(Item& oldItem,
+                                 WriteHandle newItem,
+                                 Item& parent);
 
   // Transfers the ownership of the chain from the current parent to the new
   // parent and inserts the new parent into the cache. Parent will be unmarked
@@ -420,7 +454,7 @@ class CacheAllocator : public CacheBase {
   // @throw   std::invalid_argument if the parent does not have chained item or
   //          incorrect state of chained item or if any of the pre-conditions
   //          are not met
-  void transferChainAndReplace(ItemHandle& parent, ItemHandle& newParent);
+  void transferChainAndReplace(WriteHandle& parent, WriteHandle& newParent);
 
   // Inserts the allocated handle into the AccessContainer, making it
   // accessible for everyone. This needs to be the handle that the caller
@@ -433,7 +467,7 @@ class CacheAllocator : public CacheBase {
   //         and is now accessible to everyone. False if there was an error.
   //
   // @throw std::invalid_argument if the handle is already accessible.
-  bool insert(const ItemHandle& handle);
+  bool insert(const WriteHandle& handle);
 
   // Replaces the allocated handle into the AccessContainer, making it
   // accessible for everyone. If an existing handle is already in the
@@ -447,7 +481,7 @@ class CacheAllocator : public CacheBase {
   // @throw cachelib::exception::RefcountOverflow if the item we are replacing
   //        is already out of refcounts.
   // @return handle to the old item that had been replaced
-  ItemHandle insertOrReplace(const ItemHandle& handle);
+  WriteHandle insertOrReplace(const WriteHandle& handle);
 
   // look up an item by its key across the nvm cache as well if enabled.
   //
@@ -457,16 +491,22 @@ class CacheAllocator : public CacheBase {
   //                  key does not exist.
   ReadHandle find(Key key);
 
-  // look up an item by its key across the nvm cache as well if enabled.
+  // Warning: this API is synchronous today with HybridCache. This means as
+  //          opposed to find(), we will block on an item being read from
+  //          flash until it is loaded into DRAM-cache. In find(), if an item
+  //          is missing in dram, we will return a "not-ready" handle and
+  //          user can choose to block or convert to folly::SemiFuture and
+  //          process the item only when it becomes ready (loaded into DRAM).
+  //          If blocking behavior is NOT what you want, a workaround is:
+  //            auto readHandle = cache->find("my key");
+  //            if (!readHandle.isReady()) {
+  //              auto sf = std::move(readHandle)
+  //                .toSemiFuture()
+  //                .defer([] (auto readHandle)) {
+  //                  return std::move(readHandle).toWriteHandle();
+  //                }
+  //            }
   //
-  // @param key         the key for lookup
-  // @param mode        the mode of access for the lookup.
-  //                    AccessMode::kRead or AccessMode::kWrite
-  //
-  // @return      the handle for the item or a handle to nullptr if the key does
-  //              not exist.
-  ItemHandle find(Key key, AccessMode mode);
-
   // look up an item by its key across the nvm cache as well if enabled. Users
   // should call this API only when they are going to mutate the item data.
   //
@@ -474,20 +514,31 @@ class CacheAllocator : public CacheBase {
   // @param isNvmInvalidate   whether to do nvm invalidation;
   //                          defaults to be true
   //
-  // @return      the handle for the item or a handle to nullptr if the
+  // @return      the write handle for the item or a handle to nullptr if the
   //              key does not exist.
-  ItemHandle findToWrite(Key key, bool doNvmInvalidation = true);
+  WriteHandle findToWrite(Key key, bool doNvmInvalidation = true);
 
   // look up an item by its key. This ignores the nvm cache and only does RAM
   // lookup.
   //
   // @param key         the key for lookup
-  // @param mode        the mode of access for the lookup. defaults to
-  //                    AccessMode::kRead
   //
-  // @return      the handle for the item or a handle to nullptr if the key does
-  //              not exist.
-  FOLLY_ALWAYS_INLINE ItemHandle findFast(Key key, AccessMode mode);
+  // @return      the read handle for the item or a handle to nullptr if the key
+  //              does not exist.
+  FOLLY_ALWAYS_INLINE ReadHandle findFast(Key key);
+
+  // look up an item by its key. This ignores the nvm cache and only does RAM
+  // lookup. Users should call this API only when they are going to mutate the
+  // item data.
+  //
+  // @param key         the key for lookup
+  // @param isNvmInvalidate   whether to do nvm invalidation;
+  //                          defaults to be true
+  //
+  // @return      the write handle for the item or a handle to nullptr if the
+  //              key does not exist.
+  FOLLY_ALWAYS_INLINE WriteHandle
+  findFastToWrite(Key key, bool doNvmInvalidation = true);
 
   // look up an item by its key. This ignores the nvm cache and only does RAM
   // lookup. This API does not update the stats related to cache gets and misses
@@ -496,7 +547,7 @@ class CacheAllocator : public CacheBase {
   // @param key   the key for lookup
   // @return      the handle for the item or a handle to nullptr if the key does
   //              not exist.
-  FOLLY_ALWAYS_INLINE ItemHandle peek(Key key);
+  FOLLY_ALWAYS_INLINE ReadHandle peek(Key key);
 
   // Mark an item that was fetched through peek as useful. This is useful when
   // users want to look into the cache and only mark items as useful when they
@@ -505,7 +556,7 @@ class CacheAllocator : public CacheBase {
   // @param handle        the item handle
   // @param mode          the mode of access for the lookup. defaults to
   //                      AccessMode::kRead
-  void markUseful(const ItemHandle& handle, AccessMode mode);
+  void markUseful(const ReadHandle& handle, AccessMode mode);
 
   using AccessIterator = typename AccessContainer::Iterator;
   // Iterator interface for the cache. It guarantees that all keys that were
@@ -533,7 +584,7 @@ class CacheAllocator : public CacheBase {
   // removes the allocation corresponding to the key, if present in the hash
   // table. The key will not be accessible through find() after this returns
   // success. The allocation for the key will be recycled once all active
-  // ItemHandles are released.
+  // Item handles are released.
   //
   // @param key   the key for the allocation.
   // @return      kSuccess if the key exists and was successfully removed.
@@ -608,11 +659,11 @@ class CacheAllocator : public CacheBase {
   // Get a random item from memory
   // This is useful for profiling and sampling cachelib managed memory
   //
-  // @return ItemHandle if an valid item is found
+  // @return ReadHandle if an valid item is found
   //
   //         nullptr if the randomly chosen memory does not belong
   //                 to an valid item
-  ItemHandle getSampleItem();
+  ReadHandle getSampleItem();
 
   // Convert a Read Handle to an IOBuf. The returned IOBuf gives a
   // read-only view to the user. The item's ownership is retained by
@@ -855,6 +906,11 @@ class CacheAllocator : public CacheBase {
   //          kSavedOnlyDRAM and kSavedOnlyNvmCache - partial content saved
   ShutDownStatus shutDown();
 
+  // No-op for workers that are already running. Typically user uses this in
+  // conjunction with `config.delayWorkerStart()` to avoid initialization
+  // ordering issues with user callback for cachelib's workers.
+  void startCacheWorkers();
+
   // Functions that stop existing ones (if any) and create new workers
 
   // start pool rebalancer
@@ -1029,6 +1085,11 @@ class CacheAllocator : public CacheBase {
     return accessContainer_->getStats();
   }
 
+  // Get the total number of keys inserted into the access container
+  uint64_t getAccessContainerNumKeys() const {
+    return accessContainer_->getNumKeys();
+  }
+
   // returns the reaper stats
   ReaperStats getReaperStats() const {
     auto stats = reaper_ ? reaper_->getStats() : ReaperStats{};
@@ -1044,6 +1105,9 @@ class CacheAllocator : public CacheBase {
 
   // get cache name
   const std::string getCacheName() const override final;
+
+  // whether it is object-cache
+  bool isObjectCache() const override final { return false; }
 
   // combined pool size for all memory tiers
   size_t getPoolSize(PoolId pid) const;
@@ -1111,9 +1175,9 @@ class CacheAllocator : public CacheBase {
   // Inspects the cache without changing its state.
   //
   // @param key     for the cache item
-  // @return  std::pair<ItemHandle, ItemHandle> the first represents the state
+  // @return  std::pair<ReadHandle, ReadHandle> the first represents the state
   //          in the RAM and the second is a copy of the state in NVM
-  std::pair<ItemHandle, ItemHandle> inspectCache(Key key);
+  std::pair<ReadHandle, ReadHandle> inspectCache(Key key);
 
   // blocks until the inflight operations are flushed to nvmcache. Used for
   // benchmarking when we want to load up the cache first with some data and
@@ -1222,6 +1286,14 @@ class CacheAllocator : public CacheBase {
   // allocator and executes the necessary callbacks. no-op if it is nullptr.
   FOLLY_ALWAYS_INLINE void release(Item* it, bool isNascent);
 
+  // Differtiate different memory setting for the initialization
+  enum class InitMemType { kNone, kMemNew, kMemAttach };
+  // instantiates a cache allocator for common initialization
+  //
+  // @param types         the type of the memory used
+  // @param config        the configuration for the whole cache allocator
+  CacheAllocator(InitMemType types, Config config);
+
   // This is the last step in item release. We also use this for the eviction
   // scenario where we have to do everything, but not release the allocation
   // to the allocator and instead recycle it for another new allocation. If
@@ -1260,18 +1332,18 @@ class CacheAllocator : public CacheBase {
 
   // acquires an handle on the item. returns an empty handle if it is null.
   // @param it    pointer to an item
-  // @return ItemHandle   return a handle to this item
+  // @return WriteHandle   return a handle to this item
   // @throw std::overflow_error is the maximum item refcount is execeeded by
   //        creating this item handle.
-  ItemHandle acquire(Item* it);
+  WriteHandle acquire(Item* it);
 
   // creates an item handle with wait context.
-  ItemHandle createNvmCacheFillHandle() { return ItemHandle{*this}; }
+  WriteHandle createNvmCacheFillHandle() { return WriteHandle{*this}; }
 
   // acquires the wait context for the handle. This is used by NvmCache to
   // maintain a list of waiters
   std::shared_ptr<WaitContext<ReadHandle>> getWaitContext(
-      ItemHandle& hdl) const {
+      ReadHandle& hdl) const {
     return hdl.getItemWaitContext();
   }
 
@@ -1322,22 +1394,23 @@ class CacheAllocator : public CacheBase {
   // @throw   std::invalid_argument if the poolId is invalid or the size
   //          requested is invalid or if the key is invalid(key.size() == 0 or
   //          key.size() > 255)
-  ItemHandle allocateInternal(PoolId id,
-                              Key key,
-                              uint32_t size,
-                              uint32_t creationTime,
-                              uint32_t expiryTime);
+  WriteHandle allocateInternal(PoolId id,
+                               Key key,
+                               uint32_t size,
+                               uint32_t creationTime,
+                               uint32_t expiryTime);
 
   // create a new cache allocation on specific memory tier.
   // For description see allocateInternal.
   //
   // @param tid id a memory tier
-  ItemHandle allocateInternalTier(TierId tid,
+  WriteHandle allocateInternalTier(TierId tid,
                               PoolId id,
                               Key key,
                               uint32_t size,
                               uint32_t creationTime,
                               uint32_t expiryTime);
+
 
   // Allocate a chained item
   //
@@ -1363,19 +1436,19 @@ class CacheAllocator : public CacheBase {
   // @param parentKey  key of the item's parent
   //
   // @return  handle to the parent item if the validations pass
-  //          otherwise, an empty ItemHandle is returned.
+  //          otherwise, an empty Handle is returned.
   //
-  ItemHandle validateAndGetParentHandleForChainedMoveLocked(
+  ReadHandle validateAndGetParentHandleForChainedMoveLocked(
       const ChainedItem& item, const Key& parentKey);
 
   // Given an existing item, allocate a new one for the
   // existing one to later be moved into.
   //
-  // @param oldItem    handle to item we want to allocate a new item for
+  // @param oldItem    the item we want to allocate a new item for
   //
   // @return  handle to the newly allocated item
   //
-  ItemHandle allocateNewItemForOldItem(const Item& oldItem);
+  WriteHandle allocateNewItemForOldItem(const Item& oldItem);
 
   // internal helper that grabs a refcounted handle to the item. This does
   // not record the access to reflect in the mmContainer.
@@ -1386,7 +1459,7 @@ class CacheAllocator : public CacheBase {
   //
   // @throw std::overflow_error is the maximum item refcount is execeeded by
   //        creating this item handle.
-  ItemHandle findInternal(Key key) {
+  WriteHandle findInternal(Key key) {
     // Note: this method can not be const because we need  a non-const
     // reference to create the ItemReleaser.
     return accessContainer_->find(key);
@@ -1396,12 +1469,34 @@ class CacheAllocator : public CacheBase {
   // lookup.
   //
   // @param key         the key for lookup
-  // @param mode        the mode of access for the lookup. defaults to
-  //                    AccessMode::kRead
+  // @param mode        the mode of access for the lookup.
+  //                    AccessMode::kRead or AccessMode::kWrite
   //
   // @return      the handle for the item or a handle to nullptr if the key does
   //              not exist.
-  FOLLY_ALWAYS_INLINE ItemHandle findFastImpl(Key key, AccessMode mode);
+  FOLLY_ALWAYS_INLINE WriteHandle findFastInternal(Key key, AccessMode mode);
+
+  // look up an item by its key across the nvm cache as well if enabled.
+  //
+  // @param key         the key for lookup
+  // @param mode        the mode of access for the lookup.
+  //                    AccessMode::kRead or AccessMode::kWrite
+  //
+  // @return      the handle for the item or a handle to nullptr if the key does
+  //              not exist.
+  FOLLY_ALWAYS_INLINE WriteHandle findImpl(Key key, AccessMode mode);
+
+  // look up an item by its key. This ignores the nvm cache and only does RAM
+  // lookup.
+  //
+  // @param key         the key for lookup
+  // @param mode        the mode of access for the lookup.
+  //                    AccessMode::kRead or AccessMode::kWrite
+  //
+  // @return      the handle for the item or a handle to nullptr if the key does
+  //              not exist.
+  FOLLY_ALWAYS_INLINE WriteHandle findFastImpl(Key key, AccessMode mode);
+
 
   // Moves a regular item to a different memory tier.
   //
@@ -1411,7 +1506,7 @@ class CacheAllocator : public CacheBase {
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
   template <typename P>
-  ItemHandle moveRegularItemWithSync(Item& oldItem, ItemHandle& newItemHdl, P&& predicate);
+  WriteHandle moveRegularItemWithSync(Item& oldItem, WriteHandle& newItemHdl, P&& predicate);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's moving bit has been set. The user supplied
@@ -1423,7 +1518,7 @@ class CacheAllocator : public CacheBase {
   //
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
-  bool moveRegularItem(Item& oldItem, ItemHandle& newItemHdl);
+  bool moveRegularItem(Item& oldItem, WriteHandle& newItemHdl);
 
   // template class for viewAsChainedAllocs that takes either ReadHandle or
   // WriteHandle
@@ -1450,7 +1545,7 @@ class CacheAllocator : public CacheBase {
   //
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
-  bool moveChainedItem(ChainedItem& oldItem, ItemHandle& newItemHdl);
+  bool moveChainedItem(ChainedItem& oldItem, WriteHandle& newItemHdl);
 
   // Transfers the chain ownership from parent to newParent. Parent
   // will be unmarked as having chained allocations. Parent will not be null
@@ -1467,7 +1562,7 @@ class CacheAllocator : public CacheBase {
   // @param newParent the new parent for the chain
   //
   // @throw if any of the conditions for parent or newParent are not met.
-  void transferChainLocked(ItemHandle& parent, ItemHandle& newParent);
+  void transferChainLocked(WriteHandle& parent, WriteHandle& newParent);
 
   // replace a chained item in the existing chain. This needs to be called
   // with the chained item lock held exclusive
@@ -1477,9 +1572,9 @@ class CacheAllocator : public CacheBase {
   // @param parent   the parent for the chain
   //
   // @return handle to the oldItem
-  ItemHandle replaceChainedItemLocked(Item& oldItem,
-                                      ItemHandle newItemHdl,
-                                      const Item& parent);
+  WriteHandle replaceChainedItemLocked(Item& oldItem,
+                                       WriteHandle newItemHdl,
+                                       const Item& parent);
 
   // Insert an item into MM container. The caller must hold a valid handle for
   // the item.
@@ -1500,7 +1595,7 @@ class CacheAllocator : public CacheBase {
 
   using EvictionIterator = typename MMContainer::Iterator;
 
-  ItemHandle acquire(EvictionIterator& it) { return acquire(it.get()); }
+  WriteHandle acquire(EvictionIterator& it) { return acquire(it.get()); }
 
   // Replaces an item in the MMContainer with another item, at the same
   // position.
@@ -1547,17 +1642,19 @@ class CacheAllocator : public CacheBase {
   //         and is now accessible to everyone. False if there was an error.
   //
   // @throw std::invalid_argument if the handle is already accessible or invalid
-  bool insertImpl(const ItemHandle& handle, AllocatorApiEvent event);
+  bool insertImpl(const WriteHandle& handle, AllocatorApiEvent event);
 
   // Removes an item from the access container and MM container.
   //
+  // @param hk               the hashed key for the item
   // @param it               Item to remove
   // @param tombstone        A tombstone for nvm::remove job created by
   //                         nvm::createDeleteTombStone, can be empty if nvm is
   //                         not enable, or removeFromNvm is false
   // @param removeFromNvm    if true clear key from nvm
   // @param recordApiEvent   should we record API event for this operation.
-  RemoveRes removeImpl(Item& it,
+  RemoveRes removeImpl(HashedKey hk,
+                       Item& it,
                        DeleteTombStoneGuard tombstone,
                        bool removeFromNvm = true,
                        bool recordApiEvent = true);
@@ -1699,7 +1796,7 @@ class CacheAllocator : public CacheBase {
   //
   // @return    true  if the item has been moved
   //            false if we have exhausted moving attempts
-  bool tryMovingForSlabRelease(Item& item, ItemHandle& newItemHdl);
+  bool tryMovingForSlabRelease(Item& item, WriteHandle& newItemHdl);
 
   // Evict an item from access and mm containers and
   // ensure it is safe for freeing.
@@ -1715,19 +1812,19 @@ class CacheAllocator : public CacheBase {
   //
   // @return last handle for corresponding to item on success. empty handle on
   // failure. caller can retry if needed.
-  ItemHandle evictNormalItem(Item& item, bool skipIfTokenInvalid = false);
+  WriteHandle evictNormalItem(Item& item, bool skipIfTokenInvalid = false);
 
   // Helper function to evict a child item for slab release
   // As a side effect, the parent item is also evicted
   //
   // @return  last handle to the parent item of the child on success. empty
   // handle on failure. caller can retry.
-  ItemHandle evictChainedItemForSlabRelease(ChainedItem& item);
+  WriteHandle evictChainedItemForSlabRelease(ChainedItem& item);
 
   // Helper function to remove a item if expired.
   //
   // @return true if it item expire and removed successfully.
-  bool removeIfExpired(const ItemHandle& handle);
+  bool removeIfExpired(const ReadHandle& handle);
 
   // exposed for the Reaper to iterate through the memory and find items to
   // reap under the super charged mode. This is faster if there are lots of
@@ -1829,6 +1926,14 @@ class CacheAllocator : public CacheBase {
   void initNvmCache(bool dramCacheAttached);
   void initWorkers();
 
+  // @param type        the type of initialization
+  // @return nullptr if the type is invalid
+  // @return pointer to access container
+  // @throw std::runtime_error if type is invalid
+  std::unique_ptr<AccessContainer> initAccessContainer(InitMemType type,
+                                                       const std::string name,
+                                                       AccessConfig config);
+
   std::optional<bool> saveNvmCache();
   void saveRamCache();
 
@@ -1860,7 +1965,7 @@ class CacheAllocator : public CacheBase {
   // @return true   if successfully recorded in MMContainer
   bool recordAccessInMMContainer(Item& item, AccessMode mode);
 
-  ItemHandle findChainedItem(const Item& parent) const;
+  WriteHandle findChainedItem(const Item& parent) const;
 
   // Get the thread local version of the Stats
   detail::Stats& stats() const noexcept { return stats_; }
@@ -1906,7 +2011,7 @@ class CacheAllocator : public CacheBase {
     // record the item handle. Upon destruction we will wake up the waiters
     // and pass a clone of the handle to the callBack. By default we pass
     // a null handle
-    void setItemHandle(ItemHandle _it) { it = std::move(_it); }
+    void setItemHandle(WriteHandle _it) { it = std::move(_it); }
 
     // enqueue a waiter into the waiter list
     // @param  waiter       WaitContext
@@ -1923,7 +2028,7 @@ class CacheAllocator : public CacheBase {
         // If refcount overflowed earlier, then we will return miss to
         // all subsequent waitors.
         if (refcountOverflowed) {
-          w->set(ItemHandle{});
+          w->set(WriteHandle{});
           continue;
         }
 
@@ -1938,7 +2043,7 @@ class CacheAllocator : public CacheBase {
       }
     }
 
-    ItemHandle it; // will be set when Context is being filled
+    WriteHandle it; // will be set when Context is being filled
     std::vector<std::shared_ptr<WaitContext<ReadHandle>>> waiters; // list of
                                                                    // waiters
   };
@@ -2079,8 +2184,11 @@ class CacheAllocator : public CacheBase {
   // a map of move locks for each shard
   std::vector<MoveLock> moveLock_;
 
-  // time when the ram cache was first created
-  const time_t cacheCreationTime_{0};
+  // time when CacheAllocator structure is created. Whenever a process restarts
+  // and even if cache content is persisted, this will be reset. It's similar
+  // to process uptime. (But alternatively if user explicitly shuts down and
+  // re-attach cache, this will be reset as well)
+  const uint32_t cacheCreationTime_{0};
 
   // thread local accumulation of handle counts
   mutable util::FastStats<int64_t> handleCount_{};
@@ -2108,9 +2216,14 @@ class CacheAllocator : public CacheBase {
   friend ReaperAPIWrapper<CacheT>;
   friend class CacheAPIWrapperForNvm<CacheT>;
   friend class FbInternalRuntimeUpdateWrapper<CacheT>;
+  friend class objcache2::ObjectCache<CacheT>;
+  friend class objcache2::ObjectCacheBase<CacheT>;
+  template <typename K, typename V, typename C>
+  friend class ReadOnlyMap;
 
   // tests
   friend class facebook::cachelib::tests::NvmCacheTest;
+  FRIEND_TEST(CachelibAdminTest, WorkingSetAnalysisLoggingTest);
   template <typename AllocatorT>
   friend class facebook::cachelib::tests::BaseAllocatorTest;
   template <typename AllocatorT>
@@ -2122,11 +2235,26 @@ class CacheAllocator : public CacheBase {
   friend class facebook::cachelib::tests::NvmAdmissionPolicyTest;
   friend class facebook::cachelib::tests::CacheAllocatorTestWrapper;
   friend class facebook::cachelib::tests::PersistenceCache;
+  template <typename AllocatorT>
+  friend class facebook::cachelib::tests::FixedSizeArrayTest;
+  template <typename AllocatorT>
+  friend class facebook::cachelib::tests::MapTest;
 
   // benchmarks
   template <typename Allocator>
   friend class facebook::cachelib::cachebench::Cache;
   friend class facebook::cachelib::cachebench::tests::CacheTest;
+  friend void lookupCachelibBufferManagerOnly();
+  friend void lookupCachelibMap();
+  friend void benchCachelibMap();
+  friend void benchCachelibRangeMap();
+
+  // objectCache
+  template <typename CacheDescriptor, typename AllocatorRes>
+  friend class facebook::cachelib::objcache::ObjectCache;
+  friend class GET_DECORATED_CLASS_NAME(objcache::test,
+                                        ObjectCache,
+                                        ObjectHandleInvalid);
 };
 } // namespace cachelib
 } // namespace facebook

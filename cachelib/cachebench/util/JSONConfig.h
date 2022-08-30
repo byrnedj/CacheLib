@@ -94,6 +94,8 @@ struct JSONConfig {
         setValImpl(tmp, v);
         field.push_back(tmp);
       }
+    } else {
+      folly::throw_exception<folly::TypeError>("array", val.type());
     }
   }
 
@@ -109,6 +111,8 @@ struct JSONConfig {
         setValImpl(value, pair.second);
         field[key] = value;
       }
+    } else {
+      folly::throw_exception<folly::TypeError>("object", val.type());
     }
   }
 
@@ -125,7 +129,13 @@ struct JSONConfig {
           setMapValImpl(field, pair.first, std::move(tmp));
         }
       }
+    } else {
+      folly::throw_exception<folly::TypeError>("object", val.type());
     }
+  }
+
+  static void setValImpl(folly::dynamic& field, const folly::dynamic& val) {
+    field = val;
   }
 };
 

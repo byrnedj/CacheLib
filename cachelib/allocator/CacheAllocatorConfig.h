@@ -18,6 +18,7 @@
 
 #include <folly/Optional.h>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <set>
@@ -276,7 +277,11 @@ class CacheAllocatorConfig {
       ChainedItemMovingSync sync = {},
       uint32_t movingAttemptsLimit = 10);
 
-  // This customizes how many items we try to evict before giving up.
+  // Specify a threshold for detecting slab release stuck
+  CacheAllocatorConfig& setSlabReleaseStuckThreashold(
+      std::chrono::milliseconds threshold);
+
+  // This customizes how many items we try to evict before giving up.s
   // We may fail to evict if someone else (another thread) is using an item.
   // Setting this to a high limit leads to a higher chance of successful
   // evictions but it can lead to higher allocation latency as well.
@@ -309,8 +314,19 @@ class CacheAllocatorConfig {
   // smaller than this will always be rejected by NvmAdmissionPolicy.
   CacheAllocatorConfig& setNvmAdmissionMinTTL(uint64_t ttl);
 
-  // skip promote children items in chained when parent fail to promote
+  // Skip promote children items in chained when parent fail to promote
   CacheAllocatorConfig& setSkipPromoteChildrenWhenParentFailed();
+
+  // (deprecated) Disable cache eviction.
+  // Please do not create new callers. CacheLib will stop supporting disabled
+  // eviction.
+  [[deprecated]] CacheAllocatorConfig& deprecated_disableEviction();
+
+  bool isEvictionDisabled() const noexcept { return disableEviction; }
+
+  // We will delay worker start until user explicitly calls
+  // CacheAllocator::startCacheWorkers()
+  CacheAllocatorConfig& setDelayCacheWorkersStart();
 
   // skip promote children items in chained when parent fail to promote
   bool isSkipPromoteChildrenWhenParentFailed() const noexcept {
@@ -445,6 +461,10 @@ class CacheAllocatorConfig {
   std::shared_ptr<RebalanceStrategy> defaultPoolRebalanceStrategy{
       new RebalanceStrategy{}};
 
+  // The slab release process is considered as being stuck if it does not
+  // make any progress for the below threshold
+  std::chrono::milliseconds slabReleaseStuckThreshold{std::chrono::seconds(60)};
+
   // time interval to sleep between iterations of pool size optimization,
   // for regular pools and compact caches
   std::chrono::seconds regularPoolOptimizeInterval{0};
@@ -483,11 +503,6 @@ class CacheAllocatorConfig {
   // TODO:
   // ABOVE are the config for various cache workers
   //
-
-  // if turned on, cache allocator will not evict any item when the
-  // system is out of memory. The user must free previously allocated
-  // items to make more room.
-  bool disableEviction = false;
 
   // the number of tries to search for an item to evict
   // 0 means it's infinite
@@ -582,8 +597,12 @@ class CacheAllocatorConfig {
   // cache.
   uint64_t nvmAdmissionMinTTL{0};
 
-  // skip promote children items in chained when parent fail to promote
+  // Skip promote children items in chained when parent fail to promote
   bool skipPromoteChildrenWhenParentFailed{false};
+
+  // If true, we will delay worker start until user explicitly calls
+  // CacheAllocator::startCacheWorkers()
+  bool delayCacheWorkersStart{false};
 
   friend CacheT;
 
@@ -600,6 +619,11 @@ class CacheAllocatorConfig {
   std::string stringifyAddr(const void* addr) const;
   std::string stringifyRebalanceStrategy(
       const std::shared_ptr<RebalanceStrategy>& strategy) const;
+
+  // if turned on, cache allocator will not evict any item when the
+  // system is out of memory. The user must free previously allocated
+  // items to make more room.
+  bool disableEviction = false;
 };
 
 template <typename T>
@@ -959,6 +983,13 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableMovingOnSlabRelease(
 }
 
 template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setSlabReleaseStuckThreashold(
+    std::chrono::milliseconds threshold) {
+  slabReleaseStuckThreshold = threshold;
+  return *this;
+}
+
+template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setEvictionSearchLimit(
     uint32_t limit) {
   evictionSearchTries = limit;
@@ -999,7 +1030,6 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setNvmAdmissionMinTTL(
   return *this;
 }
 
-// skip promote children items in chained when parent fail to promote
 template <typename T>
 CacheAllocatorConfig<T>&
 CacheAllocatorConfig<T>::setSkipPromoteChildrenWhenParentFailed() {
@@ -1100,6 +1130,8 @@ std::map<std::string, std::string> CacheAllocatorConfig<T>::serialize() const {
   configMap["poolResizeSlabsPerIter"] = std::to_string(poolResizeSlabsPerIter);
 
   configMap["poolRebalanceInterval"] = util::toString(poolRebalanceInterval);
+  configMap["slabReleaseStuckThreshold"] =
+      util::toString(slabReleaseStuckThreshold);
   configMap["trackTailHits"] = std::to_string(trackTailHits);
   // Stringify enum
   switch (memMonitorConfig.mode) {
@@ -1155,6 +1187,8 @@ std::map<std::string, std::string> CacheAllocatorConfig<T>::serialize() const {
       stringifyRebalanceStrategy(defaultPoolRebalanceStrategy);
   configMap["eventTracker"] = eventTracker ? "set" : "empty";
   configMap["nvmAdmissionMinTTL"] = std::to_string(nvmAdmissionMinTTL);
+  configMap["delayCacheWorkersStart"] =
+      delayCacheWorkersStart ? "true" : "false";
   mergeWithPrefix(configMap, throttleConfig.serialize(), "throttleConfig");
   mergeWithPrefix(configMap,
                   chainedItemAccessConfig.serialize(),

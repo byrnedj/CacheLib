@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-use anyhow::{Error, Result};
+use std::time::Duration;
+
+use anyhow::Error;
+use anyhow::Result;
 use bytes::BufMut;
 
 use crate::lrucache::VolatileLruCachePool;
@@ -50,11 +53,16 @@ where
 ///
 /// Returns `false` if the entry could not be inserted (e.g. another entry with the same
 /// key was inserted first)
-pub fn set_cached<T>(cache_pool: &VolatileLruCachePool, cache_key: &str, entry: &T) -> Result<bool>
+pub fn set_cached<T>(
+    cache_pool: &VolatileLruCachePool,
+    cache_key: &str,
+    entry: &T,
+    ttl: Option<Duration>,
+) -> Result<bool>
 where
     T: abomonation::Abomonation + Clone + Send + 'static,
 {
-    let handle = cache_pool.allocate(cache_key, abomonation::measure(entry))?;
+    let handle = cache_pool.allocate_with_ttl(cache_key, abomonation::measure(entry), ttl)?;
     let mut handle = handle.ok_or_else(|| Error::msg("can not allocate cachelib handle"))?;
 
     handle
@@ -67,9 +75,10 @@ where
 
 #[cfg(test)]
 mod test {
+    use fbinit::FacebookInit;
+
     use super::*;
     use crate::lrucache::*;
-    use fbinit::FacebookInit;
 
     fn create_cache(fb: FacebookInit) {
         let config = LruCacheConfig::new(16 * 1024 * 1024);
@@ -85,7 +94,7 @@ mod test {
 
         let pool = get_or_create_volatile_pool("get_twice", 4 * 1024 * 1024).unwrap();
 
-        assert!(set_cached(&pool, &"key".to_string(), &"hello_world".to_string()).unwrap());
+        assert!(set_cached(&pool, &"key".to_string(), &"hello_world".to_string(), None).unwrap());
         assert_eq!(
             get_cached::<String>(&pool, &"key".to_string())
                 .unwrap()
@@ -93,7 +102,15 @@ mod test {
             "hello_world"
         );
 
-        assert!(!set_cached(&pool, &"key".to_string(), &"goodbye world".to_string()).unwrap());
+        assert!(
+            !set_cached(
+                &pool,
+                &"key".to_string(),
+                &"goodbye world".to_string(),
+                Some(Duration::from_secs(100))
+            )
+            .unwrap()
+        );
         assert_eq!(
             get_cached::<String>(&pool, &"key".to_string())
                 .unwrap()
@@ -101,7 +118,15 @@ mod test {
             "hello_world"
         );
 
-        assert!(set_cached(&pool, &"key2".to_string(), &"hello_world2".to_string()).unwrap());
+        assert!(
+            set_cached(
+                &pool,
+                &"key2".to_string(),
+                &"hello_world2".to_string(),
+                None
+            )
+            .unwrap()
+        );
         assert_eq!(
             get_cached::<String>(&pool, &"key2".to_string())
                 .unwrap()

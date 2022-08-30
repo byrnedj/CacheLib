@@ -60,14 +60,15 @@ void HighRefcountStressor::start() {
 
 void HighRefcountStressor::testLoop() {
   try {
-    auto it = cache_->find("high_refcount", AccessMode::kRead);
+    auto it = cache_->find("high_refcount");
     if (!it) {
       // Item was likely evicted during slab release. Try to allocate a new
       // one. It's fine to fail as the small alloc class may not have any
       // slab left.
-      it = cache_->allocate(PoolId{0} /* pid */, "high_refcount", 1 /* size */);
-      if (it) {
-        cache_->insertOrReplace(it);
+      auto newIt =
+          cache_->allocate(PoolId{0} /* pid */, "high_refcount", 1 /* size */);
+      if (newIt) {
+        cache_->insertOrReplace(newIt);
       }
     }
     uint32_t delay = 1 + folly::Random::rand32(10);
@@ -146,10 +147,11 @@ void CachelibMapStressor::testLoop() {
   try {
     if (it) {
       folly::SharedMutex::ReadHolder r{getLock(key)};
-      auto map = TestMap::fromItemHandle(*cache_, std::move(it));
+      auto map =
+          TestMap::fromWriteHandle(*cache_, std::move(it).toWriteHandle());
       if (map.size() > kMapSizeUpperbound &&
           folly::Random::oneIn(kMapDeletionRate)) {
-        cache_->remove(map.viewItemHandle());
+        cache_->remove(map.viewWriteHandle());
       } else if (map.size() > kMapSizeUpperbound) {
         r.unlock();
         folly::SharedMutex::WriteHolder w{getLock(key)};
@@ -165,7 +167,7 @@ void CachelibMapStressor::testLoop() {
     folly::SharedMutex::WriteHolder w{getLock(key)};
     auto map = TestMap::create(*cache_, 0, key);
     populate(map);
-    cache_->insertOrReplace(map.viewItemHandle());
+    cache_->insertOrReplace(map.viewWriteHandle());
   } catch (const std::bad_alloc& e) {
     XLOG_EVERY_MS(INFO, 600'000) << folly::sformat(
         "Detected allocation failure in the last 10 minutes: {}", e.what());
@@ -284,10 +286,11 @@ void CachelibRangeMapStressor::testLoop() {
   try {
     if (it) {
       folly::SharedMutex::ReadHolder r{getLock(key)};
-      auto map = TestMap::fromItemHandle(*cache_, std::move(it));
+      auto map =
+          TestMap::fromWriteHandle(*cache_, std::move(it).toWriteHandle());
       if (map.size() > kMapSizeUpperbound &&
           folly::Random::oneIn(kMapDeletionRate)) {
-        cache_->remove(map.viewItemHandle());
+        cache_->remove(map.viewWriteHandle());
       } else if (map.size() > kMapSizeUpperbound) {
         r.unlock();
         folly::SharedMutex::WriteHolder w{getLock(key)};
@@ -303,7 +306,7 @@ void CachelibRangeMapStressor::testLoop() {
     folly::SharedMutex::WriteHolder w{getLock(key)};
     auto map = TestMap::create(*cache_, 0, key);
     populate(map);
-    cache_->insertOrReplace(map.viewItemHandle());
+    cache_->insertOrReplace(map.viewWriteHandle());
   } catch (const std::bad_alloc& e) {
     XLOG_EVERY_MS(INFO, 600'000) << folly::sformat(
         "Detected allocation failure in the last 10 minutes: {}", e.what());
