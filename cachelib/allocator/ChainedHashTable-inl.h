@@ -21,6 +21,8 @@
 #pragma GCC diagnostic ignored "-Wconversion"
 #include <folly/Format.h>
 #include <folly/Range.h>
+#include <sys/mman.h>
+
 #pragma GCC diagnostic pop
 
 namespace facebook {
@@ -41,7 +43,10 @@ ChainedHashTable::Impl<T, HookPtr>::Impl(size_t numBuckets,
     throw std::invalid_argument("Number of buckets must be a power of two");
   }
   hashTable_ = std::make_unique<CompressedPtr[]>(numBuckets_);
+
   CompressedPtr* memStart = hashTable_.get();
+  //lock hashtable to memory
+  mlock(memStart,numBuckets_);
   std::fill(memStart, memStart + numBuckets_, CompressedPtr{});
 }
 
@@ -63,6 +68,10 @@ ChainedHashTable::Impl<T, HookPtr>::Impl(size_t numBuckets,
   if (numBuckets & (numBuckets - 1)) {
     throw std::invalid_argument("Number of buckets must be a power of two");
   }
+
+  //lock the hashtable to the main memory
+  mlock(memStart,numBuckets_);
+  
   if (resetMem) {
     CompressedPtr* memStartBucket = static_cast<CompressedPtr*>(memStart);
     std::fill(memStartBucket, memStartBucket + numBuckets_, CompressedPtr{});
