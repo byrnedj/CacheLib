@@ -216,9 +216,9 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                        config_.poolAdviseStrategy);
   }
 
-  if (config_.itemsReaperEnabled() && !reaper_) {
-    startNewReaper(config_.reaperInterval, config_.reaperConfig);
-  }
+  //if (config_.itemsReaperEnabled() && !reaper_) {
+  //  startNewReaper(config_.reaperInterval, config_.reaperConfig);
+  //}
 
   if (config_.poolOptimizerEnabled() && !poolOptimizer_) {
     startNewPoolOptimizer(config_.regularPoolOptimizeInterval,
