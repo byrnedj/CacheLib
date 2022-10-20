@@ -73,6 +73,10 @@ class PromotionStrategy : public BackgroundMoverStrategy {
 
     return batches;
   }
+  BackgroundStrategyStats getStats() { 
+  BackgroundStrategyStats s;
+  return s;
+  }
 
  private:
   double promotionAcWatermark{4.0};

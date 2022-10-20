@@ -1130,7 +1130,14 @@ class CacheAllocator : public CacheBase {
     return stats;
 
   }
-  
+
+  /* BackgroundPromotionStats getBackgroundPromoterStats() const {
+    auto stats = BackgroundPromotionStats{};
+    for (auto &bg : backgroundPromoter_)
+      stats += bg->getStats();
+    return stats;
+  }
+  */
   
   std::map<TierId, std::map<PoolId, std::map<ClassId, uint64_t>>>
   getBackgroundMoverClassStats(MoverDir direction) const {

@@ -139,6 +139,9 @@ struct Stats {
   std::map<TierId, std::map<PoolId, std::map<ClassId, uint64_t>>> backgroundEvictionClasses;
   std::map<TierId, std::map<PoolId, std::map<ClassId, uint64_t>>> backgroundPromotionClasses;
 
+  std::map<uint32_t, std::tuple<double, double, double>> acHighWatermarks;
+  std::map<uint32_t, std::pair<double, double>> acLatencies;
+
   // errors from the nvm engine.
   std::unordered_map<std::string, double> nvmErrors;
 
@@ -274,6 +277,8 @@ struct Stats {
           tid, pid, cid, promoted) << std::endl;
       });
     }
+    
+
 
     if (numNvmGets > 0 || numNvmDeletes > 0 || numNvmPuts > 0) {
       const double ramHitRatio = invertPctFn(numCacheGetMiss, numCacheGets);
@@ -402,6 +407,23 @@ struct Stats {
         out << it.first << "  :  " << it.second << std::endl;
       }
     }
+
+    /*if (!acHighWatermarks.empty() && backgndEvicStats.nEvictedItems > 0 ) {
+      out << "== Class High Threshold ==" << std::endl;
+      for (const auto& it : acHighWatermarks) {
+        //const& t = it.second
+        out << it.first << "  :  " << std::get<0>(it.second) <<"  :  " << std::get<1>(it.second) << "  :  " <<std::get<2>(it.second) << std::endl;
+      }
+    }
+    */
+     if (!acLatencies.empty() && backgndEvicStats.nEvictedItems > 0 ) {
+      out << "== Class Latencies ==" << std::endl;
+      for (const auto& it : acLatencies) {
+        out << it.first << "  :  " << it.second.first << " : " << it.second.second << std::endl;
+      }
+    }
+
+
 
     if (numRamDestructorCalls > 0 || numNvmDestructorCalls > 0) {
       out << folly::sformat("Destructor executed from RAM {}, from NVM {}",

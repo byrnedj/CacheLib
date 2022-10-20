@@ -98,6 +98,7 @@ BackgroundMoverStats BackgroundMover<CacheT>::getStats() const noexcept {
   stats.runCount = numTraversals.get();
   stats.totalBytesMoved = totalBytesMoved.get();
   stats.totalClasses = totalClasses.get();
+  stats.strategyStats = strategy_->getStats();
 
   return stats;
 }

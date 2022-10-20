@@ -27,6 +27,7 @@ class BackgroundMoverStrategy {
   virtual std::vector<size_t> calculateBatchSizes(
       const CacheBase& cache,
       std::vector<std::tuple<TierId, PoolId, ClassId>> acVec) = 0;
+  virtual BackgroundStrategyStats getStats() = 0;
 };
 
 } // namespace cachelib

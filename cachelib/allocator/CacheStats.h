@@ -303,6 +303,28 @@ struct ReaperStats {
   // indicates the average of all traversals
   uint64_t avgTraversalTimeMs{0};
 };
+struct BackgroundStrategyStats {
+  
+    std::map<uint32_t, std::tuple<double, double, double> > highEvictionAcWatermarks;
+    std::map<uint32_t,std::pair<double, double> > acLatencies;
+    
+  
+    BackgroundStrategyStats& operator+=(const BackgroundStrategyStats& rhs){
+        for (const auto entry : rhs.highEvictionAcWatermarks) {
+            auto cid = entry.first;
+            auto count = entry.second;
+            highEvictionAcWatermarks[cid] = count;
+        }
+      
+        for (const auto entry : rhs.acLatencies) {
+            auto cid = entry.first;
+            auto count = entry.second;
+            acLatencies[cid] = count;
+        }
+        return *this;
+    }
+
+};
 
 // Mover Stats
 struct BackgroundMoverStats {
@@ -315,15 +337,31 @@ struct BackgroundMoverStats {
   // eviction size
   uint64_t totalBytesMoved{0};
 
+  BackgroundStrategyStats strategyStats;
+  BackgroundStrategyStats s;
   BackgroundMoverStats& operator+=(const BackgroundMoverStats& rhs) {
     numMovedItems += rhs.numMovedItems;
     runCount += rhs.runCount;
     totalClasses += rhs.totalClasses;
     totalBytesMoved += rhs.totalBytesMoved;
+    strategyStats += rhs.strategyStats;
     return *this;
   }
 };
 
+struct BackgroundPromotionStats {
+  // the number of items this worker evicted by looking at pools/classes stats
+  uint64_t numPromotedItems{0};
+
+  // number of times we went executed the thread //TODO: is this def correct?
+  uint64_t runCount{0};
+
+  BackgroundPromotionStats& operator+=(const BackgroundPromotionStats& rhs) {
+    numPromotedItems += rhs.numPromotedItems;
+    runCount += rhs.runCount;
+    return *this;
+  }
+};
 
 // CacheMetadata type to export
 struct CacheMetadata {

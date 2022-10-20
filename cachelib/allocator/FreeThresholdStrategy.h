@@ -34,12 +34,21 @@ class FreeThresholdStrategy : public BackgroundMoverStrategy {
   std::vector<size_t> calculateBatchSizes(
       const CacheBase& cache,
       std::vector<std::tuple<TierId, PoolId, ClassId>> acVecs);
+  BackgroundStrategyStats getStats();
 
  private:
   double lowEvictionAcWatermark{2.0};
   double highEvictionAcWatermark{5.0};
   uint64_t maxEvictionBatch{40};
   uint64_t minEvictionBatch{5};
+  std::vector<std::vector<std::vector<std::vector<double>>>> highEvictionAcWatermarks;
+
+  std::vector<std::vector<std::vector<std::vector<double>>>> acLatencies; 
+
+private:
+  //void calculateBenefitMig(uint64_t p99, unsigned int tid, PoolId pid, ClassId cid); //function to calculate the benefit of eviction for a certain ac class
+  void calculateLatency(uint64_t p99, unsigned int tid, PoolId pid, ClassId cid);
+
 };
 
 } // namespace cachelib

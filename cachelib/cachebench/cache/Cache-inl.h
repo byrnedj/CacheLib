@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+#include <folly/DynamicConverter.h>
+#include <folly/Format.h>
+#include <folly/json.h>
+#include <folly/logging/xlog.h>
+#include <gflags/gflags.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+#include <iostream>
+
+#include "cachelib/allocator/Util.h"
+#include "cachelib/allocator/nvmcache/NavyConfig.h"
+#include "cachelib/cachebench/cache/ItemRecords.h"
+#include "cachelib/cachebench/util/NandWrites.h"
+
 namespace facebook {
 namespace cachelib {
 namespace cachebench {
@@ -641,6 +656,10 @@ Stats Cache<Allocator>::getStats() const {
             cacheStats.promotionStats.numMovedItems;
   ret.backgndPromoStats.nTraversals =
             cacheStats.promotionStats.runCount;
+  ret.backgndEvicStats.nClasses =
+            cacheStats.promotionStats.totalClasses;
+  ret.backgndEvicStats.evictionSize =
+            cacheStats.promotionStats.totalBytesMoved;
 
   ret.numEvictions = aggregate.numEvictions();
   ret.numItems = aggregate.numItems();
@@ -694,6 +713,8 @@ Stats Cache<Allocator>::getStats() const {
     ret.nvmCounters = cache_->getNvmCacheStatsMap();
   }
 
+  ret.acHighWatermarks = cacheStats.evictionStats.strategyStats.highEvictionAcWatermarks;
+  ret.acLatencies = cacheStats.evictionStats.strategyStats.acLatencies;
   ret.backgroundEvictionClasses = cache_->getBackgroundMoverClassStats(MoverDir::Evict);
   ret.backgroundPromotionClasses = cache_->getBackgroundMoverClassStats(MoverDir::Promote);
 

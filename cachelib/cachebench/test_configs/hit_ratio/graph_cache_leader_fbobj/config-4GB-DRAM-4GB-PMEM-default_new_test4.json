@@ -1,0 +1,59 @@
+{
+  "cache_config": 
+    {
+      "cacheSizeMB": 8192,
+      "usePosixShm": true,
+      "poolRebalanceIntervalSec": 0,
+      "persistedCacheDir": "/tmp/mem-tier",
+      "htBucketPower" : 28,
+      "htLockPower" : 28,
+      "moveOnSlabRelease": false,
+      "memoryTiers" : [
+        {
+          "ratio": 1
+        },
+        {
+          "ratio": 1,
+          "file":"/mnt/tmpfs_pmem/tier"
+        }
+      ],
+      "backgroundEvictorIntervalMilSec" : 10,
+      "evictorThreads" : 4,
+      "evictionHotnessThreshold" : 200,
+      "evictionSlabWatermark" : 100,
+      "lowEvictionAcWatermark" : 98.0,
+      "highEvictionAcWatermark" : 95.0,
+      "backgroundPromoterIntervalMilSec" : 10,
+      "promoterThreads" : 4,
+      "evictionHotnessThreshold" : 200,
+      "numDuplicateElements" : 0,
+      "promotionAcWatermark" : 97
+    },
+  "test_config":
+    {
+      "validateValue": true,
+      "opDelayNs": 1000000,
+      "opDelayBatch": 3,
+      "generator": "workload",
+      "addChainedRatio": 0.0,
+      "delRatio": 0.0,
+      "enableLookaside": true,
+      "numKeys": 71605574,
+      "numOps": 1250000,
+      "numThreads": 24,
+      "getRatio": 0.9568797693103636,
+      "loneGetRatio": 0.043120230689636455,
+      "keySizeRange": [
+        1,
+        8,
+        64
+      ],
+      "keySizeRangeProbability": [
+        0.3,
+        0.7
+      ],
+      "popDistFile": "pop.json",
+      "setRatio": 0.0,
+      "valSizeDistFile": "sizes.json"
+    }
+}

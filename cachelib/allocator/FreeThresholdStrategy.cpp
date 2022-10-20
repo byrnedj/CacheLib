@@ -16,6 +16,11 @@
 
 #include "cachelib/allocator/FreeThresholdStrategy.h"
 
+#include "cachelib/allocator/memory/MemoryPoolManager.h"
+#include "cachelib/allocator/memory/MemoryAllocator.h"
+#include "cachelib/allocator/Cache.h"
+#include "cachelib/allocator/CacheStats.h"
+
 #include <folly/logging/xlog.h>
 
 namespace facebook {
@@ -28,7 +33,15 @@ FreeThresholdStrategy::FreeThresholdStrategy(double lowEvictionAcWatermark,
     : lowEvictionAcWatermark(lowEvictionAcWatermark),
       highEvictionAcWatermark(highEvictionAcWatermark),
       maxEvictionBatch(maxEvictionBatch),
-      minEvictionBatch(minEvictionBatch) {}
+      minEvictionBatch(minEvictionBatch),
+          highEvictionAcWatermarks(CacheBase::kMaxTiers, 
+                                std::vector<std::vector<std::vector<double>>>(MemoryPoolManager::kMaxPools,
+                                std::vector<std::vector<double>>(MemoryAllocator::kMaxClasses,
+                                std::vector<double>(3, highEvictionAcWatermark)))),
+      acLatencies(CacheBase::kMaxTiers, 
+                  std::vector<std::vector<std::vector<double>>>(MemoryPoolManager::kMaxPools,
+                  std::vector<std::vector<double>>(MemoryAllocator::kMaxClasses,
+                  std::vector<double>(2, 0.0)))) {}
 
 std::vector<size_t> FreeThresholdStrategy::calculateBatchSizes(
     const CacheBase& cache,
@@ -43,6 +56,9 @@ std::vector<size_t> FreeThresholdStrategy::calculateBatchSizes(
       auto toFreeItems = static_cast<size_t>(
           toFreeMemPercent * stats.memorySize / stats.allocSize);
       batches.push_back(toFreeItems);
+      auto acAllocLatencyNs = cache.getAllocationClassStats(tid, pid, cid).allocLatencyNs.estimate(); //moving avg latency estimation for ac class
+      calculateLatency(acAllocLatencyNs, tid, pid, cid);
+
     }
   }
 
@@ -69,6 +85,42 @@ std::vector<size_t> FreeThresholdStrategy::calculateBatchSizes(
 
   return batches;
 }
+
+void FreeThresholdStrategy::calculateLatency(uint64_t acLatency, unsigned int tid, PoolId pid, ClassId cid){   
+ 
+    auto best_latency= acLatencies[tid][pid][cid][0];
+    acLatencies[tid][pid][cid][1]=best_latency;
+    acLatencies[tid][pid][cid][0]=acLatency;
+
+
+
+}
+
+BackgroundStrategyStats FreeThresholdStrategy::getStats() { 
+    BackgroundStrategyStats s;
+
+   
+
+    auto numClasses = MemoryAllocator::kMaxClasses;
+    for (int i = 0; i < 1; i++) {
+      for (int j = 0; j < 1; j++) {
+        for (int k = 0; k < numClasses; k++) {
+          s.highEvictionAcWatermarks[k] =
+            std::make_tuple (
+                      highEvictionAcWatermarks[i][j][k][0],
+                      highEvictionAcWatermarks[i][j][k][1],
+                      highEvictionAcWatermarks[i][j][k][2]);
+          s.acLatencies[k]=
+          std::make_pair (
+                      acLatencies[i][j][k][0],
+                      acLatencies[i][j][k][1] );
+
+        }
+      }
+    }
+    return s;
+}
+
 
 } // namespace cachelib
 } // namespace facebook
