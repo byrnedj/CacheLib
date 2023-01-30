@@ -634,6 +634,7 @@ Stats Cache<Allocator>::getStats() const {
   const auto rebalanceStats = cache_->getSlabReleaseStats();
   const auto navyStats = cache_->getNvmCacheStatsMap().toMap();
 
+  ret.slabsApproxFreePercentages = cache_->getCacheMemoryStats().slabsApproxFreePercentages;
   ret.allocationClassStats = allocationClassStats;
   ret.numEvictions = aggregate.numEvictions();
   ret.numItems = aggregate.numItems();

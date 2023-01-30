@@ -554,6 +554,9 @@ struct CacheMemoryStats {
 
   // returne usable portion of the cache size
   size_t usableRamCacheSize() const { return ramCacheSize; }
+
+  // percentage of free slabs
+  std::vector<double> slabsApproxFreePercentages{0.0};
 };
 
 // Stats for compact cache

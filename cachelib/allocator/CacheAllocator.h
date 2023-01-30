@@ -1320,6 +1320,8 @@ class CacheAllocator : public CacheBase {
 #pragma GCC diagnostic pop
 
  private:
+  double slabsApproxFreePercentage(TierId tid) const;
+
   // wrapper around Item's refcount and active handle tracking
   FOLLY_ALWAYS_INLINE RefcountWithFlags::incResult incRef(Item& it, bool failIfMoving);
   FOLLY_ALWAYS_INLINE RefcountWithFlags::Value decRef(Item& it);

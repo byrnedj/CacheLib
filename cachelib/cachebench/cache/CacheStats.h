@@ -102,6 +102,7 @@ struct Stats {
   int64_t unDestructedItemCount{0};
 
   std::map<TierId, std::map<PoolId, std::map<ClassId, ACStats>>> allocationClassStats;
+  std::vector<double> slabsApproxFreePercentages;
 
   // populate the counters related to nvm usage. Cache implementation can decide
   // what to populate since not all of those are interesting when running
@@ -167,27 +168,17 @@ struct Stats {
 
       foreachAC([&](auto tid, auto pid, auto cid, auto stats) {
         auto [allocSizeSuffix, allocSize] = formatMemory(stats.allocSize);
-        auto [memorySizeSuffix, memorySize] =
-            formatMemory(stats.totalAllocatedSize());
-        out << folly::sformat("tid{:2} pid{:2} cid{:4} {:8.2f}{} memorySize: {:8.2f}{}",
-                              tid, pid, cid, allocSize, allocSizeSuffix, memorySize,
-                              memorySizeSuffix)
-            << std::endl;
-      });
-
-      foreachAC([&](auto tid, auto pid, auto cid, auto stats) {
-        auto [allocSizeSuffix, allocSize] = formatMemory(stats.allocSize);
-
+        auto [memorySizeSuffix, memorySize] = formatMemory(stats.memorySize);
         // If the pool is not full, extrapolate usageFraction for AC assuming it
         // will grow at the same rate. This value will be the same for all ACs.
         auto acUsageFraction = (poolUsageFraction[pid] < 1.0)
                                    ? poolUsageFraction[pid]
                                    : stats.usageFraction();
-
         out << folly::sformat(
-                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} usageFraction: {:4.2f} "
-                   "rollingAvgAllocLatency: {:8.2f}ns",
-                   tid, pid, cid, allocSize, allocSizeSuffix, acUsageFraction,
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} memorySize:{:8.2f}{} "
+                   "free:{:4.2f}% usageFraction: {:4.2f} rollingAvgAllocLatency:{:8.2f}ns",
+                   tid, pid, cid, allocSize, allocSizeSuffix, memorySize,
+                   memorySizeSuffix, stats.approxFreePercent, acUsageFraction, 
                    stats.allocLatencyNs.estimate())
             << std::endl;
       });

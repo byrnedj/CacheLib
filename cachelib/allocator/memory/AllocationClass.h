@@ -94,6 +94,11 @@ class AllocationClass {
     return static_cast<unsigned int>(Slab::kSize / allocationSize_);
   }
 
+  // total number of slabs under this AllocationClass.
+  unsigned int getNumSlabs() const {
+    return curAllocatedSlabs_.load(std::memory_order_relaxed);
+  }
+
   // fetch stats about this allocation class.
   ACStats getStats() const;
 
@@ -308,6 +313,9 @@ class AllocationClass {
   // @throw std::logic_error if the object state can not be serialized
   serialization::AllocationClassObject saveState() const;
 
+  // approximate percent of free memory inside this allocation class
+  double approxFreePercentage() const;
+
  private:
   // check if the state of the AllocationClass is valid and if not, throws an
   // std::invalid_argument exception. This is intended for use in
@@ -466,6 +474,12 @@ class AllocationClass {
   std::atomic<bool> canAllocate_{true};
 
   std::atomic<int64_t> activeReleases_{0};
+
+  // amount of memory currently allocated by this AC
+  std::atomic<size_t> curAllocatedSize_{0};
+
+  // total number of slabs under this AllocationClass.
+  std::atomic<size_t> curAllocatedSlabs_{0};
 
   // stores the list of outstanding allocations for a given slab. This is
   // created when we start a slab release process and if there are any active

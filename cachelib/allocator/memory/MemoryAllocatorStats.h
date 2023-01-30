@@ -33,6 +33,9 @@ struct ACStats {
   // number of allocations per slab
   unsigned long long allocsPerSlab;
 
+  // size of memory assigned to this allocation class
+  unsigned long long memorySize;
+
   // number of slabs that are currently used for active allocations.
   unsigned long long usedSlabs;
 
@@ -50,6 +53,9 @@ struct ACStats {
 
   // Rolling allocation latency (in ns)
   util::RollingStats allocLatencyNs;
+
+  // percent of free memory in this class
+  double approxFreePercent{0.0};
 
   constexpr unsigned long long totalSlabs() const noexcept {
     return freeSlabs + usedSlabs;
