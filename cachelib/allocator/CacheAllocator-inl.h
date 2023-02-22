@@ -1552,7 +1552,15 @@ void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
   XDCHECK(it.isMarkedForEviction());
   XDCHECK(it.getRefCount() == 0);
 
-  accessContainer_->remove(it);
+  if (!accessContainer_->remove(it)) {
+      //item is unaccessible in in hash table meaning that
+      //insertOrReplace was called - we need to delete this
+      //from NVM
+      if (UNLIKELY(nvmCache_ != nullptr)) {
+        HashedKey hk{it.getKey()};
+        nvmCache_->remove(hk, nvmCache_->createDeleteTombStone(hk));
+      }
+  }
   removeFromMMContainer(it);
 
   // Since we managed to mark the item for eviction we must be the only
@@ -1648,19 +1656,17 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     if (!evictedToNext) {
       if (!token.isValid() && candidate->isAccessible()) {
         token = createPutToken(*candidate);
-      } else if (!candidate->isAccessible()) {
-        if (UNLIKELY(nvmCache_ != nullptr)) {
-          HashedKey hk{candidate->getKey()};
-          nvmCache_->remove(hk, nvmCache_->createDeleteTombStone(hk));
-        }
       }
-      // tryEvictToNextMemoryTier should only fail if allocation of the new item fails
-      // in that case, it should be still possible to mark item as exclusive.
+      // tryEvictToNextMemoryTier can fail if:
+      //    a) allocation of the new item fails in that case,
+      //       it should be still possible to mark item for eviction.
+      //    b) another thread calls insertOrReplace and the item
+      //       is no longer accessible
       //
       // in case that we are on the last tier, we whould have already marked
       // as exclusive since we will not be moving the item to the next tier
       // but rather just evicting all together, no need to
-      // markExclusiveWhenMoving
+      // markForEvictionWhenMoving
       auto ret = lastTier ? true : candidate->markForEvictionWhenMoving();
       XDCHECK(ret);
 
@@ -1670,7 +1676,8 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       // no other reader can be added to the waiters list
       wakeUpWaiters(*candidate, {});
 
-      if (token.isValid() && shouldWriteToNvmCacheExclusive(*candidate)) {
+      if (token.isValid() && shouldWriteToNvmCacheExclusive(*candidate)
+              && candidate->isAccessible()) {
         nvmCache_->put(*candidate, std::move(token));
       }
     } else {
