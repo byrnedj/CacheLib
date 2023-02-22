@@ -1,0 +1,47 @@
+{
+  "cache_config": {
+    "cacheSizeMB": 20480,
+    "poolRebalanceIntervalSec": 0,
+    "backgroundEvictorIntervalMilSec": 10,
+    "evictorThreads": 4,
+    "htBucketPower": 30,
+    "htLockPower": 30,
+    "cacheDir": "/tmp/mem-tier",
+    "memoryTiers" : [
+      {
+        "ratio": 1,
+        "memBindNodes": 0
+
+      },
+      {
+        "ratio": 5,
+        "memBindNodes": 0
+      }
+    ]
+  }, 
+  "test_config": 
+    {
+      "addChainedRatio": 0.0, 
+      "delRatio": 0.0, 
+      "enableLookaside": true, 
+      "getRatio": 0.7684563460126871, 
+      "keySizeRange": [
+        1, 
+        8, 
+        64
+      ], 
+      "keySizeRangeProbability": [
+        0.3, 
+        0.7
+      ], 
+      "loneGetRatio": 0.2315436539873129, 
+      "numKeys": 179013935, 
+      "numOps": 12500000, 
+      "numThreads": 36, 
+      "popDistFile": "pop.json", 
+       
+      "setRatio": 0.0, 
+      "valSizeDistFile": "sizes.json"
+    }
+ 
+}
