@@ -80,9 +80,9 @@ void Reaper<CacheT>::reapSlabWalkMode() {
         // get an item and check if it is expired and is in the access
         // container before we actually grab the
         // handle to the item and proceed to expire it.
-        const auto& item = *reinterpret_cast<const Item*>(ptr);
-        if (!item.isExpired(currentTimeSec) || !item.isAccessible()) {
-          return true;
+        auto& item = *reinterpret_cast<Item*>(ptr);
+        if (!item.markedForPromotion()) {
+          return true; //try next item
         }
 
         // Item has to be smaller than the alloc size to be a valid item.
@@ -95,12 +95,17 @@ void Reaper<CacheT>::reapSlabWalkMode() {
         try {
           // obtain a valid handle without disturbing the state of the item in
           // cache.
-          auto handle = cache_.peek(key);
-          auto reaped =
-              ReaperAPIWrapper<CacheT>::removeIfExpired(cache_, handle);
-          if (reaped) {
-            reaps++;
-          }
+          if (item.markMoving(true)) {
+            auto reaped =
+                ReaperAPIWrapper<CacheT>::promote(cache_, item);
+            auto hdl = cache_.peek(key);
+            if (reaped) {
+              reaps++;
+              XDCHECK_EQ(cache_.getTierId(*hdl),0);
+            } else {
+              XDCHECK_EQ(cache_.getTierId(*hdl),1);
+            }
+          } //promote will unmark item as moving
         } catch (const std::exception& e) {
           numErrs_.fetch_add(1, std::memory_order_relaxed);
           XLOGF(DBG, "Error while reaping. Msg = {}", e.what());

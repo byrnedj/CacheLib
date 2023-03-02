@@ -416,6 +416,9 @@ typename Cache<Allocator>::WriteHandle Cache<Allocator>::allocate(
     handle = cache_->allocate(pid, key, CacheValue::getSize(size), ttlSecs);
     if (handle) {
       CacheValue::initialize(handle->getMemory());
+      if (config_.useInclusive) {
+         handle->markInclusive();
+      }
     }
   } catch (const std::invalid_argument& e) {
     XLOGF(DBG, "Unable to allocate, reason: {}", e.what());
@@ -652,6 +655,8 @@ Stats Cache<Allocator>::getStats() const {
 
   ret.allocationClassStats = allocationClassStats;
 
+  ret.reaperStats = cacheStats.reaperStats; 
+
   ret.backgndEvicStats.nEvictedItems =
             cacheStats.evictionStats.numMovedItems;
   ret.backgndEvicStats.nTraversals =
@@ -675,6 +680,13 @@ Stats Cache<Allocator>::getStats() const {
   ret.numCacheGets = cacheStats.numCacheGets;
   ret.numCacheGetMiss = cacheStats.numCacheGetMiss;
   ret.numCacheEvictions = cacheStats.numCacheEvictions;
+  for (TierId tid = 0; tid < cache_->getNumTiers(); tid++) {
+      ret.numCacheTierHits.push_back(cacheStats.numCacheTierHits[tid]);
+      ret.numCacheTierEvictions.push_back(cacheStats.numCacheTierEvictions[tid]);
+      ret.numCacheTierWritebacks.push_back(cacheStats.tierWritebacks[tid]);
+      ret.numCacheTierDirtyWritebacks.push_back( 
+          cacheStats.tierDirtyWritebacks[tid]);
+  }
   ret.numRamDestructorCalls = cacheStats.numRamDestructorCalls;
   ret.numNvmGets = cacheStats.numNvmGets;
   ret.numNvmGetMiss = cacheStats.numNvmGetMiss;
@@ -718,7 +730,6 @@ Stats Cache<Allocator>::getStats() const {
   if (config_.printNvmCounters) {
     ret.nvmCounters = cache_->getNvmCacheStatsMap().toMap();
   }
-
   ret.backgroundEvictionClasses = cache_->getBackgroundMoverClassStats(MoverDir::Evict);
   ret.backgroundPromotionClasses = cache_->getBackgroundMoverClassStats(MoverDir::Promote);
 

@@ -49,9 +49,11 @@ struct BackgroundPromotionStats {
   uint64_t nTraversals{0};
 };
 
+
 struct Stats {
   BackgroundEvictionStats backgndEvicStats;
   BackgroundPromotionStats backgndPromoStats;
+  ReaperStats reaperStats;
 
   uint64_t numEvictions{0};
   uint64_t numItems{0};
@@ -61,6 +63,10 @@ struct Stats {
   uint64_t allocFailures{0};
 
   std::vector<double> poolUsageFraction;
+  std::vector<uint64_t> numCacheTierHits;
+  std::vector<uint64_t> numCacheTierEvictions;
+  std::vector<uint64_t> numCacheTierWritebacks;
+  std::vector<uint64_t> numCacheTierDirtyWritebacks;
 
   uint64_t numCacheGets{0};
   uint64_t numCacheGetMiss{0};
@@ -235,7 +241,11 @@ struct Stats {
       out << folly::sformat("Cache Gets    : {:,}", numCacheGets) << std::endl;
       out << folly::sformat("Hit Ratio     : {:6.2f}%", overallHitRatio)
           << std::endl;
-
+      for (TierId tid = 0; tid < numCacheTierHits.size(); tid++) {
+        double tierHitRatio = pctFn(numCacheTierHits[tid],numCacheGets);
+        out << folly::sformat("Tier {} Hit Ratio     : {:6.2f}%", tid, tierHitRatio)
+            << std::endl;
+      }
       if (FLAGS_report_api_latency) {
         auto printLatencies =
             [&out](folly::StringPiece cat,
@@ -275,6 +285,14 @@ struct Stats {
         out << folly::sformat("tid{:2} pid{:2} cid{:4} promoted: {:4}",
           tid, pid, cid, promoted) << std::endl;
       });
+    }
+
+    if (reaperStats.numReapedItems > 0) {
+
+      out << folly::sformat("Reaper reaped: {:,} visited: {:,} traversals: {:,} avg traversal time: {:,}", 
+              reaperStats.numReapedItems,reaperStats.numVisitedItems,
+              reaperStats.numTraversals,reaperStats.avgTraversalTimeMs)
+              << std::endl;
     }
 
     if (numNvmGets > 0 || numNvmDeletes > 0 || numNvmPuts > 0) {
@@ -414,6 +432,11 @@ struct Stats {
     if (numCacheEvictions > 0) {
       out << folly::sformat("Total eviction executed {}", numCacheEvictions)
           << std::endl;
+      for (TierId tid = 0; tid < numCacheTierEvictions.size(); tid++) {
+        out << folly::sformat("Tier {:2} evictions {:,} - writebacks {:,} - dirty {:,}", 
+                tid, numCacheTierEvictions[tid], numCacheTierWritebacks[tid], numCacheTierDirtyWritebacks[tid])
+            << std::endl;
+      }
     }
   }
 

@@ -44,6 +44,19 @@ void Stats::init() {
   initToZero(*fragmentationSize);
   initToZero(*chainedItemEvictions);
   initToZero(*regularItemEvictions);
+  tierWritebacks = std::make_unique<PerTierPoolClassAtomicCounters>();
+  tierDirtyWritebacks = std::make_unique<PerTierPoolClassAtomicCounters>();
+  auto initToZeroTiers = [](auto& a) {
+    for (auto& t : a) {
+     for (auto& p : t) {
+      for (auto& c : p) {
+        c.set(0);
+      }
+     }
+    }
+  };
+  initToZeroTiers(*tierWritebacks);
+  initToZeroTiers(*tierDirtyWritebacks);
 
   classAllocLatency = std::make_unique<PerTierPoolClassRollingStats>();
 }
@@ -53,15 +66,33 @@ struct SizeVerify {};
 
 void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 #ifndef SKIP_SIZE_VERIFY
-  SizeVerify<sizeof(Stats)> a = SizeVerify<16192>{};
+  SizeVerify<sizeof(Stats)> a = SizeVerify<16400>{};
   std::ignore = a;
 #endif
+  auto accumTiersTL = [](const std::array<TLCounter, 
+          CacheBase::kMaxTiers>& tiers) {
+      std::vector<uint64_t> stat;
+      for (const auto& tid : tiers) {
+          stat.push_back(tid.get());
+      }
+      return stat;
+  };
+  auto accumTiersAtomic = [](const std::array<AtomicCounter, 
+          CacheBase::kMaxTiers>& tiers) {
+      std::vector<uint64_t> stat;
+      for (const auto& tid : tiers) {
+          stat.push_back(tid.get());
+      }
+      return stat;
+  };
   ret.numCacheGets = numCacheGets.get();
+  ret.numCacheTierHits = accumTiersTL(numCacheTierHits);
   ret.numCacheGetMiss = numCacheGetMiss.get();
   ret.numCacheGetExpiries = numCacheGetExpiries.get();
   ret.numCacheRemoves = numCacheRemoves.get();
   ret.numCacheRemoveRamHits = numCacheRemoveRamHits.get();
   ret.numCacheEvictions = numCacheEvictions.get();
+  ret.numCacheTierEvictions = accumTiersAtomic(numCacheTierEvictions);
   ret.numRamDestructorCalls = numRamDestructorCalls.get();
   ret.numDestructorExceptions = numDestructorExceptions.get();
 
@@ -125,11 +156,26 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
     }
     return sum;
   };
+  auto accumTiers = [](const PerTierPoolClassAtomicCounters& t) {
+    std::vector<uint64_t> stat;
+    for (const auto& c : t) {
+     uint64_t sum = 0;
+     for (const auto& x : c) {
+       for (const auto& v : x) {
+         sum += v.get();
+       }
+     }
+     stat.push_back(sum);
+    }
+    return stat;
+  };
   ret.allocAttempts = accum(*allocAttempts);
   ret.evictionAttempts = accum(*evictionAttempts);
   ret.allocFailures = accum(*allocFailures);
   ret.numEvictions = accum(*chainedItemEvictions);
   ret.numEvictions += accum(*regularItemEvictions);
+  ret.tierWritebacks = accumTiers(*tierWritebacks);
+  ret.tierDirtyWritebacks = accumTiers(*tierDirtyWritebacks);
 
   ret.invalidAllocs = invalidAllocs.get();
   ret.numRefcountOverflow = numRefcountOverflow.get();

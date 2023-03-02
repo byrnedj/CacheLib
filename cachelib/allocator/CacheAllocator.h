@@ -1357,10 +1357,11 @@ class CacheAllocator : public CacheBase {
   static_assert((sizeof(typename MMType::template Hook<Item>) +
                  sizeof(typename AccessType::template Hook<Item>) +
                  sizeof(typename RefcountWithFlags::Value) + sizeof(uint32_t) +
+                 sizeof(void*) +
                  sizeof(uint32_t) + sizeof(KAllocation)) == sizeof(Item),
                 "vtable overhead");
   // Check for CompressedPtr single/multi tier support
-  static_assert(32 == sizeof(Item), "item overhead is 32 bytes");
+  static_assert(40 == sizeof(Item), "item overhead is 32 bytes");
 
   // make sure there is no overhead in ChainedItem on top of a regular Item
   static_assert(sizeof(Item) == sizeof(ChainedItem),
@@ -1381,6 +1382,9 @@ class CacheAllocator : public CacheBase {
   static_assert(sizeof(Item) - offsetof(Item, alloc_) == sizeof(Item::alloc_),
                 "alloc_ incorrectly arranged");
 #pragma GCC diagnostic pop
+  
+  TierId getTierId(const Item& item) const;
+  TierId getTierId(const void* ptr) const;
 
  private:
   // wrapper around Item's refcount and active handle tracking
@@ -1465,8 +1469,6 @@ class CacheAllocator : public CacheBase {
 
   void createMMContainers(const PoolId pid, MMConfig config);
 
-  TierId getTierId(const Item& item) const;
-  TierId getTierId(const void* ptr) const;
 
   // acquire the MMContainer corresponding to the the Item's class and pool.
   //
@@ -1618,6 +1620,8 @@ class CacheAllocator : public CacheBase {
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
   bool moveRegularItemWithSync(Item& oldItem, WriteHandle& newItemHdl);
+  bool handleInclusiveWriteback(Item& oldItem, WriteHandle& newItemHdl);
+  bool copyRegularItemWithSync(Item& oldItem, WriteHandle& newItemHdl);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's exclusive bit has been set. The user supplied
@@ -1791,6 +1795,10 @@ class CacheAllocator : public CacheBase {
   WriteHandle tryPromoteToNextMemoryTier(TierId tid, PoolId pid, Item& item, bool fromBgThread);
 
   WriteHandle tryPromoteToNextMemoryTier(Item& item, bool fromBgThread);
+  
+  WriteHandle tryCopyToNextMemoryTier(TierId tid, PoolId pid, Item& item, bool fromBgThread);
+  
+  WriteHandle tryCopyToNextMemoryTier(Item& item, bool fromBgThread);
 
   // Wakes up waiters if there are any
   //
@@ -1951,8 +1959,75 @@ class CacheAllocator : public CacheBase {
     // primitives. So we consciously exempt ourselves here from TSAN data race
     // detection.
     folly::annotate_ignore_thread_sanitizer_guard g(__FILE__, __LINE__);
-    auto slabsSkipped = allocator_[currentTier()]->forEachAllocation(std::forward<Fn>(f));
+    auto slabsSkipped = allocator_[1]->forEachAllocation(std::forward<Fn>(f));
     stats().numReaperSkippedSlabs.add(slabsSkipped);
+  }
+
+  bool promote(Item& item);
+ 
+  // exposed for the background mover to run per slab basis
+  size_t traverseAndTierPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch ) {
+    unsigned int promotions = 0;
+    // The intent here is to scan the memory to identify candidates for tier promotion
+    // without holding any locks. Candidates that are identified as potential
+    // ones are further processed by holding the right synchronization
+    // primitives. So we consciously exempt ourselves here from TSAN data race
+    // detection.
+    auto f = [&](void* ptr, facebook::cachelib::AllocInfo allocInfo) -> bool {
+        if (allocInfo.classId == cid && allocInfo.poolId == pid) {
+            XDCHECK(ptr);
+            Item *candidate = reinterpret_cast<Item*>(ptr);
+            if (candidate->markedForPromotion() && 
+                    candidate->markMoving(true)) {
+                XDCHECK(candidate->markedForPromotion());
+                //move from tier 2 to tier 1
+                auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
+                if (promoted) {
+                  promotions++;
+                }
+                // we failed to allocate a new item (or we failed moved)
+                // case where we failed moved:
+                //    - we have newItem that was allocated and now
+                //      released
+                //    - this candidate is no longer valid 
+                // case where we failed to allocate a new item
+                //    - unmarkMoving and get on?
+                // both of these cases are handled by the tryPromote
+            }
+        }
+        return true;
+    };
+    allocator_[tid]->forEachAllocation(f);
+    return promotions;
+  }
+  // exposed for the background mover to run per slab basis
+  size_t traverseAndInclusiveCopyItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch ) {
+    unsigned int copies = 0;
+    // The intent here is to scan the memory to identify candidates for tier promotion
+    // without holding any locks. Candidates that are identified as potential
+    // ones are further processed by holding the right synchronization
+    // primitives. So we consciously exempt ourselves here from TSAN data race
+    // detection.
+    auto f = [&](void* ptr, facebook::cachelib::AllocInfo allocInfo) -> bool {
+        if (allocInfo.classId == cid && allocInfo.poolId == pid) {
+            XDCHECK(ptr);
+            Item *candidate = reinterpret_cast<Item*>(ptr);
+            auto candidateHdl = acquire(candidate);
+            if (!candidateHdl->isMoving() && candidateHdl->markedForCopy() && 
+                    candidateHdl->markMoving(false)) {
+                XDCHECK(candidateHdl->markedForCopy());
+                //copy from tier 0 to tier 1
+                auto copied = tryCopyToNextMemoryTier(*candidateHdl, true);
+                if (copied) {
+                  copies++;
+                }
+                wakeUpWaiters(*candidate, std::move(candidateHdl));
+            }
+        }
+        return true;
+    };
+    allocator_[tid]->forEachAllocation(f);
+    return copies;
   }
 
   // exposed for the background evictor to iterate through the memory and evict
@@ -2062,7 +2137,7 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
       auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
       if (promoted) {
         promotions++;
-  	    removeFromMMContainer(*candidate);
+  	removeFromMMContainer(*candidate);
         XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
         // it's safe to recycle the item here as there are no more
         // references and the item could not been marked as moving

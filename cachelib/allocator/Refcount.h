@@ -112,17 +112,17 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     // Item was evicted from NVM while it was in RAM.
     kNvmEvicted,
 
-    // A deprecated and noop flag that was used to mark whether the item is
-    // unevictable in the past.
-    kUnevictable_NOOP,
+    // Inclusive cache design control bits
+    kInclusive,
+    kDirty,
+    kCopy,
+    kPromotion
 
-    // Unused. This is just to indciate the maximum number of flags
-    kFlagMax,
   };
   static_assert(static_cast<uint8_t>(kMMFlag0) >
                     static_cast<uint8_t>(kExclusive),
                 "Flags and control bits cannot overlap in bit range.");
-  static_assert(kFlagMax <= NumBits<Value>::value, "Too many flags.");
+  static_assert(kPromotion <= NumBits<Value>::value, "Too many flags.");
 
   constexpr explicit RefcountWithFlags() = default;
 
@@ -419,6 +419,24 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   void markNvmClean() noexcept { return setFlag<kNvmClean>(); }
   void unmarkNvmClean() noexcept { return unSetFlag<kNvmClean>(); }
   bool isNvmClean() const noexcept { return isFlagSet<kNvmClean>(); }
+  
+  /**
+   * Keep track of whether the item was modified while in ram cache
+   */
+  bool isInclusive() const noexcept { return isFlagSet<kInclusive>(); }
+  void markInclusive() noexcept { return setFlag<kInclusive>(); }
+  bool isDirty() const noexcept { return isFlagSet<kDirty>(); }
+  void markDirty() noexcept { return setFlag<kDirty>(); }
+  
+  /**
+   * State of item's inclusiveness for background workers
+   */
+  void markForCopy() noexcept { return setFlag<kCopy>(); }
+  bool markedForCopy() const noexcept { return isFlagSet<kCopy>(); }
+  void unmarkForCopy() noexcept { return unSetFlag<kCopy>(); }
+  void markForPromotion() noexcept { return setFlag<kPromotion>(); }
+  bool markedForPromotion() const noexcept { return isFlagSet<kPromotion>(); }
+  void unmarkForPromotion() noexcept { return unSetFlag<kPromotion>(); }
 
   /**
    * Marks that the item was potentially evicted from the nvmcache and might

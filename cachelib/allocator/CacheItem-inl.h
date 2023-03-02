@@ -42,7 +42,8 @@ CacheItem<CacheTrait>::CacheItem(Key key,
                                  uint32_t size,
                                  uint32_t creationTime,
                                  uint32_t expiryTime)
-    : creationTime_(creationTime), expiryTime_(expiryTime), alloc_(key, size) {}
+    : creationTime_(creationTime), expiryTime_(expiryTime), alloc_(key, size),
+      compressedNext_(nullptr) {}
 
 template <typename CacheTrait>
 CacheItem<CacheTrait>::CacheItem(Key key, uint32_t size, uint32_t creationTime)
@@ -149,13 +150,14 @@ std::string CacheItem<CacheTrait>::toString() const {
         "item: "
         "memory={}:raw-ref={}:size={}:key={}:hex-key={}:"
         "isInMMContainer={}:isAccessible={}:isMarkedForEviction={}:"
-        "isMoving={}:references={}:ctime="
+        "isDirty={}:isMoving={}:references={}:ctime="
         "{}:"
         "expTime={}:updateTime={}:isNvmClean={}:isNvmEvicted={}:hasChainedItem="
         "{}",
         this, getRefCountAndFlagsRaw(), getSize(),
         folly::humanify(getKey().str()), folly::hexlify(getKey()),
-        isInMMContainer(), isAccessible(), isMarkedForEviction(), isMoving(),
+        isInMMContainer(), isAccessible(), isMarkedForEviction(), 
+        isDirty(), isMoving(),
         getRefCount(), getCreationTime(), getExpiryTime(), getLastAccessTime(),
         isNvmClean(), isNvmEvicted(), hasChainedItem());
   }
@@ -185,6 +187,56 @@ RefcountWithFlags::Value CacheItem<CacheTrait>::getRefCountAndFlagsRaw()
 template <typename CacheTrait>
 bool CacheItem<CacheTrait>::isDrained() const noexcept {
   return ref_.isDrained();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isInclusive() const noexcept {
+  return ref_.isInclusive();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markInclusive() noexcept {
+  ref_.markInclusive();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isDirty() const noexcept {
+  return ref_.isDirty();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markDirty() noexcept {
+  ref_.markDirty();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markForCopy() noexcept {
+  ref_.markForCopy();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::markedForCopy() const noexcept {
+  return ref_.markedForCopy();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::unmarkForCopy() noexcept {
+  ref_.unmarkForCopy();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markForPromotion() noexcept {
+  ref_.markForPromotion();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::markedForPromotion() const noexcept {
+  return ref_.markedForPromotion();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::unmarkForPromotion() noexcept {
+  ref_.unmarkForPromotion();
 }
 
 template <typename CacheTrait>
@@ -351,6 +403,18 @@ bool CacheItem<CacheTrait>::isFlagSet() const noexcept {
   return ref_.template isFlagSet<flagBit>();
 }
 
+// Get the item in the next tier
+template <typename CacheTrait>
+void* CacheItem<CacheTrait>::getNextTierCopy() {
+  return compressedNext_;
+}
+
+// Get the item in the next tier
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::setNextTierCopy(void* nextCopy) {
+  compressedNext_ = nextCopy;
+}
+
 template <typename CacheTrait>
 bool CacheItem<CacheTrait>::updateExpiryTime(uint32_t expiryTimeSecs) noexcept {
   // check for moving to make sure we are not updating the expiry time while at
@@ -373,6 +437,7 @@ template <typename CacheTrait>
 bool CacheItem<CacheTrait>::extendTTL(std::chrono::seconds ttl) noexcept {
   return updateExpiryTime(util::getCurrentTimeSec() + ttl.count());
 }
+  
 
 // Chained items are chained in a single linked list. The payload of each
 // chained item is chained to the next item.

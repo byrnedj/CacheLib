@@ -35,6 +35,10 @@ struct ReaperAPIWrapper {
   static bool removeIfExpired(C& cache, const typename C::ReadHandle& handle) {
     return cache.removeIfExpired(handle);
   }
+  
+  static bool promote(C& cache, typename C::Item& item) {
+    return cache.promote(item);
+  }
 
   template <typename Fn>
   static void traverseAndExpireItems(C& cache, Fn&& f) {

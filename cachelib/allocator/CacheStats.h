@@ -122,6 +122,12 @@ struct CacheStat {
   // number of regular items that were evicted from this classId
   uint64_t regularItemEvictions;
 
+  //tier specific stats
+  //std::vector<uint64_t> numTierHits;
+  //std::vector<uint64_t> numTierEvictions;
+  std::vector<uint64_t> tierWritebacks;
+  std::vector<uint64_t> tierDirtyWritebacks;
+
   // the stats from the mm container
   MMContainerStat containerStat;
 
@@ -338,6 +344,7 @@ struct GlobalCacheStats {
 
   // number of calls to CacheAllocator::find
   uint64_t numCacheGets{0};
+  std::vector<uint64_t> numCacheTierHits;
 
   // number of such calls being a miss in the cache.
   uint64_t numCacheGetMiss{0};
@@ -406,6 +413,7 @@ struct GlobalCacheStats {
 
   // number of evictions where items leave both RAM and NvmCache entirely
   uint64_t numCacheEvictions{0};
+  std::vector<uint64_t> numCacheTierEvictions;
 
   // number of evictions from nvm that found an inconsistent state in RAM
   uint64_t numNvmUncleanEvict{0};
@@ -539,6 +547,9 @@ struct GlobalCacheStats {
   // not go to negative. If it's negative, it means we have
   // leaked handles (or some sort of accounting bug internally)
   int64_t numActiveHandles;
+  
+  std::vector<uint64_t> tierWritebacks;
+  std::vector<uint64_t> tierDirtyWritebacks;
 };
 
 struct CacheMemoryStats {

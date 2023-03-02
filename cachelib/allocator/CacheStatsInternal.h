@@ -37,6 +37,7 @@ struct Stats {
   // overall hit ratio related stats for the cache.
   // number of calls to CacheAllocator::find
   TLCounter numCacheGets{0};
+  std::array<TLCounter, CacheBase::kMaxTiers> numCacheTierHits;
 
   // number of such calls being a miss in the cache.
   TLCounter numCacheGetMiss{0};
@@ -54,6 +55,7 @@ struct Stats {
 
   // number of evictions where items leave both RAM and NvmCache entirely
   AtomicCounter numCacheEvictions{0};
+  std::array<AtomicCounter, CacheBase::kMaxTiers> numCacheTierEvictions;
 
   // number of item destructor calls from ram
   TLCounter numRamDestructorCalls{0};
@@ -216,6 +218,11 @@ struct Stats {
       std::array<std::array<AtomicCounter, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>;
 
+  using PerTierPoolClassAtomicCounters = std::array<
+      std::array<std::array<AtomicCounter, MemoryAllocator::kMaxClasses>,
+                 MemoryPoolManager::kMaxPools>,
+      CacheBase::kMaxTiers>;
+
   // count of a stat for a specific allocation class
   using PerPoolClassTLCounters =
       std::array<std::array<TLCounter, MemoryAllocator::kMaxClasses>,
@@ -229,6 +236,8 @@ struct Stats {
   std::unique_ptr<PerPoolClassAtomicCounters> fragmentationSize{};
   std::unique_ptr<PerPoolClassAtomicCounters> chainedItemEvictions{};
   std::unique_ptr<PerPoolClassAtomicCounters> regularItemEvictions{};
+  std::unique_ptr<PerTierPoolClassAtomicCounters> tierWritebacks{};
+  std::unique_ptr<PerTierPoolClassAtomicCounters> tierDirtyWritebacks{};
 
   using PerTierPoolClassRollingStats = std::array<
       std::array<std::array<util::RollingStats, MemoryAllocator::kMaxClasses>,

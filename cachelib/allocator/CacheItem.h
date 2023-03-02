@@ -59,6 +59,10 @@ class CacheAllocatorTestWrapper;
 template <typename CacheTrait>
 class CacheAllocator;
 
+// forward declaration
+template <typename CacheTrait>
+class Reaper;
+
 template <typename CacheTrait>
 class CacheChainedItem;
 
@@ -274,7 +278,10 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   // Returns true if the item is in access container, false otherwise
   bool isAccessible() const noexcept;
-
+  void markInclusive() noexcept;
+  bool markMoving(bool failIfRefNotZero);
+  bool isMoving() const noexcept;
+  bool markedForPromotion() const noexcept;
  protected:
   // construct an item without expiry timestamp.
   CacheItem(Key key, uint32_t size, uint32_t creationTime);
@@ -330,6 +337,29 @@ class CACHELIB_PACKED_ATTR CacheItem {
   // admin bits set. I.e. refcount is 0 and the item is not linked, accessible,
   // nor exclusive
   bool isDrained() const noexcept;
+ 
+  /* 
+   * Is item inclusive w.r.t to higher tiers
+   * also - if item is dirty, or how we can mark dirty
+   */
+  bool isInclusive() const noexcept;
+  bool isDirty() const noexcept;
+  void markDirty() noexcept;
+  
+  // Get the item in the next tier
+  void* getNextTierCopy();
+  void setNextTierCopy(void *nextCopy);
+
+  /*
+   * for background reapers to maintain inclusive/data hotness
+   */
+  void markForCopy() noexcept;
+  bool markedForCopy() const noexcept;
+  void unmarkForCopy() noexcept;
+  
+  void markForPromotion() noexcept;
+  void unmarkForPromotion() noexcept;
+
 
   /**
    * The following three functions correspond to the state of the allocation
@@ -381,9 +411,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
    * Unmarking moving will also return the refcount at the moment of
    * unmarking.
    */
-  bool markMoving(bool failIfRefNotZero);
   RefcountWithFlags::Value unmarkMoving() noexcept;
-  bool isMoving() const noexcept;
   bool isOnlyMoving() const noexcept;
 
   /** This function attempts to mark item as exclusive.
@@ -434,6 +462,9 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   using MMContainer =
       typename CacheTrait::MMType::template Container<Item, &Item::mmHook_>;
+  
+  // next tier copy
+  void* compressedNext_;
 
  protected:
   // Refcount for the item and also flags on the items state
@@ -578,6 +609,7 @@ class CACHELIB_PACKED_ATTR CacheChainedItem : public CacheItem<CacheTrait> {
 
   friend Payload;
   friend CacheAllocator<CacheTrait>;
+  friend Reaper<CacheTrait>;
   template <typename Cache, typename Handle, typename Iter>
   friend class CacheChainedAllocs;
   template <typename Cache, typename Item>
