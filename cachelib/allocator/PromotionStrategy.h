@@ -39,15 +39,16 @@ class PromotionStrategy : public BackgroundMoverStrategy {
     std::vector<size_t> batches{};
     for (auto [tid, pid, cid] : acVec) {
       XDCHECK(tid > 0);
-      auto stats = cache.getACStats(tid - 1, pid, cid);
-      if ((1-stats.usageFraction())*100 < promotionAcWatermark)
-        batches.push_back(0);
-      else {
-        auto maxPossibleItemsToPromote = static_cast<size_t>(
-            (promotionAcWatermark - (1-stats.usageFraction())*100) *
-            (stats.totalSlabs() * Slab::kSize) / stats.allocSize);
-        batches.push_back(maxPossibleItemsToPromote);
-      }
+      batches.push_back(maxPromotionBatch);
+      //auto stats = cache.getACStats(tid - 1, pid, cid);
+      //if ((1-stats.usageFraction())*100 < promotionAcWatermark)
+      //  batches.push_back(0);
+      //else {
+      //  auto maxPossibleItemsToPromote = static_cast<size_t>(
+      //      (promotionAcWatermark - (1-stats.usageFraction())*100) *
+      //      (stats.totalSlabs() * Slab::kSize) / stats.allocSize);
+      //  batches.push_back(maxPossibleItemsToPromote);
+      //}
     }
 
     if (batches.size() == 0) {

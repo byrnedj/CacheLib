@@ -2125,7 +2125,7 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
 
         // TODO: only allow it for read-only items?
         // or implement mvcc
-        if (candidate->markMoving(true)) {
+        if (candidate->markedForPromotion() && candidate->markMoving(true)) {
           candidates.push_back(candidate);
         }
 
@@ -2137,26 +2137,23 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
       auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
       if (promoted) {
         promotions++;
-  	removeFromMMContainer(*candidate);
-        XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
-        // it's safe to recycle the item here as there are no more
-        // references and the item could not been marked as moving
-        // by other thread since it's detached from MMContainer.
-        auto res = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
-                                  /* isNascent */ false);
-        XDCHECK(res == ReleaseRes::kReleased);
+        candidate->unmarkForPromotion();
+        if (candidate->isInclusive()) {
+            XDCHECK_EQ(static_cast<void*>(candidate),promoted->getNextTierCopy());
+        } else {
+            removeFromMMContainer(*candidate);
+        }
+        auto ref = candidate->unmarkMoving();
+        if (!candidate->isInclusive()) {
+            XDCHECK_EQ(ref,0u);
+            const auto res =
+                releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+            XDCHECK(res == ReleaseRes::kReleased);
+        }
         wakeUpWaiters(*candidate, std::move(promoted));
       } else {
-        // we failed to allocate a new item, this item is no  longer moving
-        auto ref = unmarkMovingAndWakeUpWaiters(*candidate, {});
-        if (UNLIKELY(ref == 0)) {
-          const auto res =
-              releaseBackToAllocator(*candidate, 
-                      RemoveContext::kNormal, false);
-          XDCHECK(res == ReleaseRes::kReleased);
-        }
+        unmarkMovingAndWakeUpWaiters(*candidate,acquire(candidate));
       }
-     
     }
     return promotions;
   }

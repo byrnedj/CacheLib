@@ -24,11 +24,11 @@ BackgroundMover<CacheT>::BackgroundMover(
     MoverDir direction)
     : cache_(cache), strategy_(strategy), direction_(direction) {
   if (direction_ == MoverDir::Evict) {
-    //moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItems;
-    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndInclusiveCopyItems;
+    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItems;
+    //moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndInclusiveCopyItems;
   } else if (direction_ == MoverDir::Promote) {
-    //moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndPromoteItems;
-    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndTierPromoteItems;
+    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndPromoteItems;
+    //moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndTierPromoteItems;
   //} else if (direction_ == MoverDir::InclusiveCopy) {
   //  moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndInclusiveCopyItems;
   }

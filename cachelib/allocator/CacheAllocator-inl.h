@@ -444,6 +444,7 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
 
     handle = acquire(new (memory) Item(key, size, creationTime, expiryTime));
     if (handle) {
+      handle->setNextTierCopy(0);
       handle.markNascent();
       (*stats_.fragmentationSize)[pid][cid].add(
           util::getFragmentation(*this, *handle));
@@ -882,6 +883,10 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
     config_.removeCb(RemoveCbData{ctx, it, viewAsChainedAllocsRange(it)});
   }
 
+  if (it.getNextTierCopy()) {
+      it.setNextTierCopy(0);
+  }
+
   // only skip destructor for evicted items that are either in the queue to put
   // into nvm or already in nvm
   bool skipDestructor =
@@ -991,7 +996,7 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
     XDCHECK(ReleaseRes::kReleased != res);
     res = ReleaseRes::kRecycled;
   } else {
-    XDCHECK(it.isDrained());
+    XDCHECK(it.isDrained()) << it.toString();
     allocator_[tid]->free(&it);
   }
 
@@ -1309,14 +1314,6 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
         Item& oldItem, WriteHandle& newItemHdl) {
   
   XDCHECK(oldItem.isMoving());
-  auto guard = folly::makeGuard([&]() {
-    auto ref = newItemHdl->unmarkMoving();
-    if (UNLIKELY(ref == 0)) {
-      const auto res =
-          releaseBackToAllocator(*newItemHdl, RemoveContext::kNormal, false);
-      XDCHECK(res == ReleaseRes::kReleased);
-    }
-  });
 
   if (!newItemHdl) {
       return false;
@@ -1330,10 +1327,17 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
    * we assume that the nextTier item is in the mmContainer and is not
    * accessible
    */
-  auto marked = newItemHdl->markMoving(false /* there is already a handle */);
-  XDCHECK(marked);
   XDCHECK(newItemHdl->isInMMContainer());
   XDCHECK(!newItemHdl->isAccessible());
+  
+  if (oldItem.isDirty()) {
+    std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(), oldItem.getSize());
+    auto tid = getTierId(oldItem);
+    auto allocInfo = allocator_[tid]->getAllocInfo(oldItem.getMemory());
+    auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
+    auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
+    (*stats_.tierDirtyWritebacks)[tid][pid][cid].inc();
+  } 
 
   //replace in accessContainer
   auto predicate = [&](const Item& item){
@@ -1350,14 +1354,6 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
       return replaced;
   }
 
-  if (oldItem.isDirty()) {
-    std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(), oldItem.getSize());
-    auto tid = getTierId(oldItem);
-    auto allocInfo = allocator_[tid]->getAllocInfo(oldItem.getMemory());
-    auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
-    auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
-    (*stats_.tierDirtyWritebacks)[tid][pid][cid].inc();
-  } 
   //we successfully replaced the old item in the AC - we can be done
   return true;
 }
@@ -1424,15 +1420,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   //and other threads may access it - but in case where
   //we failed to replace in access container we can give the
   //new item back to the allocator
-  auto guard = folly::makeGuard([&]() {
-    auto ref = newItemHdl->unmarkMoving();
-    if (UNLIKELY(ref == 0)) {
-      const auto res =
-          releaseBackToAllocator(*newItemHdl, RemoveContext::kNormal, false);
-      XDCHECK(res == ReleaseRes::kReleased);
-    }
-  });
-
   XDCHECK(oldItem.isMoving());
   XDCHECK(!oldItem.isExpired());
   // TODO: should we introduce new latency tracker. E.g. evictRegularLatency_
@@ -1447,19 +1434,36 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     newItemHdl->markNvmClean();
   }
 
-  // mark new item as moving to block readers until the data is copied
-  // (moveCb is called). Mark item in MMContainer temporarily (TODO: should
-  // we remove markMoving requirement for the item to be linked?)
-  newItemHdl->markInMMContainer();
-  auto marked = newItemHdl->markMoving(false /* there is already a handle */);
-  newItemHdl->unmarkInMMContainer();
-  XDCHECK(marked);
+  if (config_.moveCb) {
+    // Execute the move callback. We cannot make any guarantees about the
+    // consistency of the old item beyond this point, because the callback can
+    // do more than a simple memcpy() e.g. update external references. If there
+    // are any remaining handles to the old item, it is the caller's
+    // responsibility to invalidate them. The move can only fail after this
+    // statement if the old item has been removed or replaced, in which case it
+    // should be fine for it to be left in an inconsistent state.
+    config_.moveCb(oldItem, *newItemHdl, nullptr);
+  } else {
+    std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
+                oldItem.getSize());
+  }
 
   auto predicate = [&](const Item& item){
     // we rely on moving flag being set (it should block all readers)
     XDCHECK(item.getRefCount() == 0);
     return true;
   };
+  
+  auto srcTid = getTierId(oldItem);
+  auto dstTid = getTierId(*newItemHdl);
+  if (oldItem.isInclusive()) {
+    newItemHdl->markInclusive();
+    if (srcTid > dstTid) {
+      newItemHdl->setNextTierCopy(&oldItem);
+      XDCHECK_EQ(newItemHdl->getNextTierCopy(),&oldItem);
+    }
+    XDCHECK(newItemHdl->isInclusive());
+  }
 
   auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
                                    predicate);
@@ -1480,19 +1484,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   // 3. replaced handle is returned and eventually drops
   //    ref to 0 and the item is recycled back to allocator.
 
-  if (config_.moveCb) {
-    // Execute the move callback. We cannot make any guarantees about the
-    // consistency of the old item beyond this point, because the callback can
-    // do more than a simple memcpy() e.g. update external references. If there
-    // are any remaining handles to the old item, it is the caller's
-    // responsibility to invalidate them. The move can only fail after this
-    // statement if the old item has been removed or replaced, in which case it
-    // should be fine for it to be left in an inconsistent state.
-    config_.moveCb(oldItem, *newItemHdl, nullptr);
-  } else {
-    std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
-                oldItem.getSize());
-  }
 
   // Adding the item to mmContainer has to succeed since no one can remove the item
   auto& newContainer = getMMContainer(*newItemHdl);
@@ -1520,16 +1511,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     XDCHECK(newItemHdl->hasChainedItem());
   }
   newItemHdl.unmarkNascent();
-  auto srcTid = getTierId(oldItem);
-  auto dstTid = getTierId(*newItemHdl);
-  if (oldItem.isInclusive()) {
-    newItemHdl->markInclusive();
-    if (srcTid > dstTid) {
-      newItemHdl->setNextTierCopy(&oldItem);
-      XDCHECK_EQ(newItemHdl->getNextTierCopy(),&oldItem);
-    }
-    XDCHECK(newItemHdl->isInclusive());
-  }
   return true;
 }
 
@@ -1817,7 +1798,9 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       wakeUpWaiters(*candidate, {});
 
     } else {
-      (*stats_.tierWritebacks)[tid][pid][cid].inc();
+      if (candidate->getNextTierCopy() != static_cast<void*>(evictedToNext.getInternal())) {
+        (*stats_.tierWritebacks)[tid][pid][cid].inc();
+      }
       XDCHECK(!evictedToNext->isMarkedForEviction() && !evictedToNext->isMoving());
       XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
       XDCHECK(!candidate->isAccessible());
@@ -1983,6 +1966,7 @@ CacheAllocator<CacheTrait>::tryPromoteToNextMemoryTier(
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
       if (!moveRegularItemWithSync(item, newItemHdl)) {
+          unmarkMovingAndWakeUpWaiters(item,acquire(&item));
           return WriteHandle{};
       }
       if (item.isInclusive()) {
@@ -3611,7 +3595,6 @@ CacheAllocator<CacheTrait>::removeIf(Item& item, Fn&& predicate) {
 
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::promote(Item& item) {
-  XDCHECK(item.isMoving());
   XDCHECK(item.markedForPromotion());
   //move from tier 2 to tier 1
   auto promoted = tryPromoteToNextMemoryTier(item, true);
@@ -3621,9 +3604,6 @@ bool CacheAllocator<CacheTrait>::promote(Item& item) {
       wakeUpWaiters(item,std::move(promoted));
       return true;
   }
-  item.unmarkMoving();
-  auto hdl = acquire(&item);
-  wakeUpWaiters(item,std::move(hdl));
   return false;
 }
 
