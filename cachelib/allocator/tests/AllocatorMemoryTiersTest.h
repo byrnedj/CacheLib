@@ -207,6 +207,83 @@ class AllocatorMemoryTiersTest : public AllocatorTest<AllocatorT> {
     t->join();
   }
   
+  void testMultiTiersReplaceDuringEvictionWithHandles() {
+    std::unique_ptr<AllocatorT> alloc;
+    PoolId pool;
+    std::unique_ptr<std::thread> t;
+    std::unique_ptr<std::thread> r;
+    folly::Latch latch_t(1);
+    folly::Latch latch_r(1);
+    bool quit = false;
+
+    auto moveCb = [&] (typename AllocatorT::Item& oldItem,
+                       typename AllocatorT::Item& newItem,
+                       typename AllocatorT::Item* /* parentPtr */) {
+      auto key = oldItem.getKey();
+      if(!quit) {
+        // we need to replace only once because subsequent allocate calls
+        // will cause evictions recursevly
+        quit = true;
+        t = std::make_unique<std::thread>([&](){
+              auto handle = alloc->allocate(pool, key, std::string("new value").size());
+              // insertOrReplace() function is blocked by wait context
+              // till item is moved to next tier. So that, we should
+              // notify latch before calling insertOrReplace()
+              latch_t.count_down();
+              auto replaced = alloc->insertOrReplace(handle);
+              //here we are blocked until move completes
+              //the moveRegularItemWithSync method first
+              //calls the movecb
+              //    1. this thread is spawned 
+              //    2. insertOrReplace is called - which updates hashtable
+              //       and oldItem is marked unaccessible
+              //    3. this thread is blocked waiting to get newItemHandle
+              //       since oldItem is moving
+              //    4. moving thread fails because oldItem is unaccessible
+              //       - new allocation in next tier should be released (removed
+              //         from MM container too)
+              //    5. moving thread attempts to evict oldItem instead of
+              //       move to next tier - so oldItem should be markedForEviction
+            });
+        r = std::make_unique<std::thread>([&](){
+              latch_r.count_down();
+              auto handle = alloc->find(key);
+              //will block until move completes
+              //make sure i get new item handle
+              //item is marked moving by moving threads so we will wait on wait context
+              //TWO OPTIONS:
+              // 1. insertOrReplace happens before the find call
+              //    - so we will wait on item to be unmarked moving and
+              //      get new value when unmarked moving 
+              // 2. insertOrReplace happens after the find call
+              //    - still marked waiting though and have to wait to be unmarked waiting
+              //    - insertOrReplace will update entry in hashtable and this item
+              //      will no longer be valid - unaccessible
+              //    - since move will fail this item will be evicted and the wake up
+              //      waiters will pass null handle (but really - the new handle should
+              //      be given to this item)
+              //THIS TEST IS non-deterministic - THE NEXT TEST FORCES THE OPTIONS via gdb
+              ASSERT_NE(handle,nullptr);
+              ASSERT_NE(handle.get(),nullptr);
+              const char *m = reinterpret_cast<const char*>(handle->getMemory());
+              ASSERT_EQ(strcmp(m,"new value"),0);
+            });
+        // wait till async thread is running
+        latch_t.wait();
+        latch_r.wait();
+      }
+      memcpy(newItem.getMemory(), oldItem.getMemory(), oldItem.getSize());
+    };
+
+    testMultiTiersAsyncOpDuringMove(alloc, pool, quit, moveCb);
+
+    t->join();
+    r->join();
+
+    ASSERT(true);
+
+  }
+ 
   void testMultiTiersReplaceDuringEviction() {
     std::unique_ptr<AllocatorT> alloc;
     PoolId pool;

@@ -1243,6 +1243,9 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
   }
 
   handle.unmarkNascent();
+  if (replaced) {
+    wakeUpWaiters(*replaced,handle.clone());
+  }
 
   if (auto eventTracker = getEventTracker()) {
     XDCHECK(handle);
@@ -1465,6 +1468,11 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     XDCHECK(newItemHdl->isInclusive());
   }
 
+  // Adding the item to mmContainer has to succeed since no one can remove the item
+  auto& newContainer = getMMContainer(*newItemHdl);
+  auto mmContainerAdded = newContainer.add(*newItemHdl);
+  XDCHECK(mmContainerAdded);
+
   auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
                                    predicate);
   // another thread may have called insertOrReplace which could have
@@ -1485,10 +1493,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   //    ref to 0 and the item is recycled back to allocator.
 
 
-  // Adding the item to mmContainer has to succeed since no one can remove the item
-  auto& newContainer = getMMContainer(*newItemHdl);
-  auto mmContainerAdded = newContainer.add(*newItemHdl);
-  XDCHECK(mmContainerAdded);
 
   // no one can add or remove chained items at this point
   if (oldItem.hasChainedItem()) {

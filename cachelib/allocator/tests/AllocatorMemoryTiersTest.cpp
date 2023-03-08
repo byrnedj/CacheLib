@@ -29,6 +29,7 @@ TEST_F(LruAllocatorMemoryTiersTest, MultiTiersValidMixed) { this->testMultiTiers
 TEST_F(LruAllocatorMemoryTiersTest, MultiTiersBackgroundMovers ) { this->testMultiTiersBackgroundMovers(); }
 TEST_F(LruAllocatorMemoryTiersTest, MultiTiersRemoveDuringEviction) { this->testMultiTiersRemoveDuringEviction(); }
 TEST_F(LruAllocatorMemoryTiersTest, MultiTiersReplaceDuringEviction) { this->testMultiTiersReplaceDuringEviction(); }
+TEST_F(LruAllocatorMemoryTiersTest, MultiTiersReplaceDuringEvictionWithHandles) { this->testMultiTiersReplaceDuringEvictionWithHandles(); }
 TEST_F(LruAllocatorMemoryTiersTest, MultiTiersReplaceDuringEvictionWithReader) { this->testMultiTiersReplaceDuringEvictionWithReader(); }
 
 } // end of namespace tests
