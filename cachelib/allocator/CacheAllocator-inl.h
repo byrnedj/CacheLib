@@ -444,7 +444,6 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
 
     handle = acquire(new (memory) Item(key, size, creationTime, expiryTime));
     if (handle) {
-      handle->setNextTierCopy(0);
       handle.markNascent();
       (*stats_.fragmentationSize)[pid][cid].add(
           util::getFragmentation(*this, *handle));
@@ -1342,14 +1341,13 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
   XDCHECK(newItemHdl->isInMMContainer());
   XDCHECK(!newItemHdl->isAccessible());
   
+  auto tid = getTierId(oldItem);
+  auto allocInfo = allocator_[tid]->getAllocInfo(oldItem.getMemory());
+  auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
+  auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
   if (oldItem.isDirty()) {
     std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(), oldItem.getSize());
-    auto tid = getTierId(oldItem);
-    auto allocInfo = allocator_[tid]->getAllocInfo(oldItem.getMemory());
-    auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
-    auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
-    (*stats_.tierDirtyWritebacks)[tid][pid][cid].inc();
-  } 
+  }
 
   //replace in accessContainer
   auto predicate = [&](const Item& item){
@@ -1367,6 +1365,9 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
   }
 
   //we successfully replaced the old item in the AC - we can be done
+  if (!oldItem.isDirty()) {
+    (*stats_.tierDirtyWritebacks)[tid][pid][cid].inc();
+  }
   return true;
 }
 
@@ -1811,9 +1812,7 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       wakeUpWaiters(*candidate, {});
 
     } else {
-      if (candidate->getNextTierCopy() != static_cast<void*>(evictedToNext.getInternal())) {
-        (*stats_.tierWritebacks)[tid][pid][cid].inc();
-      }
+      (*stats_.tierWritebacks)[tid][pid][cid].inc();
       XDCHECK(!evictedToNext->isMarkedForEviction() && !evictedToNext->isMoving());
       XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
       XDCHECK(!candidate->isAccessible());
@@ -1979,7 +1978,6 @@ CacheAllocator<CacheTrait>::tryPromoteToNextMemoryTier(
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
       if (!moveRegularItemWithSync(item, newItemHdl)) {
-          unmarkMovingAndWakeUpWaiters(item,acquire(&item));
           return WriteHandle{};
       }
       if (item.isInclusive()) {

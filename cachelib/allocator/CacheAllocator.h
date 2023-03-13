@@ -2143,16 +2143,24 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
         } else {
             removeFromMMContainer(*candidate);
         }
+        bool incl = candidate->isInclusive();
         auto ref = candidate->unmarkMoving();
-        if (!candidate->isInclusive()) {
+        wakeUpWaiters(*candidate, std::move(promoted));
+        if (!incl) {
             XDCHECK_EQ(ref,0u);
             const auto res =
                 releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
             XDCHECK(res == ReleaseRes::kReleased);
         }
-        wakeUpWaiters(*candidate, std::move(promoted));
       } else {
-        unmarkMovingAndWakeUpWaiters(*candidate,acquire(candidate));
+        // we failed to allocate a new item, this item is no  longer moving
+        auto ref = unmarkMovingAndWakeUpWaiters(*candidate, {});
+        if (UNLIKELY(ref == 0)) {
+          const auto res =
+              releaseBackToAllocator(*candidate, 
+                      RemoveContext::kNormal, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
       }
     }
     return promotions;
