@@ -41,7 +41,7 @@ struct BackgroundMoverAPIWrapper {
                                         unsigned int pid,
                                         unsigned int cid,
                                         size_t batch) {
-    return cache.traverseAndPromoteItems(tid, pid, cid, batch);
+    return cache.traverseAndPromoteItems2(tid, pid, cid, batch);
   }
   
   static size_t traverseAndTierPromoteItems(C& cache,

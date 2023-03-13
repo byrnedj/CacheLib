@@ -55,6 +55,7 @@ void Reaper<CacheT>::reapSlabWalkMode() {
   ReaperAPIWrapper<CacheT>::traverseAndExpireItems(
       cache_, [&](void* ptr, facebook::cachelib::AllocInfo allocInfo) -> bool {
         XDCHECK(ptr);
+        return false;
         // see if we need to stop the traversal and accumulate counts to
         // global
         if (visits++ == kCheckThreshold) {
@@ -81,7 +82,7 @@ void Reaper<CacheT>::reapSlabWalkMode() {
         // container before we actually grab the
         // handle to the item and proceed to expire it.
         auto& item = *reinterpret_cast<Item*>(ptr);
-        if (!item.markedForPromotion()) {
+        if (!item.markedForPromotion() && item.getRefCount() != 0 && !item.isAccessible()) {
           return true; //try next item
         }
 
@@ -92,22 +93,22 @@ void Reaper<CacheT>::reapSlabWalkMode() {
           return true;
         }
 
-        //try {
-        //  // obtain a valid handle without disturbing the state of the item in
-        //  // cache.
-        //    auto reaped =
-        //        ReaperAPIWrapper<CacheT>::promote(cache_, item);
-        //    auto hdl = cache_.peek(key);
-        //    if (reaped) {
-        //      reaps++;
-        //      XDCHECK_EQ(cache_.getTierId(*hdl),0);
-        //    } else {
-        //      XDCHECK_EQ(cache_.getTierId(*hdl),1);
-        //    }
-        //} catch (const std::exception& e) {
-        //  numErrs_.fetch_add(1, std::memory_order_relaxed);
-        //  XLOGF(DBG, "Error while reaping. Msg = {}", e.what());
-        //}
+        try {
+          // obtain a valid handle without disturbing the state of the item in
+          // cache.
+            auto reaped =
+                ReaperAPIWrapper<CacheT>::promote(cache_, item);
+            auto hdl = cache_.peek(key);
+            if (reaped) {
+              reaps++;
+              XDCHECK_EQ(cache_.getTierId(*hdl),0);
+            } else {
+              XDCHECK_EQ(cache_.getTierId(*hdl),1);
+            }
+        } catch (const std::exception& e) {
+          numErrs_.fetch_add(1, std::memory_order_relaxed);
+          XLOGF(DBG, "Error while reaping. Msg = {}", e.what());
+        }
         return true;
       });
 

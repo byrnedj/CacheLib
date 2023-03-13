@@ -1977,7 +1977,7 @@ class CacheAllocator : public CacheBase {
         if (allocInfo.classId == cid && allocInfo.poolId == pid) {
             XDCHECK(ptr);
             Item *candidate = reinterpret_cast<Item*>(ptr);
-            if (candidate->markedForPromotion() && 
+            if (candidate->isAccessible() && candidate->getRefCount() == 0 && candidate->markedForPromotion() && 
                     candidate->markMoving(true)) {
                 XDCHECK(candidate->markedForPromotion());
                 //move from tier 2 to tier 1
@@ -2103,6 +2103,69 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
       XDCHECK(res == ReleaseRes::kReleased);
     }
     return evictions;
+  }
+  
+  size_t traverseAndPromoteItems2(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
+    size_t promotions = 0;
+    std::vector<Item*> candidates;
+    candidates.reserve(2*batch);
+
+    size_t tries = 0;
+    
+      while (tries < 2*batch) {
+        Item* item = const_cast<Item*>(reinterpret_cast<const Item*>(allocator_[tid]->getRandomAlloc()));
+        tries++;
+        if (item == nullptr) continue; // || item->isMoving() || !item->isAccessible() || item->getRefCount() != 0) continue;
+        //const auto allocInfo = allocator_[tid]->getAllocInfo(item->getMemory());
+        //if (allocInfo.classId == cid && allocInfo.poolId == pid) {
+            Item* candidate = item;
+            XDCHECK(candidate);
+
+            if (candidate->isChainedItem()) {
+              throw std::runtime_error("Not supported for chained items");
+            }
+
+            // TODO: only allow it for read-only items?
+            // or implement mvcc
+            if (candidate->markedForPromotion() && 
+                    candidate->markMoving(true)) {
+              candidates.push_back(candidate);
+            }
+
+          //}
+       }
+
+    for (Item *candidate : candidates) {
+      auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
+      if (promoted) {
+        promotions++;
+        candidate->unmarkForPromotion();
+        if (candidate->isInclusive()) {
+            XDCHECK_EQ(static_cast<void*>(candidate),promoted->getNextTierCopy());
+        } else {
+            removeFromMMContainer(*candidate);
+        }
+        bool incl = candidate->isInclusive();
+        auto ref = candidate->unmarkMoving();
+        wakeUpWaiters(*candidate, std::move(promoted));
+        if (!incl) {
+            XDCHECK_EQ(ref,0u);
+            const auto res =
+                releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+            XDCHECK(res == ReleaseRes::kReleased);
+        }
+      } else {
+        // we failed to allocate a new item, this item is no  longer moving
+        auto ref = unmarkMovingAndWakeUpWaiters(*candidate, {});
+        if (UNLIKELY(ref == 0)) {
+          const auto res =
+              releaseBackToAllocator(*candidate, 
+                      RemoveContext::kNormal, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
+      }
+    }
+    return promotions;
   }
 
   size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
