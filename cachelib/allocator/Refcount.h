@@ -270,8 +270,9 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
    */
   bool markForEviction() noexcept {
     auto predicate = [](const Value curValue) {
-      Value conditionBitMask = getAdminRef<kLinked>();
-      const bool flagSet = curValue & conditionBitMask;
+      //Value conditionBitMask = getAdminRef<kLinked>();
+      //const bool flagSet = curValue & conditionBitMask;
+      const bool flagSet = true;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       const bool accessible = curValue & getAdminRef<kAccessible>();
 
@@ -322,8 +323,9 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
    */
   bool markMoving(bool failIfRefNotZero) {
     auto predicate = [failIfRefNotZero](const Value curValue) {
-      Value conditionBitMask = getAdminRef<kLinked>();
-      const bool flagSet = curValue & conditionBitMask;
+      //Value conditionBitMask = getAdminRef<kLinked>();
+      const bool flagSet = true;
+      //const bool flagSet = curValue & conditionBitMask;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       if (failIfRefNotZero && (curValue & kAccessRefMask) != 0) {
         return false;

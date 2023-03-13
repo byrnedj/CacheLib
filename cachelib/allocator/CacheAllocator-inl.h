@@ -1066,23 +1066,24 @@ void CacheAllocator<CacheTrait>::release(Item* it, bool isNascent) {
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::removeFromMMContainer(Item& item) {
   // remove it from the mm container.
-  if (item.isInMMContainer()) {
-    auto& mmContainer = getMMContainer(item);
-    return mmContainer.remove(item);
-  }
-  return false;
+  //if (item.isInMMContainer()) {
+  //  auto& mmContainer = getMMContainer(item);
+  //  return mmContainer.remove(item);
+  //}
+  return true;
 }
 
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::replaceInMMContainer(Item& oldItem,
                                                       Item& newItem) {
-  auto& oldContainer = getMMContainer(oldItem);
-  auto& newContainer = getMMContainer(newItem);
-  if (&oldContainer == &newContainer) {
-    return oldContainer.replace(oldItem, newItem);
-  } else {
-    return oldContainer.remove(oldItem) && newContainer.add(newItem);
-  }
+  //auto& oldContainer = getMMContainer(oldItem);
+  //auto& newContainer = getMMContainer(newItem);
+  //if (&oldContainer == &newContainer) {
+  //  return oldContainer.replace(oldItem, newItem);
+  //} else {
+  //  return oldContainer.remove(oldItem) && newContainer.add(newItem);
+  //}
+  return true;
 }
 
 template <typename CacheTrait>
@@ -1094,14 +1095,15 @@ bool CacheAllocator<CacheTrait>::replaceInMMContainer(Item* oldItem,
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::replaceInMMContainer(EvictionIterator& oldItemIt,
                                                       Item& newItem) {
-  auto& oldContainer = getMMContainer(*oldItemIt);
-  auto& newContainer = getMMContainer(newItem);
+  //auto& oldContainer = getMMContainer(*oldItemIt);
+  //auto& newContainer = getMMContainer(newItem);
 
-  // This function is used for eviction across tiers
-  XDCHECK(&oldContainer != &newContainer);
-  oldContainer.remove(oldItemIt);
+  //// This function is used for eviction across tiers
+  //XDCHECK(&oldContainer != &newContainer);
+  //oldContainer.remove(oldItemIt);
 
-  return newContainer.add(newItem);
+  //return newContainer.add(newItem);
+  return true;
 }
 
 template <typename CacheTrait>
@@ -1125,12 +1127,12 @@ bool CacheAllocator<CacheTrait>::replaceChainedItemInMMContainer(
 
 template <typename CacheTrait>
 void CacheAllocator<CacheTrait>::insertInMMContainer(Item& item) {
-  XDCHECK(!item.isInMMContainer());
-  auto& mmContainer = getMMContainer(item);
-  if (!mmContainer.add(item)) {
-    throw std::runtime_error(folly::sformat(
-        "Invalid state. Node {} was already in the container.", &item));
-  }
+  //XDCHECK(!item.isInMMContainer());
+  //auto& mmContainer = getMMContainer(item);
+  //if (!mmContainer.add(item)) {
+  //  throw std::runtime_error(folly::sformat(
+  //      "Invalid state. Node {} was already in the container.", &item));
+  //}
 }
 
 /**
@@ -1478,10 +1480,10 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     XDCHECK(newItemHdl->isInclusive());
   }
 
-  // Adding the item to mmContainer has to succeed since no one can remove the item
-  auto& newContainer = getMMContainer(*newItemHdl);
-  auto mmContainerAdded = newContainer.add(*newItemHdl);
-  XDCHECK(mmContainerAdded);
+  //// Adding the item to mmContainer has to succeed since no one can remove the item
+  //auto& newContainer = getMMContainer(*newItemHdl);
+  //auto mmContainerAdded = newContainer.add(*newItemHdl);
+  //XDCHECK(mmContainerAdded);
 
   auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
                                    predicate);
@@ -1704,66 +1706,110 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
     Item* candidate = nullptr;
     typename NvmCacheT::PutToken token;
 
-    mmContainer.withEvictionIterator([this, pid, cid, &candidate, &toRecycle,
-                                      &searchTries, &mmContainer, &lastTier,
-                                      &token](auto&& itr) {
-      if (!itr) {
-        ++searchTries;
-        (*stats_.evictionAttempts)[pid][cid].inc();
-        return;
-      }
+    // Sampling from DRAM cache
+    while (candidate == nullptr) {
+        Item* item = const_cast<Item*>(reinterpret_cast<const Item*>(allocator_[tid]->getRandomAlloc()));
+        if (item == nullptr) continue;
+        const auto allocInfo = allocator_[tid]->getAllocInfo(item->getMemory());
+        if (allocInfo.classId == cid && allocInfo.poolId == pid) {
+          ++searchTries;
+          (*stats_.evictionAttempts)[pid][cid].inc();
 
-      while ((config_.evictionSearchTries == 0 ||
-              config_.evictionSearchTries > searchTries) &&
-             itr) {
-        ++searchTries;
-        (*stats_.evictionAttempts)[pid][cid].inc();
+          Item* toRecycle_ = item;
+          Item* candidate_ =
+              toRecycle_->isChainedItem()
+                  ? &toRecycle_->asChainedItem().getParentItem(compressor_)
+                  : toRecycle_;
 
-        auto* toRecycle_ = itr.get();
-        auto* candidate_ =
-            toRecycle_->isChainedItem()
-                ? &toRecycle_->asChainedItem().getParentItem(compressor_)
-                : toRecycle_;
+          if (lastTier) {
+            // if it's last tier, the item will be evicted
+            // need to create put token before marking it exclusive
+            token = createPutToken(*candidate_);
+          }
 
-        if (lastTier) {
-          // if it's last tier, the item will be evicted
-          // need to create put token before marking it exclusive
-          token = createPutToken(*candidate_);
-        }
+          if (lastTier && shouldWriteToNvmCache(*candidate_) && !token.isValid()) {
+            stats_.evictFailConcurrentFill.inc();
+          } else if ( (lastTier && candidate_->markForEviction()) ||
+                      (!lastTier && candidate_->markMoving(true)) ) {
+            XDCHECK(candidate_->isMoving() || candidate_->isMarkedForEviction());
+            // markForEviction to make sure no other thead is evicting the item
+            // nor holding a handle to that item if this is last tier
+            // since we won't be moving the item to the next tier
+            toRecycle = toRecycle_;
+            candidate = candidate_;
 
-        if (lastTier && shouldWriteToNvmCache(*candidate_) && !token.isValid()) {
-          stats_.evictFailConcurrentFill.inc();
-        } else if ( (lastTier && candidate_->markForEviction()) ||
-                    (!lastTier && candidate_->markMoving(true)) ) {
-          XDCHECK(candidate_->isMoving() || candidate_->isMarkedForEviction());
-          // markForEviction to make sure no other thead is evicting the item
-          // nor holding a handle to that item if this is last tier
-          // since we won't be moving the item to the next tier
-          toRecycle = toRecycle_;
-          candidate = candidate_;
+          }
 
-          // Check if parent changed for chained items - if yes, we cannot
-          // remove the child from the mmContainer as we will not be evicting
-          // it. We could abort right here, but we need to cleanup in case
-          // unmarkForEviction() returns 0 - so just go through normal path.
-          if (!toRecycle_->isChainedItem() ||
-              &toRecycle->asChainedItem().getParentItem(compressor_) ==
-                  candidate)
-            mmContainer.remove(itr);
-          return;
-        }
+          if (candidate_->hasChainedItem()) {
+            stats_.evictFailParentAC.inc();
+          } else {
+            stats_.evictFailAC.inc();
+          }
+          //failed to mark moving
+          //item += sizeof(
+       }
+    }
 
-        if (candidate_->hasChainedItem()) {
-          stats_.evictFailParentAC.inc();
-        } else {
-          stats_.evictFailAC.inc();
-        }
+    //mmContainer.withEvictionIterator([this, pid, cid, &candidate, &toRecycle,
+    //                                  &searchTries, &mmContainer, &lastTier,
+    //                                  &token](auto&& itr) {
+    //  if (!itr) {
+    //    ++searchTries;
+    //    (*stats_.evictionAttempts)[pid][cid].inc();
+    //    return;
+    //  }
 
-        ++itr;
-        XDCHECK(toRecycle == nullptr);
-        XDCHECK(candidate == nullptr);
-      }
-    });
+    //  while ((config_.evictionSearchTries == 0 ||
+    //          config_.evictionSearchTries > searchTries) &&
+    //         itr) {
+    //    ++searchTries;
+    //    (*stats_.evictionAttempts)[pid][cid].inc();
+
+    //    auto* toRecycle_ = itr.get();
+    //    auto* candidate_ =
+    //        toRecycle_->isChainedItem()
+    //            ? &toRecycle_->asChainedItem().getParentItem(compressor_)
+    //            : toRecycle_;
+
+    //    if (lastTier) {
+    //      // if it's last tier, the item will be evicted
+    //      // need to create put token before marking it exclusive
+    //      token = createPutToken(*candidate_);
+    //    }
+
+    //    if (lastTier && shouldWriteToNvmCache(*candidate_) && !token.isValid()) {
+    //      stats_.evictFailConcurrentFill.inc();
+    //    } else if ( (lastTier && candidate_->markForEviction()) ||
+    //                (!lastTier && candidate_->markMoving(true)) ) {
+    //      XDCHECK(candidate_->isMoving() || candidate_->isMarkedForEviction());
+    //      // markForEviction to make sure no other thead is evicting the item
+    //      // nor holding a handle to that item if this is last tier
+    //      // since we won't be moving the item to the next tier
+    //      toRecycle = toRecycle_;
+    //      candidate = candidate_;
+
+    //      // Check if parent changed for chained items - if yes, we cannot
+    //      // remove the child from the mmContainer as we will not be evicting
+    //      // it. We could abort right here, but we need to cleanup in case
+    //      // unmarkForEviction() returns 0 - so just go through normal path.
+    //      if (!toRecycle_->isChainedItem() ||
+    //          &toRecycle->asChainedItem().getParentItem(compressor_) ==
+    //              candidate)
+    //        mmContainer.remove(itr);
+    //      return;
+    //    }
+
+    //    if (candidate_->hasChainedItem()) {
+    //      stats_.evictFailParentAC.inc();
+    //    } else {
+    //      stats_.evictFailAC.inc();
+    //    }
+
+    //    ++itr;
+    //    XDCHECK(toRecycle == nullptr);
+    //    XDCHECK(candidate == nullptr);
+    //  }
+    //});
 
     if (!toRecycle)
       continue;
@@ -2461,7 +2507,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   }
 
   auto& item = *(handle.getInternal());
-  bool recorded = recordAccessInMMContainer(item, mode);
+  //bool recorded = recordAccessInMMContainer(item, mode);
 
   /* 
    * CLUsivity logic
@@ -2479,17 +2525,17 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
       //then we want the second tier item to be
       //updated in the access container
       //this will be an item handle
-      const auto itemCopy = item.getNextTierCopy();
-      const auto itemCopyHdl = acquire(static_cast<Item*>(itemCopy));
-      if (itemCopyHdl) recordAccessInMMContainer(*itemCopyHdl, mode);
+      //const auto itemCopy = item.getNextTierCopy();
+      //const auto itemCopyHdl = acquire(static_cast<Item*>(itemCopy));
+      //if (itemCopyHdl) recordAccessInMMContainer(*itemCopyHdl, mode);
   }
 
 
   // if parent is not recorded, skip children as well when the config is set
-  if (LIKELY(!item.hasChainedItem() ||
-             (!recorded && config_.isSkipPromoteChildrenWhenParentFailed()))) {
-    return;
-  }
+  //if (LIKELY(!item.hasChainedItem() ||
+  //           (!recorded && config_.isSkipPromoteChildrenWhenParentFailed()))) {
+  //  return;
+  //}
 
   forEachChainedItem(item, [this, mode](ChainedItem& chainedItem) {
     recordAccessInMMContainer(chainedItem, mode);
@@ -3612,8 +3658,24 @@ bool CacheAllocator<CacheTrait>::promote(Item& item) {
   if (promoted) {
       item.unmarkForPromotion();
       item.unmarkMoving();
-      wakeUpWaiters(item,std::move(promoted));
+      bool incl = item.isInclusive();
+      auto ref = item.unmarkMoving();
+      wakeUpWaiters(item, std::move(promoted));
+      if (!incl) {
+          XDCHECK_EQ(ref,0u);
+          const auto res =
+              releaseBackToAllocator(item, RemoveContext::kNormal, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+      }
       return true;
+  }
+  // we failed to allocate a new item, this item is no  longer moving
+  auto ref = unmarkMovingAndWakeUpWaiters(item, {});
+  if (UNLIKELY(ref == 0)) {
+    const auto res =
+        releaseBackToAllocator(item, 
+                RemoveContext::kNormal, false);
+    XDCHECK(res == ReleaseRes::kReleased);
   }
   return false;
 }
