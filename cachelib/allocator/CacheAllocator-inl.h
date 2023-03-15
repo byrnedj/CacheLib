@@ -1340,7 +1340,6 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
    * we assume that the nextTier item is in the mmContainer and is not
    * accessible
    */
-  XDCHECK(newItemHdl->isInMMContainer());
   XDCHECK(!newItemHdl->isAccessible());
   
   auto tid = getTierId(oldItem);
@@ -1699,117 +1698,66 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
   // Keep searching for a candidate until we were able to evict it
   // or until the search limit has been exhausted
   unsigned int searchTries = 0;
+  uint32_t allocSize = allocator_[tid]->getAllocSize(pid,cid);
   while ((config_.evictionSearchTries == 0 ||
           config_.evictionSearchTries > searchTries)) {
 
     Item* toRecycle = nullptr;
     Item* candidate = nullptr;
     typename NvmCacheT::PutToken token;
+        
+    Item* item = reinterpret_cast<Item*>(allocator_[tid]->getRandomSlab(pid,cid));
 
     // Sampling from DRAM cache
-    while (candidate == nullptr) {
-        Item* item = const_cast<Item*>(reinterpret_cast<const Item*>(allocator_[tid]->getRandomAlloc()));
-        if (item == nullptr) continue;
-        const auto allocInfo = allocator_[tid]->getAllocInfo(item->getMemory());
-        if (allocInfo.classId == cid && allocInfo.poolId == pid) {
-          ++searchTries;
-          (*stats_.evictionAttempts)[pid][cid].inc();
-
-          Item* toRecycle_ = item;
-          Item* candidate_ =
-              toRecycle_->isChainedItem()
-                  ? &toRecycle_->asChainedItem().getParentItem(compressor_)
-                  : toRecycle_;
-
-          if (lastTier) {
-            // if it's last tier, the item will be evicted
-            // need to create put token before marking it exclusive
-            token = createPutToken(*candidate_);
-          }
-
-          if (lastTier && shouldWriteToNvmCache(*candidate_) && !token.isValid()) {
-            stats_.evictFailConcurrentFill.inc();
-          } else if ( (lastTier && candidate_->markForEviction()) ||
-                      (!lastTier && candidate_->markMoving(true)) ) {
-            XDCHECK(candidate_->isMoving() || candidate_->isMarkedForEviction());
-            // markForEviction to make sure no other thead is evicting the item
-            // nor holding a handle to that item if this is last tier
-            // since we won't be moving the item to the next tier
-            toRecycle = toRecycle_;
-            candidate = candidate_;
-
-          }
-
-          if (candidate_->hasChainedItem()) {
-            stats_.evictFailParentAC.inc();
-          } else {
-            stats_.evictFailAC.inc();
-          }
-          //failed to mark moving
-          //item += sizeof(
+    while (config_.evictionSearchTries > searchTries) {
+       ++searchTries;
+       (*stats_.evictionAttempts)[pid][cid].inc();
+       while (item == nullptr) {
+           item = reinterpret_cast<Item*>(allocator_[tid]->getRandomSlab(pid,cid));
+           ++searchTries;
+           (*stats_.evictionAttempts)[pid][cid].inc();
+           if (searchTries > config_.evictionSearchTries) {
+               break;
+           }
        }
+
+       Item* toRecycle_ = item == nullptr ? nullptr : item;
+       if (toRecycle_ == nullptr) continue;
+       Item* candidate_ =
+           toRecycle_->isChainedItem()
+               ? &toRecycle_->asChainedItem().getParentItem(compressor_)
+               : toRecycle_;
+
+       if (lastTier) {
+         // if it's last tier, the item will be evicted
+         // need to create put token before marking it exclusive
+         token = createPutToken(*candidate_);
+       }
+
+       if (lastTier && shouldWriteToNvmCache(*candidate_) && !token.isValid()) {
+         stats_.evictFailConcurrentFill.inc();
+       } else if ( (lastTier && candidate_->markForEviction()) ||
+                   (!lastTier && candidate_->markMoving(true)) ) {
+         XDCHECK(candidate_->isMoving() || candidate_->isMarkedForEviction());
+         // markForEviction to make sure no other thead is evicting the item
+         // nor holding a handle to that item if this is last tier
+         // since we won't be moving the item to the next tier
+         toRecycle = toRecycle_;
+         candidate = candidate_;
+         break;
+
+       }
+
+       if (candidate_->hasChainedItem()) {
+         stats_.evictFailParentAC.inc();
+       } else {
+         stats_.evictFailAC.inc();
+       }
+       XDCHECK(!item->isMoving());
+       XDCHECK(!item->isMarkedForEviction());
+       item = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(item) + allocSize);
     }
 
-    //mmContainer.withEvictionIterator([this, pid, cid, &candidate, &toRecycle,
-    //                                  &searchTries, &mmContainer, &lastTier,
-    //                                  &token](auto&& itr) {
-    //  if (!itr) {
-    //    ++searchTries;
-    //    (*stats_.evictionAttempts)[pid][cid].inc();
-    //    return;
-    //  }
-
-    //  while ((config_.evictionSearchTries == 0 ||
-    //          config_.evictionSearchTries > searchTries) &&
-    //         itr) {
-    //    ++searchTries;
-    //    (*stats_.evictionAttempts)[pid][cid].inc();
-
-    //    auto* toRecycle_ = itr.get();
-    //    auto* candidate_ =
-    //        toRecycle_->isChainedItem()
-    //            ? &toRecycle_->asChainedItem().getParentItem(compressor_)
-    //            : toRecycle_;
-
-    //    if (lastTier) {
-    //      // if it's last tier, the item will be evicted
-    //      // need to create put token before marking it exclusive
-    //      token = createPutToken(*candidate_);
-    //    }
-
-    //    if (lastTier && shouldWriteToNvmCache(*candidate_) && !token.isValid()) {
-    //      stats_.evictFailConcurrentFill.inc();
-    //    } else if ( (lastTier && candidate_->markForEviction()) ||
-    //                (!lastTier && candidate_->markMoving(true)) ) {
-    //      XDCHECK(candidate_->isMoving() || candidate_->isMarkedForEviction());
-    //      // markForEviction to make sure no other thead is evicting the item
-    //      // nor holding a handle to that item if this is last tier
-    //      // since we won't be moving the item to the next tier
-    //      toRecycle = toRecycle_;
-    //      candidate = candidate_;
-
-    //      // Check if parent changed for chained items - if yes, we cannot
-    //      // remove the child from the mmContainer as we will not be evicting
-    //      // it. We could abort right here, but we need to cleanup in case
-    //      // unmarkForEviction() returns 0 - so just go through normal path.
-    //      if (!toRecycle_->isChainedItem() ||
-    //          &toRecycle->asChainedItem().getParentItem(compressor_) ==
-    //              candidate)
-    //        mmContainer.remove(itr);
-    //      return;
-    //    }
-
-    //    if (candidate_->hasChainedItem()) {
-    //      stats_.evictFailParentAC.inc();
-    //    } else {
-    //      stats_.evictFailAC.inc();
-    //    }
-
-    //    ++itr;
-    //    XDCHECK(toRecycle == nullptr);
-    //    XDCHECK(candidate == nullptr);
-    //  }
-    //});
 
     if (!toRecycle)
       continue;

@@ -492,6 +492,16 @@ class MemoryAllocator {
   const void* getRandomAlloc() const noexcept {
     return slabAllocator_.getRandomAlloc();
   }
+  
+  void* getRandomAlloc(PoolId pid, ClassId cid) const noexcept {
+    return slabAllocator_.getRandomAlloc(pid,cid);
+  }
+  Slab* getRandomSlab(PoolId pid, ClassId cid) const noexcept {
+    const auto& pool = getPool(pid);
+    const auto& allocClass = pool.getAllocationClass(cid);
+    return allocClass.getRandomSlab(); 
+  }
+
 
   // fetch the allocation class info corresponding to a given size in a pool.
   //

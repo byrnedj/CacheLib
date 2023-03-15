@@ -1,6 +1,6 @@
 {
   "cache_config": {
-    "cacheSizeMB": 8192,
+    "cacheSizeMB": 12192,
     "poolRebalanceIntervalSec": 0,
     "cacheDir": "/tmp/mem-tier"
   }, 

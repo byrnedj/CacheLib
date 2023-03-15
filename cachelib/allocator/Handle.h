@@ -266,7 +266,11 @@ struct ReadHandleImpl {
       if (isReady()) {
         return;
       }
-      baton_.wait();
+      bool posted = baton_.try_wait_for(std::chrono::seconds(10));
+      XDCHECK(posted);
+      if (!posted) {
+          std::abort();
+      }
       XDCHECK(isReady());
     }
 

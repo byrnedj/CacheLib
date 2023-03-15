@@ -52,8 +52,8 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   static_assert(std::is_unsigned<Value>::value,
                 "Unsigned Integral type required");
 
-  static constexpr uint8_t kNumFlags = 11;
-  static constexpr uint8_t kNumAdminRefBits = 3;
+  static constexpr uint8_t kNumFlags = 10;
+  static constexpr uint8_t kNumAdminRefBits = 4;
   static constexpr uint8_t kNumAccessRefBits = 18;
   static_assert(kNumAccessRefBits <= NumBits<Value>::value, "Invalid type");
   static_assert(kNumAccessRefBits >= 1, "Need at least one bit for refcount");
@@ -79,6 +79,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
 
     // exists in hash table
     kAccessible,
+    kRecent,
 
     // this flag indicates the allocation is being evicted or moved elsewhere
     // (can be triggered by a resize, rebalance or normal eviction operation)
@@ -115,7 +116,6 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     // Inclusive cache design control bits
     kInclusive,
     kDirty,
-    kCopy,
     kPromotion
 
   };
@@ -276,7 +276,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       const bool accessible = curValue & getAdminRef<kAccessible>();
 
-      if (!flagSet || alreadyExclusive) {
+      if (alreadyExclusive) {
         return false;
       }
       if ((curValue & kAccessRefMask) != 0) {
@@ -306,6 +306,34 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     auto raw = getRaw();
     return (raw & getAdminRef<kExclusive>()) && ((raw & kAccessRefMask) == 0);
   }
+  
+  /* 
+   * set recency bit can also use for promotion?
+   */
+  bool markRecent() {
+    auto predicate = [&](const Value curValue) {
+      Value conditionBitMask = getAdminRef<kAccessible>();
+      const bool alreadyRecent = curValue & getAdminRef<kRecent>();
+      const bool flagSet = curValue & conditionBitMask;
+      if (!flagSet || alreadyRecent) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    auto newValue = [](const Value curValue) {
+      // Set exclusive flag and make the ref count non-zero (to distinguish
+      // from exclusive case). This extra ref will not be reported to the
+      // user
+      return (curValue | getAdminRef<kRecent>());
+    };
+
+    return atomicUpdateValue(predicate, newValue);
+  }
 
   /**
    * The following functions correspond to whether or not an item is
@@ -323,14 +351,45 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
    */
   bool markMoving(bool failIfRefNotZero) {
     auto predicate = [failIfRefNotZero](const Value curValue) {
-      //Value conditionBitMask = getAdminRef<kLinked>();
-      const bool flagSet = true;
-      //const bool flagSet = curValue & conditionBitMask;
+      Value conditionBitMask = getAdminRef<kAccessible>();
+      const bool flagSet = curValue & conditionBitMask;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       if (failIfRefNotZero && (curValue & kAccessRefMask) != 0) {
         return false;
       }
       if (!flagSet || alreadyExclusive) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    auto newValue = [](const Value curValue) {
+      // Set exclusive flag and make the ref count non-zero (to distinguish
+      // from exclusive case). This extra ref will not be reported to the
+      // user
+      return (curValue + static_cast<Value>(1)) | getAdminRef<kExclusive>();
+    };
+
+    return atomicUpdateValue(predicate, newValue);
+  }
+  
+  bool markMoving(bool failIfRefNotZero, bool onlyIfNotRecent) {
+    auto predicate = [failIfRefNotZero, onlyIfNotRecent](const Value curValue) {
+      Value conditionBitMask = getAdminRef<kAccessible>();
+      const bool flagSet = curValue & conditionBitMask;
+      const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
+      const bool alreadyRecent = curValue & getAdminRef<kRecent>();
+      if (failIfRefNotZero && (curValue & kAccessRefMask) != 0) {
+        return false;
+      }
+      if (!flagSet || alreadyExclusive) {
+        return false;
+      }
+      if (onlyIfNotRecent && alreadyRecent) {
         return false;
       }
       if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
@@ -433,9 +492,9 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   /**
    * State of item's inclusiveness for background workers
    */
-  void markForCopy() noexcept { return setFlag<kCopy>(); }
-  bool markedForCopy() const noexcept { return isFlagSet<kCopy>(); }
-  void unmarkForCopy() noexcept { return unSetFlag<kCopy>(); }
+  //void markForCopy() noexcept { return setFlag<kCopy>(); }
+  //bool markedForCopy() const noexcept { return isFlagSet<kCopy>(); }
+  //void unmarkForCopy() noexcept { return unSetFlag<kCopy>(); }
   void markForPromotion() noexcept { return setFlag<kPromotion>(); }
   bool markedForPromotion() const noexcept { return isFlagSet<kPromotion>(); }
   void unmarkForPromotion() noexcept { return unSetFlag<kPromotion>(); }

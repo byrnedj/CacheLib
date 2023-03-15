@@ -211,17 +211,20 @@ void CacheItem<CacheTrait>::markDirty() noexcept {
 
 template <typename CacheTrait>
 void CacheItem<CacheTrait>::markForCopy() noexcept {
-  ref_.markForCopy();
+  //ref_.markForCopy();
+  return;
 }
 
 template <typename CacheTrait>
 bool CacheItem<CacheTrait>::markedForCopy() const noexcept {
-  return ref_.markedForCopy();
+  //return ref_.markedForCopy();
+  return true;
 }
 
 template <typename CacheTrait>
 void CacheItem<CacheTrait>::unmarkForCopy() noexcept {
-  ref_.unmarkForCopy();
+  //ref_.unmarkForCopy();
+  return;
 }
 
 template <typename CacheTrait>

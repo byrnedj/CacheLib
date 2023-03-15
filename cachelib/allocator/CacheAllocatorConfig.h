@@ -524,7 +524,7 @@ class CacheAllocatorConfig {
 
   // the number of tries to search for an item to evict
   // 0 means it's infinite
-  unsigned int evictionSearchTries{50};
+  unsigned int evictionSearchTries{5000};
 
   // If refcount is larger than this threshold, we will use shared_ptr
   // for handles in IOBuf chains.

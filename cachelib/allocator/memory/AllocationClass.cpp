@@ -199,6 +199,15 @@ void AllocationClass::setupCurrentSlabLocked() {
   allocatedSlabs_.push_back(slab);
 }
 
+Slab* AllocationClass::getRandomSlab() const noexcept {
+  if (!allocatedSlabs_.empty()) {
+    auto idx =
+        folly::Random::rand32(static_cast<uint32_t>(allocatedSlabs_.size()));
+    return allocatedSlabs_[idx];
+  }
+  return nullptr;
+}
+
 const Slab* AllocationClass::getSlabForReleaseLocked() const noexcept {
   if (!freeSlabs_.empty()) {
     return freeSlabs_.front();

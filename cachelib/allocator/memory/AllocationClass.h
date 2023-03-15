@@ -307,6 +307,7 @@ class AllocationClass {
   //
   // @throw std::logic_error if the object state can not be serialized
   serialization::AllocationClassObject saveState() const;
+  Slab* getRandomSlab() const noexcept;
 
  private:
   // check if the state of the AllocationClass is valid and if not, throws an

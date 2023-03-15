@@ -462,6 +462,44 @@ bool SlabAllocator::isMemoryInSlab(const void* ptr,
   return getSlabForMemory(ptr) == slab;
 }
 
+void* SlabAllocator::getRandomAlloc(PoolId pid, ClassId cid) const noexcept {
+  // disregard the space we use for slab header.
+  const auto validMaxOffset =
+      memorySize_ - (reinterpret_cast<uintptr_t>(slabMemoryStart_) -
+                     reinterpret_cast<uintptr_t>(memoryStart_));
+
+  // pick a random location in the memory.
+  const auto offset = folly::Random::rand64(0, validMaxOffset);
+  auto* memory = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(slabMemoryStart_) + offset);
+
+  const auto* slab = getSlabForMemory(memory);
+  const auto* header = getSlabHeader(slab);
+  if (header == nullptr)  {
+    return nullptr;
+  }
+
+  XDCHECK_GE(reinterpret_cast<uintptr_t>(memory),
+             reinterpret_cast<uintptr_t>(slab));
+
+  const auto allocSize = header->allocSize;
+  if (allocSize == 0) {
+    return nullptr;
+  }
+
+  if (header->poolId != pid && header->classId != cid) {
+    return nullptr;
+  }
+
+  const auto maxAllocIdx = Slab::kSize / allocSize - 1;
+  auto allocIdx = (reinterpret_cast<uintptr_t>(memory) -
+                   reinterpret_cast<uintptr_t>(slab)) /
+                  allocSize;
+  allocIdx = allocIdx > maxAllocIdx ? maxAllocIdx : allocIdx;
+  return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(slab) +
+                                       allocSize * allocIdx);
+}
+
 const void* SlabAllocator::getRandomAlloc() const noexcept {
   // disregard the space we use for slab header.
   const auto validMaxOffset =
