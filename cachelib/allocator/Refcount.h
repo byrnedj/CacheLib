@@ -53,8 +53,8 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
                 "Unsigned Integral type required");
 
   static constexpr uint8_t kNumFlags = 10;
-  static constexpr uint8_t kNumAdminRefBits = 4;
-  static constexpr uint8_t kNumAccessRefBits = 18;
+  static constexpr uint8_t kNumAdminRefBits = 5;
+  static constexpr uint8_t kNumAccessRefBits = 17;
   static_assert(kNumAccessRefBits <= NumBits<Value>::value, "Invalid type");
   static_assert(kNumAccessRefBits >= 1, "Need at least one bit for refcount");
   static_assert(
@@ -80,6 +80,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     // exists in hash table
     kAccessible,
     kRecent,
+    kCopy,
 
     // this flag indicates the allocation is being evicted or moved elsewhere
     // (can be triggered by a resize, rebalance or normal eviction operation)
@@ -270,13 +271,12 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
    */
   bool markForEviction() noexcept {
     auto predicate = [](const Value curValue) {
-      //Value conditionBitMask = getAdminRef<kLinked>();
-      //const bool flagSet = curValue & conditionBitMask;
-      const bool flagSet = true;
+      Value conditionBitMask = getAdminRef<kCopy>();
+      const bool flagSet = curValue & conditionBitMask;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       const bool accessible = curValue & getAdminRef<kAccessible>();
 
-      if (alreadyExclusive) {
+      if (alreadyExclusive || flagSet) {
         return false;
       }
       if ((curValue & kAccessRefMask) != 0) {
@@ -408,6 +408,34 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
 
     return atomicUpdateValue(predicate, newValue);
   }
+  
+  bool markMovingIfRefCount(uint32_t count) {
+    auto predicate = [count](const Value curValue) {
+      Value conditionBitMask = getAdminRef<kAccessible>();
+      const bool flagSet = curValue & conditionBitMask;
+      const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
+      if (count != (curValue & kAccessRefMask)) {
+        return false;
+      }
+      if (!flagSet || alreadyExclusive) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    auto newValue = [](const Value curValue) {
+      // Set exclusive flag and make the ref count non-zero (to distinguish
+      // from exclusive case). This extra ref will not be reported to the
+      // user
+      return (curValue + static_cast<Value>(1)) | getAdminRef<kExclusive>();
+    };
+
+    return atomicUpdateValue(predicate, newValue);
+  }
 
   Value unmarkMoving() noexcept {
     XDCHECK(isMoving());
@@ -492,9 +520,18 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   /**
    * State of item's inclusiveness for background workers
    */
-  //void markForCopy() noexcept { return setFlag<kCopy>(); }
-  //bool markedForCopy() const noexcept { return isFlagSet<kCopy>(); }
-  //void unmarkForCopy() noexcept { return unSetFlag<kCopy>(); }
+  void markForCopy() noexcept { 
+    Value bitMask = getAdminRef<kCopy>();
+    __atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+  }
+  bool markedForCopy() const noexcept { 
+    return getRaw() & getAdminRef<kCopy>();
+  }
+  Value unmarkForCopy() noexcept {
+    XDCHECK(markedForCopy());
+    Value bitMask = ~getAdminRef<kCopy>();
+    return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
+  }
   void markForPromotion() noexcept { return setFlag<kPromotion>(); }
   bool markedForPromotion() const noexcept { return isFlagSet<kPromotion>(); }
   void unmarkForPromotion() noexcept { return unSetFlag<kPromotion>(); }

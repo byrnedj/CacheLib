@@ -21,6 +21,7 @@
 namespace facebook {
 namespace cachelib {
 
+
 template <typename CacheTrait>
 CacheAllocator<CacheTrait>::CacheAllocator(Config config)
     : CacheAllocator(InitMemType::kNone, config) {
@@ -848,6 +849,9 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
   }
   const auto tid = getTierId(it);
   const auto allocInfo = allocator_[tid]->getAllocInfo(it.getMemory());
+  if (it.getNextTierCopy()) {
+      it.setNextTierCopy(0);
+  }
 
   if (ctx == RemoveContext::kEviction) {
     const auto timeNow = util::getCurrentTimeSec();
@@ -882,9 +886,6 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
     config_.removeCb(RemoveCbData{ctx, it, viewAsChainedAllocsRange(it)});
   }
 
-  if (it.getNextTierCopy()) {
-      it.setNextTierCopy(0);
-  }
 
   // only skip destructor for evicted items that are either in the queue to put
   // into nvm or already in nvm
@@ -1464,7 +1465,7 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
 
   auto predicate = [&](const Item& item){
     // we rely on moving flag being set (it should block all readers)
-    XDCHECK(item.getRefCount() == 0);
+    //XDCHECK(item.getRefCount() == 0);
     return true;
   };
   
@@ -1474,7 +1475,13 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     newItemHdl->markInclusive();
     if (srcTid > dstTid) {
       newItemHdl->setNextTierCopy(&oldItem);
+      oldItem.markForCopy();
       XDCHECK_EQ(newItemHdl->getNextTierCopy(),&oldItem);
+    } else if ( (srcTid < dstTid) && 
+                ( oldItem.getNextTierCopy() == 
+                  static_cast<void*>(newItemHdl.get()) ) ) {
+      newItemHdl->unmarkForCopy();
+      oldItem.setNextTierCopy(0);
     }
     XDCHECK(newItemHdl->isInclusive());
   }
@@ -1493,6 +1500,7 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   if (!replaced) {
       return false;
   }
+  newItemHdl.unmarkNascent();
   // what if another thread calls insertOrReplace now when
   // the item is moving and already replaced in the hash table?
   // 1. it succeeds in updating the hash table - so there is
@@ -1525,7 +1533,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     XDCHECK(!oldItem.hasChainedItem());
     XDCHECK(newItemHdl->hasChainedItem());
   }
-  newItemHdl.unmarkNascent();
   return true;
 }
 
@@ -1686,6 +1693,7 @@ void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
 
   // Since we managed to mark the item for eviction we must be the only
   // owner of the item.
+  it.unmarkForCopy();
   const auto ref = it.unmarkForEviction();
   XDCHECK(ref == 0u);
 }
@@ -1753,8 +1761,6 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
        } else {
          stats_.evictFailAC.inc();
        }
-       XDCHECK(!item->isMoving());
-       XDCHECK(!item->isMarkedForEviction());
        item = reinterpret_cast<Item*>(reinterpret_cast<uintptr_t>(item) + allocSize);
     }
 
@@ -1911,6 +1917,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
             return WriteHandle{};
         }
         XDCHECK_EQ(nextTierItemHdl->getKey(),item.getKey());
+        item.setNextTierCopy(0);
         item.unmarkMoving();
         return nextTierItemHdl;
     }
@@ -2467,7 +2474,40 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   const auto tid = getTierId(item);
   stats_.numCacheTierHits[tid].inc();
   if (tid > 0) {
-      item.markForPromotion();
+      //item.markForPromotion();
+      //spawn a fiber to do the promotion
+      if (mode == AccessMode::kRead) {
+        auto promoter = [&](Item& item) {
+            bool moving = item.markMovingIfRefCount(1);
+            if (moving) {
+                auto promoted = tryPromoteToNextMemoryTier(item, true);
+                if (promoted) {
+                    bool incl = item.isInclusive();
+                    auto ref = item.unmarkMoving();
+                    wakeUpWaiters(item, std::move(promoted));
+                    if (!incl) {
+                        XDCHECK_EQ(ref,0u);
+                        const auto res =
+                            releaseBackToAllocator(item, RemoveContext::kNormal, false);
+                        XDCHECK(res == ReleaseRes::kReleased);
+                    }
+                    return;
+                }
+                // we failed to allocate a new item, this item is no  longer moving
+                auto ref = unmarkMovingAndWakeUpWaiters(item, {});
+                if (UNLIKELY(ref == 0)) {
+                  const auto res =
+                      releaseBackToAllocator(item, 
+                              RemoveContext::kNormal, false);
+                  XDCHECK(res == ReleaseRes::kReleased);
+                }
+                return;
+            }
+          };
+        //promoterPool.AddTask(promoter, this, item);
+        promoter(item);
+      }
+      
   } else if (item.isInclusive()) {
       //if item is inclusive and in the first tier
       //then we want the second tier item to be

@@ -280,6 +280,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
   bool isAccessible() const noexcept;
   void markInclusive() noexcept;
   bool markMoving(bool failIfRefNotZero);
+  bool markMovingIfRefCount(uint32_t count);
   bool isMoving() const noexcept;
   bool markedForPromotion() const noexcept;
  protected:
@@ -355,7 +356,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
    */
   void markForCopy() noexcept;
   bool markedForCopy() const noexcept;
-  void unmarkForCopy() noexcept;
+  RefcountWithFlags::Value unmarkForCopy() noexcept;
   
   void markForPromotion() noexcept;
   void unmarkForPromotion() noexcept;

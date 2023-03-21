@@ -33,6 +33,8 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <queue>
+#include <thread>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion"
@@ -65,6 +67,7 @@
 #include "cachelib/allocator/RebalanceStrategy.h"
 #include "cachelib/allocator/Refcount.h"
 #include "cachelib/allocator/TempShmMapping.h"
+#include "cachelib/allocator/ThreadPool.h"
 #include "cachelib/allocator/TlsActiveItemRing.h"
 #include "cachelib/allocator/TypedHandle.h"
 #include "cachelib/allocator/Util.h"
@@ -259,6 +262,9 @@ class CacheAllocator : public CacheBase {
     AllocInfo allocInfo_{};
     bool fromNvm_ = false;
   };
+
+
+  ThreadPool<CacheT> promoterPool;
 
   // holds information about removal, used in RemoveCb
   struct RemoveCbData {
@@ -1964,6 +1970,7 @@ class CacheAllocator : public CacheBase {
   }
 
   bool promote(Item& item);
+  //bool tryPromoteRead(Item& item);
  
   // exposed for the background mover to run per slab basis
   size_t traverseAndTierPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch ) {
@@ -2341,6 +2348,7 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
   static bool itemExpiryPredicate(const Item& item) {
     return item.getRefCount() == 1 && item.isExpired();
   }
+
 
   std::unique_ptr<Deserializer> createDeserializer();
 

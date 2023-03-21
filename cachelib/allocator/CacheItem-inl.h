@@ -211,20 +211,19 @@ void CacheItem<CacheTrait>::markDirty() noexcept {
 
 template <typename CacheTrait>
 void CacheItem<CacheTrait>::markForCopy() noexcept {
-  //ref_.markForCopy();
+  ref_.markForCopy();
   return;
 }
 
 template <typename CacheTrait>
 bool CacheItem<CacheTrait>::markedForCopy() const noexcept {
-  //return ref_.markedForCopy();
+  return ref_.markedForCopy();
   return true;
 }
 
 template <typename CacheTrait>
-void CacheItem<CacheTrait>::unmarkForCopy() noexcept {
-  //ref_.unmarkForCopy();
-  return;
+RefcountWithFalgs::Value CacheItem<CacheTrait>::unmarkForCopy() noexcept {
+  return ref_.unmarkForCopy();
 }
 
 template <typename CacheTrait>
@@ -295,6 +294,11 @@ bool CacheItem<CacheTrait>::markForEvictionWhenMoving() {
 template <typename CacheTrait>
 bool CacheItem<CacheTrait>::markMoving(bool failIfRefNotZero) {
   return ref_.markMoving(failIfRefNotZero);
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::markMovingIfRefCount(uint32_t count) {
+  return ref_.markMovingIfRefCount(count);
 }
 
 template <typename CacheTrait>
