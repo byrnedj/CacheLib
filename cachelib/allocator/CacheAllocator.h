@@ -25,6 +25,7 @@
 #include <folly/hash/Hash.h>
 #include <folly/container/F14Map.h>
 #include <gtest/gtest.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include <chrono>
 #include <functional>
@@ -315,6 +316,9 @@ class CacheAllocator : public CacheBase {
     // the pool that this item is/was
     PoolId pool;
   };
+
+  folly::CPUThreadPoolExecutor threadPool_;
+
 
   // call back to execute when moving an item, this could be a simple memcpy
   // or something more complex.
@@ -1359,10 +1363,11 @@ class CacheAllocator : public CacheBase {
   static_assert((sizeof(typename MMType::template Hook<Item>) +
                  sizeof(typename AccessType::template Hook<Item>) +
                  sizeof(typename RefcountWithFlags::Value) + sizeof(uint32_t) +
+                 sizeof(void*) +
                  sizeof(uint32_t) + sizeof(KAllocation)) == sizeof(Item),
                 "vtable overhead");
   // Check for CompressedPtr single/multi tier support
-  static_assert(32 == sizeof(Item), "item overhead is 32 bytes");
+  static_assert(40 == sizeof(Item), "item overhead is 40 bytes");
 
   // make sure there is no overhead in ChainedItem on top of a regular Item
   static_assert(sizeof(Item) == sizeof(ChainedItem),
@@ -1620,6 +1625,7 @@ class CacheAllocator : public CacheBase {
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
   bool moveRegularItemWithSync(Item& oldItem, WriteHandle& newItemHdl);
+  bool handleInclusiveWriteback(Item& oldItem, WriteHandle& newItemHdl);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's exclusive bit has been set. The user supplied
@@ -1788,7 +1794,7 @@ class CacheAllocator : public CacheBase {
   //
   // @return valid handle to the item. This will be the last
   //         handle to the item. On failure an empty handle.
-  WriteHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, Item& item, bool fromBgThread);
+  WriteHandle tryEvictToNextMemoryTier(TierId tid, PoolId pid, ClassId cid, Item& item, bool fromBgThread);
 
   WriteHandle tryPromoteToNextMemoryTier(TierId tid, PoolId pid, Item& item, bool fromBgThread);
 

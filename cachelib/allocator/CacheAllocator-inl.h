@@ -98,7 +98,8 @@ CacheAllocator<CacheTrait>::CacheAllocator(
       // nvmCacheState's current time in sync
       nvmCacheState_{cacheInstanceCreationTime_, config_.cacheDir,
                      config_.isNvmCacheEncryptionEnabled(),
-                     config_.isNvmCacheTruncateAllocSizeEnabled()} {}
+                     config_.isNvmCacheTruncateAllocSizeEnabled()},
+      threadPool_(10) {}
 
 template <typename CacheTrait>
 CacheAllocator<CacheTrait>::~CacheAllocator() {
@@ -845,6 +846,9 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
   }
   const auto tid = getTierId(it);
   const auto allocInfo = allocator_[tid]->getAllocInfo(it.getMemory());
+  if (it.getNextTierCopy()) {
+      it.setNextTierCopy(0);
+  }
 
   if (ctx == RemoveContext::kEviction) {
     const auto timeNow = util::getCurrentTimeSec();
@@ -1197,11 +1201,19 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
 
     replaced = accessContainer_->insertOrReplace(*(handle.getInternal()));
 
-    if (replaced && replaced->isNvmClean() && !replaced->isNvmEvicted()) {
-      // item is to be replaced and the destructor will be executed
-      // upon memory released, mark it in nvm to avoid destructor
-      // executed from nvm
-      nvmCache_->markNvmItemRemovedLocked(hk);
+    if (replaced) {
+      if (handle->isInclusive()) {
+          handle->markDirty();
+          handle->setNextTierCopy(replaced->getNextTierCopy());
+          replaced->setNextTierCopy(0);
+      }
+      if (replaced->isNvmClean() && !replaced->isNvmEvicted()) {
+        // item is to be replaced and the destructor will be executed
+        // upon memory released, mark it in nvm to avoid destructor
+        // executed from nvm
+        nvmCache_->markNvmItemRemovedLocked(hk);
+      }
+
     }
   } catch (const std::exception&) {
     removeFromMMContainer(*(handle.getInternal()));
@@ -1301,6 +1313,62 @@ size_t CacheAllocator<CacheTrait>::wakeUpWaitersLocked(folly::StringPiece key,
 }
 
 template <typename CacheTrait>
+bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
+        Item& oldItem, WriteHandle& newItemHdl) {
+  
+  XDCHECK(oldItem.isMoving());
+
+  if (!newItemHdl) {
+      return false;
+  }
+
+  if (newItemHdl->getSize() != oldItem.getSize()) {
+      return false;
+  }
+
+  /* 
+   * we assume that the nextTier item is not in the mmContainer and is not
+   * accessible
+   */
+  XDCHECK(!newItemHdl->isAccessible());
+  XDCHECK(!newItemHdl->isInMMContainer());
+  
+  auto tid = getTierId(oldItem);
+  auto allocInfo = allocator_[tid]->getAllocInfo(oldItem.getMemory());
+  auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
+  auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
+  if (oldItem.isDirty()) {
+    std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(), oldItem.getSize());
+    (*stats_.numWritebacks)[tid][pid][cid].inc();
+  }
+
+  newItemHdl->unmarkCopy();
+  newItemHdl->setNextTierCopy(0);
+  oldItem.setNextTierCopy(0);
+  oldItem.unmarkCopy();
+  //replace in accessContainer
+  auto predicate = [&](const Item& item){
+    // we rely on moving flag being set (it should block all readers)
+    XDCHECK(item.getRefCount() == 0);
+    return true;
+  };
+  
+  auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
+                         predicate);
+  if (!replaced) {
+      //we failed to replace - this means there was an insert or replace
+      //so both items can and should be released back to allocator
+      return replaced;
+  }
+
+  auto& newContainer = getMMContainer(*newItemHdl);
+  auto mmContainerAdded = newContainer.add(*newItemHdl);
+  XDCHECK(mmContainerAdded);
+
+  return true;
+}
+
+template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     Item& oldItem, WriteHandle& newItemHdl) {
   //on function exit - the new item handle is no longer moving
@@ -1340,9 +1408,27 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
 
   auto predicate = [&](const Item& item){
     // we rely on moving flag being set (it should block all readers)
-    XDCHECK(item.getRefCount() == 0);
+    //XDCHECK_EQ(item.getRefCount(),0);
     return true;
   };
+
+  auto srcTid = getTierId(oldItem);
+  auto dstTid = getTierId(*newItemHdl);
+  if (oldItem.isInclusive()) {
+    newItemHdl->markInclusive();
+    if (srcTid > dstTid) { //promotion
+      newItemHdl->setNextTierCopy(&oldItem);
+      oldItem.markCopy();
+      oldItem.setNextTierCopy(static_cast<void*>(newItemHdl.get()));
+      XDCHECK_EQ(newItemHdl->getNextTierCopy(),&oldItem);
+    } else if ( (srcTid < dstTid) ) { //evict to next tier
+      newItemHdl->unmarkCopy();
+      oldItem.setNextTierCopy(0);
+      oldItem.unmarkCopy();
+      newItemHdl->setNextTierCopy(0);
+    }
+    XDCHECK(newItemHdl->isInclusive());
+  }
 
   auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
                                    predicate);
@@ -1558,6 +1644,12 @@ template <typename CacheTrait>
 void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
   XDCHECK(it.isMarkedForEviction());
   XDCHECK(it.getRefCount() == 0);
+  if (it.isCopy()) {
+    XDCHECK(false);
+    Item *tier1 = static_cast<Item*>(it.getNextTierCopy());
+    if (tier1 != nullptr) tier1->setNextTierCopy(0);
+    it.unmarkCopy();
+  }
   accessContainer_->remove(it);
   removeFromMMContainer(it);
 
@@ -1676,6 +1768,20 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       // but rather just evicting all together, no need to
       // markForEvictionWhenMoving
       auto ret = lastTier ? true : candidate->markForEvictionWhenMoving();
+      if (!lastTier) {
+          Item *copy = static_cast<Item*>(candidate->getNextTierCopy());
+          if (copy) {
+              bool marked = copy->markForEvictionNotAccessible();
+              while (!marked) {
+                marked = copy->markForEvictionNotAccessible();
+              }
+              XDCHECK(marked);
+              unlinkItemForEviction(*copy);
+              const auto res =
+                  releaseBackToAllocator(*copy, RemoveContext::kNormal, false);
+              XDCHECK(res == ReleaseRes::kReleased);
+          }
+      }
       XDCHECK(ret);
 
       unlinkItemForEviction(*candidate);
@@ -1694,8 +1800,9 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
       XDCHECK(!candidate->isAccessible());
       XDCHECK(candidate->getKey() == evictedToNext->getKey());
-
-      (*stats_.numWritebacks)[tid][pid][cid].inc();
+      if (!candidate->isInclusive()) {
+        (*stats_.numWritebacks)[tid][pid][cid].inc();
+      }
       wakeUpWaiters(*candidate, std::move(evictedToNext));
     }
 
@@ -1778,7 +1885,7 @@ bool CacheAllocator<CacheTrait>::shouldWriteToNvmCacheExclusive(
 template <typename CacheTrait>
 typename CacheAllocator<CacheTrait>::WriteHandle
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
-    TierId tid, PoolId pid, Item& item, bool fromBgThread) {
+    TierId tid, PoolId pid, ClassId cid, Item& item, bool fromBgThread) {
   XDCHECK(item.isMoving());
   XDCHECK(item.getRefCount() == 0);
   if(item.hasChainedItem()) return WriteHandle{}; // TODO: We do not support ChainedItem yet
@@ -1786,6 +1893,22 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
     accessContainer_->remove(item);
     item.unmarkMoving();
     return acquire(&item);
+  }
+  if (item.isInclusive()) {
+    Item *nextTierItem = static_cast<Item*>(item.getNextTierCopy());
+    if (nextTierItem) {
+        auto nextTierItemHdl = acquire(nextTierItem);
+        if (!handleInclusiveWriteback(item, nextTierItemHdl)) {
+            return WriteHandle{};
+        }
+        XDCHECK_EQ(nextTierItemHdl->getKey(),item.getKey());
+        item.setNextTierCopy(0);
+        item.unmarkMoving();
+        return nextTierItemHdl;
+    } else {
+        (*stats_.numWritebacks)[tid][pid][cid].inc();
+        //else there is no nextTierCopy so we need to writeback
+    }
   }
 
   TierId nextTier = tid; // TODO - calculate this based on some admission policy
@@ -1818,8 +1941,8 @@ template <typename CacheTrait>
 typename CacheAllocator<CacheTrait>::WriteHandle
 CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(Item& item, bool fromBgThread) {
   auto tid = getTierId(item);
-  auto pid = allocator_[tid]->getAllocInfo(item.getMemory()).poolId;
-  return tryEvictToNextMemoryTier(tid, pid, item, fromBgThread);
+  auto info = allocator_[tid]->getAllocInfo(item.getMemory());
+  return tryEvictToNextMemoryTier(tid, info.poolId, info.classId, item, fromBgThread);
 }
 
 template <typename CacheTrait>
@@ -2283,8 +2406,93 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   }
 
   auto& item = *(handle.getInternal());
+  XDCHECK(!item.isCopy());
   bool recorded = recordAccessInMMContainer(item, mode);
 
+  /* 
+   * CLUsivity logic
+   *  - if item is not in first tier then we should mark it for
+   *    promtion for the background reaper
+   *  - if item is inclusive and in the first tier we should
+   *    make the second tier item updated in access container
+   */
+  const auto tid = getTierId(item);
+  const auto allocInfo = getAllocInfo(item.getMemory());
+  const auto pid = allocInfo.poolId;
+  const auto cid = allocInfo.classId;
+  if (tid > 0) {
+      //spawn a fiber to do the promotion
+      if (mode == AccessMode::kRead) {
+        //Item *itemPtr = const_cast<Item*>(handle.get());
+        //threadPool_.add([this,itemPtr,tid,pid,cid]() {
+        //    WriteHandle toPromoteHdl{};
+        //    if (itemPtr) {
+        //        toPromoteHdl = acquire(itemPtr);
+        //    } else {
+        //        return;
+        //    }
+        //    if (!toPromoteHdl) return;
+        //    const auto tid = getTierId(*toPromoteHdl);
+        //    if (tid < 1) return;
+        //    XCHECK_EQ(getTierId(*toPromoteHdl),1);
+        //    bool moving = toPromoteHdl->markMovingIfRefCount(2);
+        //    if (moving) {
+        //        auto promoted = tryPromoteToNextMemoryTier(*toPromoteHdl, true);
+        //        if (promoted) {
+        //          auto& mmContainer = getMMContainer(tid, pid, cid);
+        //          mmContainer.remove(*toPromoteHdl);
+        //          if (toPromoteHdl->isInclusive()) {
+        //              XDCHECK(toPromoteHdl->isCopy());
+        //          } else {
+        //              XDCHECK(!toPromoteHdl->isAccessible());
+        //              XDCHECK(!toPromoteHdl->isInMMContainer());
+        //              XDCHECK_GE(toPromoteHdl->getRefCount(),1);
+        //          }
+        //          wakeUpWaiters(*toPromoteHdl, std::move(promoted));
+        //        } else {
+        //          // we failed to allocate a new *toPromoteHdl, this *toPromoteHdl is no  longer moving
+        //          auto ref = unmarkMovingAndWakeUpWaiters(*toPromoteHdl, {});
+        //          if (UNLIKELY(ref == 0)) {
+        //            const auto res =
+        //                releaseBackToAllocator(*toPromoteHdl, 
+        //                        RemoveContext::kNormal, false);
+        //            XDCHECK(res == ReleaseRes::kReleased);
+        //          }
+        //        }
+        //        return;
+        //    }
+        //});
+        auto promoter = [&](Item& item) {
+          bool moving = item.markMovingIfRefCount(1);
+          if (moving) {
+            auto promoted = tryPromoteToNextMemoryTier(item, true);
+            if (promoted) {
+              auto& mmContainer = getMMContainer(tid, pid, cid);
+              mmContainer.remove(item);
+              if (item.isInclusive()) {
+                  XDCHECK(item.isCopy());
+              } else {
+                  XDCHECK(!item.isAccessible());
+                  XDCHECK(!item.isInMMContainer());
+                  XDCHECK_EQ(item.getRefCount(),1);
+              }
+              wakeUpWaiters(item, std::move(promoted));
+            } else {
+              // we failed to allocate a new item, this item is no  longer moving
+              auto ref = unmarkMovingAndWakeUpWaiters(item, {});
+              if (UNLIKELY(ref == 0)) {
+                const auto res =
+                    releaseBackToAllocator(item, 
+                            RemoveContext::kNormal, false);
+                XDCHECK(res == ReleaseRes::kReleased);
+              }
+            }
+          }
+        };
+        //promoterPool.AddTask(promoter, this, item);
+        promoter(item);
+      }
+  }
   // if parent is not recorded, skip children as well when the config is set
   if (LIKELY(!item.hasChainedItem() ||
              (!recorded && config_.isSkipPromoteChildrenWhenParentFailed()))) {

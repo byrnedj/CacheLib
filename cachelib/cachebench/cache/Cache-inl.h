@@ -416,6 +416,9 @@ typename Cache<Allocator>::WriteHandle Cache<Allocator>::allocate(
     handle = cache_->allocate(pid, key, CacheValue::getSize(size), ttlSecs);
     if (handle) {
       CacheValue::initialize(handle->getMemory());
+      if (config_.useInclusive) {
+         handle->markInclusive();
+      }
     }
   } catch (const std::invalid_argument& e) {
     XLOGF(DBG, "Unable to allocate, reason: {}", e.what());

@@ -274,6 +274,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   // Returns true if the item is in access container, false otherwise
   bool isAccessible() const noexcept;
+  void markInclusive() noexcept;
 
  protected:
   // construct an item without expiry timestamp.
@@ -324,6 +325,27 @@ class CACHELIB_PACKED_ATTR CacheItem {
   FOLLY_ALWAYS_INLINE RefcountWithFlags::Value decRef() {
     return ref_.decRef();
   }
+
+  //clusivity control
+  /* 
+   * Is item inclusive w.r.t to higher tiers
+   * also - if item is dirty, or how we can mark dirty
+   */
+  bool isInclusive() const noexcept;
+  bool isDirty() const noexcept;
+  void markDirty() noexcept;
+  
+  // Get the item in the next tier
+  void* getNextTierCopy();
+  void setNextTierCopy(void *nextCopy);
+
+  /*
+   * to maintain inclusiveness
+   */
+  void markCopy() noexcept;
+  bool isCopy() const noexcept;
+  RefcountWithFlags::Value unmarkCopy() noexcept;
+
 
   // Whether or not an item is completely drained of all references including
   // the internal ones. This means there is no access refcount bits and zero
@@ -382,6 +404,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
    * unmarking.
    */
   bool markMoving(bool failIfRefNotZero);
+  bool markMovingIfRefCount(uint32_t count);
   RefcountWithFlags::Value unmarkMoving() noexcept;
   bool isMoving() const noexcept;
   bool isOnlyMoving() const noexcept;
@@ -389,6 +412,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
   /** This function attempts to mark item as exclusive.
    * Can only be called on the item that is moving.*/
   bool markForEvictionWhenMoving();
+  bool markForEvictionNotAccessible();
 
   /**
    * Item cannot be marked both chained allocation and
@@ -434,6 +458,9 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   using MMContainer =
       typename CacheTrait::MMType::template Container<Item, &Item::mmHook_>;
+
+  //next tier copy
+  void* compressedNext_;
 
  protected:
   // Refcount for the item and also flags on the items state

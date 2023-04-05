@@ -44,16 +44,16 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
    *
    * The layout is as follows.
    * |-- flags --|-- admin ref --|-- access ref--|
-   * - Flags:  11 bits
-   * - Admin Ref: 3 bits
+   * - Flags:  10 bits
+   * - Admin Ref: 4 bits
    * - Access Ref: 18 bits
    */
   using Value = uint32_t;
   static_assert(std::is_unsigned<Value>::value,
                 "Unsigned Integral type required");
 
-  static constexpr uint8_t kNumFlags = 11;
-  static constexpr uint8_t kNumAdminRefBits = 3;
+  static constexpr uint8_t kNumFlags = 10;
+  static constexpr uint8_t kNumAdminRefBits = 4;
   static constexpr uint8_t kNumAccessRefBits = 18;
   static_assert(kNumAccessRefBits <= NumBits<Value>::value, "Invalid type");
   static_assert(kNumAccessRefBits >= 1, "Need at least one bit for refcount");
@@ -79,6 +79,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
 
     // exists in hash table
     kAccessible,
+    kCopy, //is next tier copy
 
     // this flag indicates the allocation is being evicted or moved elsewhere
     // (can be triggered by a resize, rebalance or normal eviction operation)
@@ -112,9 +113,8 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     // Item was evicted from NVM while it was in RAM.
     kNvmEvicted,
 
-    // A deprecated and noop flag that was used to mark whether the item is
-    // unevictable in the past.
-    kUnevictable_NOOP,
+    kDirty,
+    kInclusive,
 
     // Unused. This is just to indciate the maximum number of flags
     kFlagMax,
@@ -271,11 +271,13 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   bool markForEviction() noexcept {
     auto predicate = [](const Value curValue) {
       Value conditionBitMask = getAdminRef<kLinked>();
+      Value condition2BitMask = getAdminRef<kCopy>();
       const bool flagSet = curValue & conditionBitMask;
+      const bool flag2Set = curValue & condition2BitMask;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       const bool accessible = curValue & getAdminRef<kAccessible>();
 
-      if (!flagSet || alreadyExclusive) {
+      if (!flagSet || flag2Set || alreadyExclusive) {
         return false;
       }
       if ((curValue & kAccessRefMask) != 0) {
@@ -292,6 +294,32 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       return curValue | getAdminRef<kExclusive>();
     };
 
+    return atomicUpdateValue(predicate, newValue);
+  }
+  /** This function attempts to mark item for eviction.
+   * Can only be called on the item that is moving.*/
+  bool markForEvictionNotAccessible() {
+ 
+    auto predicate = [](const Value curValue) {
+      Value conditionBitMask = getAdminRef<kCopy>();
+      const bool flagSet = curValue & conditionBitMask;
+      const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
+      if (!flagSet) {
+          return false; //in this case we need to be a copy of an item
+      }
+      if ((curValue & kAccessRefMask) != 0) {
+        return false;
+      }
+      if (alreadyExclusive) {
+          return false;
+      }
+      return true;
+    };
+ 
+    auto newValue = [](const Value curValue) {
+      return curValue | getAdminRef<kExclusive>();
+    };
+ 
     return atomicUpdateValue(predicate, newValue);
   }
 
@@ -326,6 +354,34 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       const bool flagSet = curValue & conditionBitMask;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
       if (failIfRefNotZero && (curValue & kAccessRefMask) != 0) {
+        return false;
+      }
+      if (!flagSet || alreadyExclusive) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    auto newValue = [](const Value curValue) {
+      // Set exclusive flag and make the ref count non-zero (to distinguish
+      // from exclusive case). This extra ref will not be reported to the
+      // user
+      return (curValue + static_cast<Value>(1)) | getAdminRef<kExclusive>();
+    };
+
+    return atomicUpdateValue(predicate, newValue);
+  }
+
+  bool markMovingIfRefCount(uint32_t count) {
+    auto predicate = [count](const Value curValue) {
+      Value conditionBitMask = getAdminRef<kLinked>();
+      const bool flagSet = curValue & conditionBitMask;
+      const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
+      if ((curValue & kAccessRefMask) > count) {
         return false;
       }
       if (!flagSet || alreadyExclusive) {
@@ -400,6 +456,30 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       return false;
     }
     return ref & getAdminRef<kExclusive>();
+  }
+  
+  /**
+   * Keep track of whether the item was modified while in ram cache
+   */
+  bool isInclusive() const noexcept { return isFlagSet<kInclusive>(); }
+  void markInclusive() noexcept { return setFlag<kInclusive>(); }
+  bool isDirty() const noexcept { return isFlagSet<kDirty>(); }
+  void markDirty() noexcept { return setFlag<kDirty>(); }
+  
+  /**
+   * State of item's inclusiveness for background workers
+   */
+  void markCopy() noexcept { 
+    Value bitMask = getAdminRef<kCopy>();
+    __atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+  }
+  bool isCopy() const noexcept { 
+    return getRaw() & getAdminRef<kCopy>();
+  }
+  Value unmarkCopy() noexcept {
+    //XDCHECK(isCopy());
+    Value bitMask = ~getAdminRef<kCopy>();
+    return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
   }
 
   /**

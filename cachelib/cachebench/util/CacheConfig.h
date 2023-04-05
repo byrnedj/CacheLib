@@ -221,6 +221,9 @@ struct CacheConfig : public JSONConfig {
 
   // Use Posix Shm instead of SysVShm
   bool usePosixShm{false};
+  
+  // make cache inclusive
+  bool useInclusive{false};
 
   // Memory tiers configs
   std::vector<MemoryTierCacheConfig> memoryTierConfigs{};
