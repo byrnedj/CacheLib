@@ -97,6 +97,9 @@ Cache<Allocator>::Cache(const CacheConfig& config,
   if (config_.usePosixShm) {
     allocatorConfig_.usePosixForShm();
   }
+  
+  allocatorConfig_.useThreadPool = config_.useThreadPool;
+  allocatorConfig_.threadPoolThreads = config_.threadPoolThreads;
 
   if (!config_.memoryTierConfigs.empty()) {
     allocatorConfig_.configureMemoryTiers(config_.memoryTierConfigs);
@@ -642,6 +645,7 @@ Stats Cache<Allocator>::getStats() const {
     }
     ret.numEvictions.push_back(aggregate.numEvictions());
     ret.numWritebacks.push_back(aggregate.numWritebacks());
+    ret.numPromotions.push_back(aggregate.numPromotions());
     ret.numCacheHits.push_back(aggregate.numHits());
     ret.numItems.push_back(aggregate.numItems());
   }

@@ -410,6 +410,9 @@ class CacheAllocatorConfig {
   // Directory for shared memory related metadata
   std::string cacheDir;
 
+  bool useThreadPool{false};
+  size_t threadPoolThreads = 8;
+
   // if true, uses posix shm; if not, uses sys-v (default)
   bool usePosixShm{false};
 

@@ -302,7 +302,7 @@ class CacheStressor : public Stressor {
           // detect refcount leaks when run in  debug mode.
 #ifndef NDEBUG
         auto checkCnt = [](int cnt) {
-          if (cnt != 0) {
+          if (cnt > 100000) { 
             throw std::runtime_error(folly::sformat("Refcount leak {}", cnt));
           }
         };

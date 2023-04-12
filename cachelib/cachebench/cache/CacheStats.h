@@ -56,6 +56,7 @@ struct Stats {
 
   std::vector<uint64_t> numEvictions;
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numPromotions;
   std::vector<uint64_t> numCacheHits;
   std::vector<uint64_t> numItems;
 
@@ -170,6 +171,8 @@ struct Stats {
         out << folly::sformat("Tier {} Evictions : {:,} Writebacks: {:,} Success: {:.2f}%",
                 tid, numEvictions[tid], numWritebacks[tid],
                 invertPctFn(numEvictions[tid] - numWritebacks[tid], numEvictions[tid])) << std::endl;
+        out << folly::sformat("Tier {} Promotions : {:,}",
+                tid, numPromotions[tid]) << std::endl;
     }
     auto foreachAC = [&](auto &map, auto cb) {
       for (auto &tidStats : map) {

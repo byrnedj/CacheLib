@@ -31,6 +31,7 @@ void Stats::init() {
   chainedItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   regularItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacks = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  numPromotions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   auto initToZero = [](auto& a) {
     for (auto& t : a) {
      for (auto& p : t) {
@@ -48,6 +49,7 @@ void Stats::init() {
   initToZero(*chainedItemEvictions);
   initToZero(*regularItemEvictions);
   initToZero(*numWritebacks);
+  initToZero(*numPromotions);
 
   classAllocLatency = std::make_unique<PerTierPoolClassRollingStats>();
 }
@@ -57,7 +59,7 @@ struct SizeVerify {};
 
 void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 #ifndef SKIP_SIZE_VERIFY
-  SizeVerify<sizeof(Stats)> a = SizeVerify<16192>{};
+  SizeVerify<sizeof(Stats)> a = SizeVerify<16208>{};
   std::ignore = a;
 #endif
   ret.numCacheGets = numCacheGets.get();
@@ -156,6 +158,7 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
     ret.numEvictions.push_back(chainedEvictions[tid] + regularEvictions[tid]);
   }
   ret.numWritebacks = accum(*numWritebacks);
+  ret.numPromotions = accum(*numPromotions);
   ret.numCacheHits = accumTL(*cacheHits);
 
   ret.invalidAllocs = invalidAllocs.get();
@@ -222,6 +225,7 @@ PoolStats& PoolStats::operator+=(const PoolStats& other) {
       d.fragmentationSize += s.fragmentationSize;
       d.numHits += s.numHits;
       d.numWritebacks += s.numWritebacks;
+      d.numPromotions += s.numPromotions;
       d.chainedItemEvictions += s.chainedItemEvictions;
       d.regularItemEvictions += s.regularItemEvictions;
     }
@@ -281,6 +285,14 @@ uint64_t PoolStats::numWritebacks() const noexcept {
   uint64_t n = 0;
   for (const auto& s : cacheStats) {
     n += s.second.numWritebacks;
+  }
+  return n;
+}
+
+uint64_t PoolStats::numPromotions() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numPromotions;
   }
   return n;
 }

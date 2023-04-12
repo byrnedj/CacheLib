@@ -219,6 +219,10 @@ struct CacheConfig : public JSONConfig {
   // Not used when its value is 0.  In seconds.
   uint32_t memoryOnlyTTL{0};
 
+
+  bool useThreadPool{false};
+  uint32_t threadPoolThreads{8};
+
   // Use Posix Shm instead of SysVShm
   bool usePosixShm{false};
   

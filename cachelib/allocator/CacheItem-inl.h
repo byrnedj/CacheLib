@@ -150,7 +150,7 @@ std::string CacheItem<CacheTrait>::toString() const {
         "item: "
         "memory={}:raw-ref={}:size={}:key={}:hex-key={}:"
         "isInMMContainer={}:isAccessible={}:isMarkedForEviction={}:"
-        "isDirty={}:isCopy={}:isInclusive{}"
+        "isDirty={}:isCopy={}:isInclusive{}:"
         "isMoving={}:references={}:ctime="
         "{}:"
         "expTime={}:updateTime={}:isNvmClean={}:isNvmEvicted={}:hasChainedItem="
