@@ -88,6 +88,7 @@ class SysVShmSegment : public ShmBase {
   // @return true if the segment existed. false otherwise
   static bool removeByName(const std::string& name);
 
+  bool lock_; //mlock or no
  private:
   // returns the key identifier for the given name.
   static KeyType createKeyForName(const std::string& name) noexcept;

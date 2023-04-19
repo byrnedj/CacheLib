@@ -646,6 +646,7 @@ Stats Cache<Allocator>::getStats() const {
     ret.numEvictions.push_back(aggregate.numEvictions());
     ret.numWritebacks.push_back(aggregate.numWritebacks());
     ret.numPromotions.push_back(aggregate.numPromotions());
+    ret.numPromotionsHits.push_back(aggregate.numPromotions());
     ret.numCacheHits.push_back(aggregate.numHits());
     ret.numItems.push_back(aggregate.numItems());
   }

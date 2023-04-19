@@ -52,8 +52,8 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   static_assert(std::is_unsigned<Value>::value,
                 "Unsigned Integral type required");
 
-  static constexpr uint8_t kNumFlags = 10;
-  static constexpr uint8_t kNumAdminRefBits = 4;
+  static constexpr uint8_t kNumFlags = 9;
+  static constexpr uint8_t kNumAdminRefBits = 5;
   static constexpr uint8_t kNumAccessRefBits = 18;
   static_assert(kNumAccessRefBits <= NumBits<Value>::value, "Invalid type");
   static_assert(kNumAccessRefBits >= 1, "Need at least one bit for refcount");
@@ -80,6 +80,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     // exists in hash table
     kAccessible,
     kCopy, //is next tier copy
+    kPromoted, //is next tier copy
 
     // this flag indicates the allocation is being evicted or moved elsewhere
     // (can be triggered by a resize, rebalance or normal eviction operation)
@@ -114,15 +115,12 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     kNvmEvicted,
 
     kDirty,
-    kInclusive,
-
-    // Unused. This is just to indciate the maximum number of flags
-    kFlagMax,
+    kInclusive
   };
   static_assert(static_cast<uint8_t>(kMMFlag0) >
                     static_cast<uint8_t>(kExclusive),
                 "Flags and control bits cannot overlap in bit range.");
-  static_assert(kFlagMax <= NumBits<Value>::value, "Too many flags.");
+  static_assert(kInclusive <= NumBits<Value>::value, "Too many flags.");
 
   constexpr explicit RefcountWithFlags() = default;
 
@@ -479,6 +477,18 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   Value unmarkCopy() noexcept {
     //XDCHECK(isCopy());
     Value bitMask = ~getAdminRef<kCopy>();
+    return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
+  }
+  void markPromoted() noexcept { 
+    Value bitMask = getAdminRef<kPromoted>();
+    __atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+  }
+  bool wasPromoted() const noexcept { 
+    return getRaw() & getAdminRef<kPromoted>();
+  }
+  Value unmarkPromoted() noexcept {
+    //XDCHECK(isPromoted());
+    Value bitMask = ~getAdminRef<kPromoted>();
     return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
   }
 

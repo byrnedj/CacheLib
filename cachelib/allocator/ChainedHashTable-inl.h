@@ -46,7 +46,7 @@ ChainedHashTable::Impl<T, HookPtr>::Impl(size_t numBuckets,
 
   CompressedPtr* memStart = hashTable_.get();
   //lock hashtable to memory
-  mlock(memStart,numBuckets_);
+  mlock(memStart,numBuckets_* sizeof(CompressedPtr));
   std::fill(memStart, memStart + numBuckets_, CompressedPtr{});
 }
 
@@ -70,7 +70,7 @@ ChainedHashTable::Impl<T, HookPtr>::Impl(size_t numBuckets,
   }
 
   //lock the hashtable to the main memory
-  mlock(memStart,numBuckets_);
+  mlock(memStart,numBuckets_ * sizeof(CompressedPtr));
   
   if (resetMem) {
     CompressedPtr* memStartBucket = static_cast<CompressedPtr*>(memStart);

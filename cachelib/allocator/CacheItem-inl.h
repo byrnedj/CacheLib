@@ -233,6 +233,21 @@ RefcountWithFlags::Value CacheItem<CacheTrait>::unmarkCopy() noexcept {
 }
 
 template <typename CacheTrait>
+void CacheItem<CacheTrait>::markPromoted() noexcept {
+  ref_.markPromoted();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::wasPromoted() const noexcept {
+  return ref_.wasPromoted();
+}
+
+template <typename CacheTrait>
+RefcountWithFlags::Value CacheItem<CacheTrait>::unmarkPromoted() noexcept {
+  return ref_.unmarkPromoted();
+}
+
+template <typename CacheTrait>
 bool CacheItem<CacheTrait>::isDrained() const noexcept {
   return ref_.isDrained();
 }

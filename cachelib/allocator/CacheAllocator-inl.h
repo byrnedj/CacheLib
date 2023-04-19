@@ -282,9 +282,9 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                        config_.poolAdviseStrategy);
   }
 
-  if (config_.itemsReaperEnabled() && !reaper_) {
-    startNewReaper(config_.reaperInterval, config_.reaperConfig);
-  }
+  //if (config_.itemsReaperEnabled() && !reaper_) {
+  //  startNewReaper(config_.reaperInterval, config_.reaperConfig);
+  //}
 
   if (config_.poolOptimizerEnabled() && !poolOptimizer_) {
     startNewPoolOptimizer(config_.regularPoolOptimizeInterval,
@@ -840,6 +840,9 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
                                                    RemoveContext ctx,
                                                    bool nascent,
                                                    const Item* toRecycle) {
+  if (it.wasPromoted()) {
+      it.unmarkPromoted();
+  }
   if (!it.isDrained()) {
     throw std::runtime_error(
         folly::sformat("cannot release this item: {}", it.toString()));
@@ -2424,51 +2427,104 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
       //spawn a fiber to do the promotion
       if (mode == AccessMode::kRead) {
         Item *itemPtr = const_cast<Item*>(handle.get());
-        //auto promoterPool// = [this,itemPtr,tid,pid,cid](ReadHandle promoterHdl) {
         if (config_.useThreadPool && itemPtr->getRefCount() == 1) {
-        threadPool_.add( [this,itemPtr,tid,pid,cid]() {
+        auto key = itemPtr->getKey();
+        threadPool_.add( [this,key,itemPtr,tid,pid,cid]() {
             bool moving = itemPtr->markMoving(true);
             if (!moving) {
               return;
             }
             const auto stid = getTierId(*itemPtr);
-            if (stid == 0) {
+            if (stid == 0 || key != itemPtr->getKey()) {
+              auto ref = itemPtr->unmarkMoving();
+              if (UNLIKELY(ref == 0)) {
+	        wakeUpWaiters(*itemPtr,{});
+                const auto res =
+                    releaseBackToAllocator(*itemPtr, 
+                            RemoveContext::kNormal, false);
+                XDCHECK(res == ReleaseRes::kReleased);
+              } else {
+                //wake up waiters with this handle
+	        auto hdl = acquire(itemPtr);
+	        wakeUpWaiters(*itemPtr,std::move(hdl));
+              }
               return;
             }
+            auto& mmContainer = getMMContainer(tid, pid, cid);
+            bool removed = mmContainer.remove(*itemPtr);
+            if (!removed) {
+                auto ref = itemPtr->unmarkMoving();
+                if (UNLIKELY(ref == 0)) {
+	          wakeUpWaiters(*itemPtr,{});
+                  const auto res =
+                      releaseBackToAllocator(*itemPtr, 
+                              RemoveContext::kNormal, false);
+                  XDCHECK(res == ReleaseRes::kReleased);
+                } else {
+                  //wake up waiters with this handle
+	          auto hdl = acquire(itemPtr);
+	          wakeUpWaiters(*itemPtr,std::move(hdl));
+                }
+                return;
+            }
+            XDCHECK(removed);
+            XDCHECK(moving);
             const auto allocInfo = allocator_[stid]->getAllocInfo(itemPtr->getMemory());
             XDCHECK_EQ(allocInfo.poolId,pid);
             XDCHECK_EQ(allocInfo.classId,cid);
             XCHECK_EQ(stid,1);
             XCHECK_EQ(stid,tid);
-            if (moving) {
-                auto promoted = tryPromoteToNextMemoryTier(*itemPtr, true);
-                if (promoted) {
-                  auto& mmContainer = getMMContainer(tid, pid, cid);
-                  mmContainer.remove(*itemPtr);
-                  if (itemPtr->isInclusive()) {
-                      XDCHECK(itemPtr->isCopy());
-                  } else {
-                      XDCHECK(!itemPtr->isAccessible());
-                      XDCHECK(!itemPtr->isInMMContainer());
-                      XDCHECK_EQ(itemPtr->getRefCount(),0);
-                  }
-                  (*stats_.numPromotions)[tid][pid][cid].inc();
-                  wakeUpWaiters(*itemPtr, std::move(promoted));
-                } else {
-                  // we failed to allocate a new *toPromoteHdl, this *toPromoteHdl is no  longer moving
-                  auto ref = unmarkMovingAndWakeUpWaiters(*itemPtr, {});
-                  if (UNLIKELY(ref == 0)) {
+            auto promoted = tryPromoteToNextMemoryTier(*itemPtr, true);
+            if (promoted) {
+              itemPtr->markPromoted();
+              (*stats_.numPromotions)[tid][pid][cid].inc();
+              wakeUpWaiters(*itemPtr, std::move(promoted));
+              if (itemPtr->isInclusive()) {
+                  XDCHECK(itemPtr->isCopy());
+              } else {
+                  XDCHECK(!itemPtr->isAccessible());
+                  XDCHECK(!itemPtr->isInMMContainer());
+                  XDCHECK_EQ(itemPtr->getRefCount(),0);
+                const auto res =
+                    releaseBackToAllocator(*itemPtr, 
+                            RemoveContext::kEviction, false);
+                XDCHECK(res == ReleaseRes::kReleased);
+              }
+            } else {
+              // we failed to allocate a new *toPromoteHdl, this *toPromoteHdl is no  longer moving
+              auto ref = itemPtr->unmarkMoving();
+              if (UNLIKELY(ref == 0)) {
+	       wakeUpWaiters(*itemPtr,{});
+                const auto res =
+                    releaseBackToAllocator(*itemPtr, 
+                            RemoveContext::kNormal, false);
+                XDCHECK(res == ReleaseRes::kReleased);
+              }  else if (itemPtr->isAccessible()) {
+                //case where we failed to allocate in lower tier
+                //item is still present in accessContainer
+                //item is no longer moving - acquire and
+                //wake up waiters with this handle
+	        auto hdl = acquire(itemPtr);
+	        insertInMMContainer(*hdl);
+	        wakeUpWaiters(*itemPtr,std::move(hdl));
+              } else if (!itemPtr->isAccessible()) {
+                //case where we failed to replace in access
+                //container due to another thread calling insertOrReplace
+                //unmark moving and return null handle
+	        wakeUpWaiters(*itemPtr,{});
+	        if (UNLIKELY(ref == 0)) {
                     const auto res =
-                        releaseBackToAllocator(*itemPtr, 
-                                RemoveContext::kNormal, false);
+                      releaseBackToAllocator(*itemPtr, RemoveContext::kNormal,
+                                              false);
                     XDCHECK(res == ReleaseRes::kReleased);
-                  }
                 }
-                return;
+              } else {
+                XDCHECK(false);
+              }
             }
           });
 
-        } else if (!config_.useThreadPool) {
+        } else if (!config_.useThreadPool && config_.threadPoolThreads == 1) {
           auto promoter = [&](Item& item) {
             bool moving = item.markMovingIfRefCount(1);
             if (moving) {
@@ -2500,6 +2556,8 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           promoter(item);
         }
       }
+  } else if (tid == 0 && item.wasPromoted()) {
+    (*stats_.numPromotionsHits)[tid][pid][cid].inc();
   }
   // if parent is not recorded, skip children as well when the config is set
   if (LIKELY(!item.hasChainedItem() ||
@@ -3009,7 +3067,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
     for (const ClassId cid : classIds) {
       uint64_t allocAttempts, evictionAttempts, allocFailures,
                fragmentationSize, classHits, chainedItemEvictions,
-               regularItemEvictions, numWritebacks, numPromotions = 0;
+               regularItemEvictions, numWritebacks, numPromotions, numPromotionsHits = 0;
       MMContainerStat mmContainerStats;
       for (TierId tid = 0; tid < getNumTiers(); tid++) {
         allocAttempts += (*stats_.allocAttempts)[tid][poolId][cid].get();
@@ -3021,6 +3079,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
         regularItemEvictions += (*stats_.regularItemEvictions)[tid][poolId][cid].get();
         numWritebacks += (*stats_.numWritebacks)[tid][poolId][cid].get();
         numPromotions += (*stats_.numPromotions)[tid][poolId][cid].get();
+        numPromotionsHits += (*stats_.numPromotionsHits)[tid][poolId][cid].get();
         mmContainerStats += getMMContainerStat(tid, poolId, cid);
         XDCHECK(mmContainers_[tid][poolId][cid],
                 folly::sformat("Tid {}, Pid {}, Cid {} not initialized.", tid, poolId, cid));
@@ -3037,6 +3096,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
             regularItemEvictions,
             numWritebacks,
             numPromotions,
+            numPromotionsHits,
             mmContainerStats}});
       totalHits += classHits;
     }
@@ -3092,6 +3152,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(TierId tid, PoolId poolId) co
             (*stats_.regularItemEvictions)[tid][poolId][cid].get(),
             (*stats_.numWritebacks)[tid][poolId][cid].get(),
             (*stats_.numPromotions)[tid][poolId][cid].get(),
+            (*stats_.numPromotionsHits)[tid][poolId][cid].get(),
             getMMContainerStat(tid, poolId, cid)}});
       totalHits += classHits;
     }

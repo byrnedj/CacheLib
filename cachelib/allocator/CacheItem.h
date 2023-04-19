@@ -345,6 +345,9 @@ class CACHELIB_PACKED_ATTR CacheItem {
   void markCopy() noexcept;
   bool isCopy() const noexcept;
   RefcountWithFlags::Value unmarkCopy() noexcept;
+  void markPromoted() noexcept;
+  bool wasPromoted() const noexcept;
+  RefcountWithFlags::Value unmarkPromoted() noexcept;
 
 
   // Whether or not an item is completely drained of all references including

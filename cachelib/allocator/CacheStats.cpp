@@ -32,6 +32,7 @@ void Stats::init() {
   regularItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacks = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numPromotions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  numPromotionsHits = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   auto initToZero = [](auto& a) {
     for (auto& t : a) {
      for (auto& p : t) {
@@ -50,6 +51,7 @@ void Stats::init() {
   initToZero(*regularItemEvictions);
   initToZero(*numWritebacks);
   initToZero(*numPromotions);
+  initToZero(*numPromotionsHits);
 
   classAllocLatency = std::make_unique<PerTierPoolClassRollingStats>();
 }
@@ -159,6 +161,7 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
   }
   ret.numWritebacks = accum(*numWritebacks);
   ret.numPromotions = accum(*numPromotions);
+  ret.numPromotionsHits = accum(*numPromotionsHits);
   ret.numCacheHits = accumTL(*cacheHits);
 
   ret.invalidAllocs = invalidAllocs.get();
@@ -226,6 +229,7 @@ PoolStats& PoolStats::operator+=(const PoolStats& other) {
       d.numHits += s.numHits;
       d.numWritebacks += s.numWritebacks;
       d.numPromotions += s.numPromotions;
+      d.numPromotionsHits += s.numPromotionsHits;
       d.chainedItemEvictions += s.chainedItemEvictions;
       d.regularItemEvictions += s.regularItemEvictions;
     }
@@ -293,6 +297,14 @@ uint64_t PoolStats::numPromotions() const noexcept {
   uint64_t n = 0;
   for (const auto& s : cacheStats) {
     n += s.second.numPromotions;
+  }
+  return n;
+}
+
+uint64_t PoolStats::numPromotionsHits() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numPromotionsHits;
   }
   return n;
 }

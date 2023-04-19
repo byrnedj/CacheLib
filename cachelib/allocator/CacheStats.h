@@ -129,6 +129,7 @@ struct CacheStat {
   uint64_t numWritebacks{0};
   
   uint64_t numPromotions{0};
+  uint64_t numPromotionsHits{0};
 
   // the stats from the mm container
   MMContainerStat containerStat;
@@ -212,6 +213,9 @@ struct PoolStats {
   
   // number of writebacks for this pool
   uint64_t numPromotions() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numPromotionsHits() const noexcept;
 
   // number of all items in this pool
   uint64_t numItems() const noexcept;
@@ -474,6 +478,7 @@ struct GlobalCacheStats {
   std::vector<uint64_t> numWritebacks;
   
   std::vector<uint64_t> numPromotions;
+  std::vector<uint64_t> numPromotionsHits;
 
   // number of hits per tier across all the pools in the cache.
   std::vector<uint64_t> numCacheHits;
