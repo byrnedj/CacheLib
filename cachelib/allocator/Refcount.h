@@ -52,9 +52,9 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   static_assert(std::is_unsigned<Value>::value,
                 "Unsigned Integral type required");
 
-  static constexpr uint8_t kNumFlags = 9;
+  static constexpr uint8_t kNumFlags = 10;
   static constexpr uint8_t kNumAdminRefBits = 5;
-  static constexpr uint8_t kNumAccessRefBits = 18;
+  static constexpr uint8_t kNumAccessRefBits = 17;
   static_assert(kNumAccessRefBits <= NumBits<Value>::value, "Invalid type");
   static_assert(kNumAccessRefBits >= 1, "Need at least one bit for refcount");
   static_assert(
@@ -115,6 +115,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     kNvmEvicted,
 
     kDirty,
+    kRecent,
     kInclusive
   };
   static_assert(static_cast<uint8_t>(kMMFlag0) >
@@ -463,6 +464,9 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   void markInclusive() noexcept { return setFlag<kInclusive>(); }
   bool isDirty() const noexcept { return isFlagSet<kDirty>(); }
   void markDirty() noexcept { return setFlag<kDirty>(); }
+  bool isRecent() const noexcept { return isFlagSet<kRecent>(); }
+  void markRecent() noexcept { return setFlag<kRecent>(); }
+  void unmarkRecent() noexcept { return unSetFlag<kRecent>(); }
   
   /**
    * State of item's inclusiveness for background workers

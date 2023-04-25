@@ -150,15 +150,16 @@ std::string CacheItem<CacheTrait>::toString() const {
         "item: "
         "memory={}:raw-ref={}:size={}:key={}:hex-key={}:"
         "isInMMContainer={}:isAccessible={}:isMarkedForEviction={}:"
-        "isDirty={}:isCopy={}:isInclusive{}:"
-        "isMoving={}:references={}:ctime="
+        "isDirty={}:isCopy={}:isInclusive={}:wasPromoted={}:"
+        "isRecent={}:isMoving={}:references={}:ctime="
         "{}:"
         "expTime={}:updateTime={}:isNvmClean={}:isNvmEvicted={}:hasChainedItem="
         "{}",
         this, getRefCountAndFlagsRaw(), getSize(),
         folly::humanify(getKey().str()), folly::hexlify(getKey()),
         isInMMContainer(), isAccessible(), isMarkedForEviction(),
-        isDirty(), isCopy(), isInclusive(), isMoving(),
+        isDirty(), isCopy(), isInclusive(), wasPromoted(),
+        isRecent(), isMoving(),
         getRefCount(), getCreationTime(), getExpiryTime(), getLastAccessTime(),
         isNvmClean(), isNvmEvicted(), hasChainedItem());
   }
@@ -215,6 +216,21 @@ bool CacheItem<CacheTrait>::isDirty() const noexcept {
 template <typename CacheTrait>
 void CacheItem<CacheTrait>::markDirty() noexcept {
   ref_.markDirty();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markRecent() noexcept {
+  ref_.markRecent();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isRecent() const noexcept {
+  return ref_.isRecent();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::unmarkRecent() noexcept {
+  ref_.unmarkRecent();
 }
 
 template <typename CacheTrait>

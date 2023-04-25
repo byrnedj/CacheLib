@@ -345,6 +345,9 @@ class CACHELIB_PACKED_ATTR CacheItem {
   void markCopy() noexcept;
   bool isCopy() const noexcept;
   RefcountWithFlags::Value unmarkCopy() noexcept;
+  void markRecent() noexcept;
+  bool isRecent() const noexcept;
+  void unmarkRecent() noexcept;
   void markPromoted() noexcept;
   bool wasPromoted() const noexcept;
   RefcountWithFlags::Value unmarkPromoted() noexcept;

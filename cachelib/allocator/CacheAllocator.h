@@ -2038,6 +2038,77 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
     return evictions;
   }
 
+  /*
+  size_t promoteItems(unsigned int tid, unsigned int pid, unsigned int cid) {
+    auto& promotionQueue = getPromotionQueue(tid, pid, cid);
+    size_t promotions = 0;
+    std::vector<Item*> candidates;
+    candidates.reserve(promotionQueue.size());
+    for (Item* itemPtr : promotionQueue) {
+      bool moving = itemPtr->markMoving(true);
+      if (!moving) {
+        return;
+      }
+      const auto stid = getTierId(*itemPtr);
+      XDCHECK(moving);
+      const auto allocInfo = allocator_[stid]->getAllocInfo(itemPtr->getMemory());
+      XDCHECK_EQ(allocInfo.poolId,pid);
+      XDCHECK_EQ(allocInfo.classId,cid);
+      XCHECK_EQ(stid,1);
+      XCHECK_EQ(stid,tid);
+      auto promoted = tryPromoteToNextMemoryTier(*itemPtr, true);
+      if (promoted) {
+        candidates.add(promoted);
+        promoted->markPromoted();
+        (*stats_.numPromotions)[tid][pid][cid].inc();
+        wakeUpWaiters(*itemPtr, std::move(promoted));
+        if (itemPtr->isInclusive()) {
+            XDCHECK(itemPtr->isCopy());
+        } else {
+            XDCHECK(!itemPtr->isAccessible());
+            XDCHECK(!itemPtr->isInMMContainer());
+            XDCHECK_EQ(itemPtr->getRefCount(),0);
+          const auto res =
+              releaseBackToAllocator(*itemPtr, 
+                      RemoveContext::kEviction, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
+      } else {
+        // we failed to allocate a new *toPromoteHdl, this *toPromoteHdl is no  longer moving
+        auto ref = itemPtr->unmarkMoving();
+        if (UNLIKELY(ref == 0)) {
+         wakeUpWaiters(*itemPtr,{});
+          const auto res =
+              releaseBackToAllocator(*itemPtr, 
+                      RemoveContext::kNormal, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }  else if (itemPtr->isAccessible()) {
+          //case where we failed to allocate in lower tier
+          //item is still present in accessContainer
+          //item is no longer moving - acquire and
+          //wake up waiters with this handle
+          auto hdl = acquire(itemPtr);
+          insertInMMContainer(*hdl);
+          wakeUpWaiters(*itemPtr,std::move(hdl));
+        } else if (!itemPtr->isAccessible()) {
+          //case where we failed to replace in access
+          //container due to another thread calling insertOrReplace
+          //unmark moving and return null handle
+          wakeUpWaiters(*itemPtr,{});
+          if (UNLIKELY(ref == 0)) {
+              const auto res =
+                releaseBackToAllocator(*itemPtr, RemoveContext::kNormal,
+                                        false);
+              XDCHECK(res == ReleaseRes::kReleased);
+          }
+        } else {
+          XDCHECK(false);
+        }
+      }
+    }
+  }
+  */
+
   size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
     auto& mmContainer = getMMContainer(tid, pid, cid);
     size_t promotions = 0;
@@ -2058,9 +2129,10 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
 
         // TODO: only allow it for read-only items?
         // or implement mvcc
-        if (candidate->markMoving(true)) {
+        if (candidate->isRecent() && candidate->markMoving(true)) {
           // promotions should rarely fail since we already marked moving
           mmContainer.remove(itr);
+          candidate->unmarkRecent();
           candidates.push_back(candidate);
         }
 
@@ -2072,6 +2144,8 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
       auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
       if (promoted) {
         promotions++;
+        promoted->markPromoted();
+        (*stats_.numPromotions)[tid][pid][cid].inc();
         XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
         // it's safe to recycle the item here as there are no more
         // references and the item could not been marked as moving
@@ -2080,10 +2154,21 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
         // but we need to wake up waiters before releasing
         // since candidate's key can change after being sent
         // back to allocator
+        bool inclusive = candidate->isInclusive();
+        if (inclusive) {
+            XDCHECK(candidate->isCopy());
+        } else {
+            XDCHECK(!candidate->isAccessible());
+            XDCHECK(!candidate->isInMMContainer());
+            XDCHECK_EQ(candidate->getRefCount(),0);
+        }
         wakeUpWaiters(*candidate, std::move(promoted));
-        auto res = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
-                                  /* isNascent */ false);
-        XDCHECK(res == ReleaseRes::kReleased);
+        if (!inclusive) {
+          const auto res =
+              releaseBackToAllocator(*candidate, 
+                      RemoveContext::kEviction, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
       } else {
         // we failed to allocate a new item, this item is no  longer moving
         auto ref = candidate->unmarkMoving();

@@ -21,6 +21,7 @@
 #include "cachelib/allocator/RandomStrategy.h"
 #include "cachelib/allocator/FreeThresholdStrategy.h"
 #include "cachelib/allocator/PromotionStrategy.h"
+#include "cachelib/allocator/BackgroundMoverStrategy.h"
 
 namespace facebook {
 namespace cachelib {
@@ -171,14 +172,22 @@ std::shared_ptr<BackgroundMoverStrategy> CacheConfig::getBackgroundEvictorStrate
   if (backgroundEvictorIntervalMilSec == 0) {
     return nullptr;
   }
-  return std::make_shared<FreeThresholdStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark, maxEvictionBatch, minEvictionBatch);
+  if (maxEvictionBatch == 100) {
+    return std::make_shared<DefaultBackgroundMoverStrategy>();
+  } else {
+    return std::make_shared<FreeThresholdStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark, maxEvictionBatch, minEvictionBatch);
+  }
 }
 
 std::shared_ptr<BackgroundMoverStrategy> CacheConfig::getBackgroundPromoterStrategy() const {
   if (backgroundPromoterIntervalMilSec == 0) {
     return nullptr;
   }
-  return std::make_shared<PromotionStrategy>(promotionAcWatermark, maxPromotionBatch, minPromotionBatch);
+  if (maxPromotionBatch == 100) {
+    return std::make_shared<DefaultBackgroundMoverStrategy>();
+  } else {
+    return std::make_shared<PromotionStrategy>(promotionAcWatermark, maxPromotionBatch, minPromotionBatch);
+  }
 }
 } // namespace cachebench
 } // namespace cachelib

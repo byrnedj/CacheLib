@@ -843,7 +843,11 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
   if (it.wasPromoted()) {
       it.unmarkPromoted();
   }
+  if (it.isRecent()) {
+      it.unmarkRecent();
+  }
   if (!it.isDrained()) {
+    XDCHECK(it.isDrained()) << it.toString();
     throw std::runtime_error(
         folly::sformat("cannot release this item: {}", it.toString()));
   }
@@ -2426,6 +2430,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   if (tid > 0) {
       //spawn a fiber to do the promotion
       if (mode == AccessMode::kRead) {
+        item.markRecent();
         Item *itemPtr = const_cast<Item*>(handle.get());
         if (config_.useThreadPool && itemPtr->getRefCount() == 1) {
         auto key = itemPtr->getKey();
@@ -2476,7 +2481,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
             XCHECK_EQ(stid,tid);
             auto promoted = tryPromoteToNextMemoryTier(*itemPtr, true);
             if (promoted) {
-              itemPtr->markPromoted();
+              promoted->markPromoted();
               (*stats_.numPromotions)[tid][pid][cid].inc();
               wakeUpWaiters(*itemPtr, std::move(promoted));
               if (itemPtr->isInclusive()) {
