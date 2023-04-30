@@ -62,7 +62,8 @@ void BackgroundMover<CacheT>::setAssignedMemory(
 // and return those for eviction
 template <typename CacheT>
 void BackgroundMover<CacheT>::checkAndRun() {
-  while (true) {
+  int i = 0;
+  while (i < 100) {
     auto assignedMemory = mutex.lock_combine([this] { return assignedMemory_; });
 
     unsigned int moves = 0;
@@ -90,7 +91,9 @@ void BackgroundMover<CacheT>::checkAndRun() {
     numTraversals.inc();
     numMovedItems.add(moves);
     totalClasses.add(classes.size());
+    i++;
   }
+
 }
 
 template <typename CacheT>

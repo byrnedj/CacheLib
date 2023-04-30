@@ -267,7 +267,7 @@ Cache<Allocator>::Cache(const CacheConfig& config,
                                            allocatorConfig_);
     }
   } else {
-    cache_ = std::make_unique<Allocator>(Allocator::SharedMemNew,allocatorConfig_);
+    cache_ = std::make_unique<Allocator>(allocatorConfig_);
   }
 
   if (isRecovered) {
