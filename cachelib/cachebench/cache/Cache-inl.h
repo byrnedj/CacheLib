@@ -267,7 +267,7 @@ Cache<Allocator>::Cache(const CacheConfig& config,
                                            allocatorConfig_);
     }
   } else {
-    cache_ = std::make_unique<Allocator>(allocatorConfig_);
+    cache_ = std::make_unique<Allocator>(Allocator::SharedMemNew,allocatorConfig_);
   }
 
   if (isRecovered) {
@@ -504,6 +504,21 @@ typename Cache<Allocator>::ReadHandle Cache<Allocator>::find(Key key) {
     invalidKeys_[key.str()].store(true, std::memory_order_relaxed);
   }
   return it;
+}
+
+template <typename Allocator>
+folly::SemiFuture<typename Cache<Allocator>::ReadHandle>
+Cache<Allocator>::asyncPromote(const Item& item) {
+  Item *it = const_cast<Item*>(&item);
+  cache_->syncPromotion(*it);
+  auto hdl = acquire(it);
+  return std::move(hdl).toSemiFuture();
+}
+
+template <typename Allocator>
+void Cache<Allocator>::syncPromote(const Item& item) {
+    Item* it = const_cast<Item*>(&item);
+    cache_->syncPromotion(*it);
 }
 
 template <typename Allocator>

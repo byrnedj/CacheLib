@@ -367,6 +367,7 @@ class CacheStressor : public Stressor {
             }
           } else {
             result = OpResultType::kGetHit;
+            cache_->syncPromote(*it);
           }
 
           break;

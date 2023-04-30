@@ -150,6 +150,8 @@ class Cache {
   //
   // @return read handle for the item if present or null handle.
   ReadHandle find(Key key);
+  void syncPromote(const Item& item);
+  folly::SemiFuture<ReadHandle> asyncPromote(const Item& item);
 
   // perform lookup in the cache asynchronously. The handle will be returned
   // directly without waiting. Caller needs to handle the consistency check and

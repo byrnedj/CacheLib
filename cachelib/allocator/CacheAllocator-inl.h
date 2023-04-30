@@ -2529,36 +2529,8 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
             }
           });
 
-        } else if (!config_.useThreadPool && config_.threadPoolThreads == 1) {
-          auto promoter = [&](Item& item) {
-            bool moving = item.markMovingIfRefCount(1);
-            if (moving) {
-              auto promoted = tryPromoteToNextMemoryTier(item, true);
-              if (promoted) {
-                auto& mmContainer = getMMContainer(tid, pid, cid);
-                mmContainer.remove(item);
-                if (item.isInclusive()) {
-                    XDCHECK(item.isCopy());
-                } else {
-                    XDCHECK(!item.isAccessible());
-                    XDCHECK(!item.isInMMContainer());
-                    XDCHECK_EQ(item.getRefCount(),1);
-                }
-                (*stats_.numPromotions)[tid][pid][cid].inc();
-                wakeUpWaiters(item, std::move(promoted));
-              } else {
-                // we failed to allocate a new item, this item is no  longer moving
-                auto ref = unmarkMovingAndWakeUpWaiters(item, {});
-                if (UNLIKELY(ref == 0)) {
-                  const auto res =
-                      releaseBackToAllocator(item, 
-                              RemoveContext::kNormal, false);
-                  XDCHECK(res == ReleaseRes::kReleased);
-                }
-              }
-            }
-          };
-          promoter(item);
+        } else if (!config_.useThreadPool && config_.threadPoolThreads == 2) {
+          syncPromotion(item);
         }
       }
   } else if (tid == 0 && item.wasPromoted()) {
@@ -2573,6 +2545,93 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   forEachChainedItem(item, [this, mode](ChainedItem& chainedItem) {
     recordAccessInMMContainer(chainedItem, mode);
   });
+}
+
+template <typename CacheTrait>
+void CacheAllocator<CacheTrait>::syncPromotion(Item& item) {
+  if (!config_.useThreadPool && config_.threadPoolThreads == 1) {
+    const auto tid = getTierId(item);
+    if (tid != 1) {
+        return;
+    }
+    bool moving = item.markMovingIfRefCount(1);
+    if (moving) {
+      const auto allocInfo = allocator_[tid]->getAllocInfo(item.getMemory());
+      const auto pid = allocInfo.poolId;
+      const auto cid = allocInfo.classId;
+      auto& mmContainer = getMMContainer(tid, pid, cid);
+      bool removed = mmContainer.remove(item);
+      if (!removed) {
+          auto ref = item.unmarkMoving();
+          if (UNLIKELY(ref == 0)) {
+            XDCHECK(false);
+            //wakeUpWaiters(item,{});
+            //const auto res =
+            //    releaseBackToAllocator(item, 
+            //            RemoveContext::kNormal, false);
+            //XDCHECK(res == ReleaseRes::kReleased);
+          } else {
+            //wake up waiters with this handle
+            auto hdl = acquire(&item);
+            wakeUpWaiters(item,std::move(hdl));
+          }
+          return;
+      }
+      XDCHECK(removed);
+      XDCHECK(moving);
+      XCHECK_EQ(tid,1);
+      auto promoted = tryPromoteToNextMemoryTier(item, true);
+      if (promoted) {
+        promoted->markPromoted();
+        (*stats_.numPromotions)[tid][pid][cid].inc();
+        wakeUpWaiters(item, std::move(promoted));
+        if (item.isInclusive()) {
+            XDCHECK(item.isCopy());
+        } else {
+          XDCHECK(!item.isAccessible());
+          XDCHECK(!item.isInMMContainer());
+          XDCHECK_EQ(item.getRefCount(),1);
+          //const auto res =
+          //    releaseBackToAllocator(item, 
+          //            RemoveContext::kEviction, false);
+          //XDCHECK(res == ReleaseRes::kReleased);
+        }
+      } else {
+        // we failed to allocate a new *toPromoteHdl, this *toPromoteHdl is no  longer moving
+        auto ref = item.unmarkMoving();
+        if (UNLIKELY(ref == 0)) {
+          XDCHECK(false);
+          //wakeUpWaiters(item,{});
+          //const auto res =
+          //    releaseBackToAllocator(item, 
+          //            RemoveContext::kNormal, false);
+          //XDCHECK(res == ReleaseRes::kReleased);
+        }  else if (item.isAccessible()) {
+          //case where we failed to allocate in lower tier
+          //item is still present in accessContainer
+          //item is no longer moving - acquire and
+          //wake up waiters with this handle
+          auto hdl = acquire(&item);
+          insertInMMContainer(*hdl);
+          wakeUpWaiters(item,std::move(hdl));
+        } else if (!item.isAccessible()) {
+          //case where we failed to replace in access
+          //container due to another thread calling insertOrReplace
+          //unmark moving and return null handle
+          wakeUpWaiters(item,{});
+          if (UNLIKELY(ref == 0)) {
+              XDCHECK(false);
+              //const auto res =
+              //  releaseBackToAllocator(*item, RemoveContext::kNormal,
+              //                          false);
+              //XDCHECK(res == ReleaseRes::kReleased);
+          }
+        } else {
+          XDCHECK(false);
+        }
+      }
+    }
+  }
 }
 
 template <typename CacheTrait>

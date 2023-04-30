@@ -540,6 +540,7 @@ class CacheAllocator : public CacheBase {
   // @return          the read handle for the item or a handle to nullptr if the
   //                  key does not exist.
   ReadHandle find(Key key);
+  void syncPromotion(Item& item);
 
   // Warning: this API is synchronous today with HybridCache. This means as
   //          opposed to find(), we will block on an item being read from
@@ -1962,6 +1963,7 @@ class CacheAllocator : public CacheBase {
     auto slabsSkipped = allocator_[currentTier()]->forEachAllocation(std::forward<Fn>(f));
     stats().numReaperSkippedSlabs.add(slabsSkipped);
   }
+
 
   // exposed for the background evictor to iterate through the memory and evict
   // in batch. This should improve insertion path for tiered memory config
