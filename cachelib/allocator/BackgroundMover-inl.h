@@ -62,37 +62,33 @@ void BackgroundMover<CacheT>::setAssignedMemory(
 // and return those for eviction
 template <typename CacheT>
 void BackgroundMover<CacheT>::checkAndRun() {
-  int i = 0;
-  while (i < 100) {
-    auto assignedMemory = mutex.lock_combine([this] { return assignedMemory_; });
+  auto assignedMemory = mutex.lock_combine([this] { return assignedMemory_; });
 
-    unsigned int moves = 0;
-    std::set<ClassId> classes{};
-    auto batches = strategy_->calculateBatchSizes(cache_, assignedMemory);
+  unsigned int moves = 0;
+  std::set<ClassId> classes{};
+  auto batches = strategy_->calculateBatchSizes(cache_, assignedMemory);
 
-    for (size_t i = 0; i < batches.size(); i++) {
-      const auto [tid, pid, cid] = assignedMemory[i];
-      const auto batch = batches[i];
+  for (size_t i = 0; i < batches.size(); i++) {
+    const auto [tid, pid, cid] = assignedMemory[i];
+    const auto batch = batches[i];
 
-      classes.insert(cid);
-      const auto& mpStats = cache_.getPoolByTid(pid, tid).getStats();
+    classes.insert(cid);
+    const auto& mpStats = cache_.getPoolByTid(pid, tid).getStats();
 
-      if (!batch) {
-        continue;
-      }
-
-      // try moving BATCH items from the class in order to reach free target
-      auto moved = moverFunc(cache_, tid, pid, cid, batch);
-      moves += moved;
-      moves_per_class_[tid][pid][cid] += moved;
-      totalBytesMoved.add(moved * mpStats.acStats.at(cid).allocSize);
+    if (!batch) {
+      continue;
     }
 
-    numTraversals.inc();
-    numMovedItems.add(moves);
-    totalClasses.add(classes.size());
-    i++;
+    // try moving BATCH items from the class in order to reach free target
+    auto moved = moverFunc(cache_, tid, pid, cid, batch);
+    moves += moved;
+    moves_per_class_[tid][pid][cid] += moved;
+    totalBytesMoved.add(moved * mpStats.acStats.at(cid).allocSize);
   }
+
+  numTraversals.inc();
+  numMovedItems.add(moves);
+  totalClasses.add(classes.size());
 
 }
 

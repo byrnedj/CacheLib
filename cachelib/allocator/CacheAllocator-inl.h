@@ -1359,7 +1359,7 @@ size_t CacheAllocator<CacheTrait>::wakeUpWaitersLocked(folly::StringPiece key,
 
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
-        Item& oldItem, WriteHandle& newItemHdl) {
+        Item& oldItem, WriteHandle& newItemHdl, bool fromBgThread) {
   
   XDCHECK(oldItem.isMoving());
 
@@ -1397,6 +1397,12 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
     XDCHECK(item.getRefCount() == 0);
     return true;
   };
+
+  if (!fromBgThread) {
+    auto& newContainer = getMMContainer(*newItemHdl);
+    auto mmContainerAdded = newContainer.add(*newItemHdl);
+    XDCHECK(mmContainerAdded);
+  }
   
   auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
                          predicate);
@@ -1406,28 +1412,12 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
       return replaced;
   }
 
-  auto& newContainer = getMMContainer(*newItemHdl);
-  auto mmContainerAdded = newContainer.add(*newItemHdl);
-  XDCHECK(mmContainerAdded);
-
   return true;
 }
 
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
-    Item& oldItem, WriteHandle& newItemHdl) {
-  //on function exit - the new item handle is no longer moving
-  //and other threads may access it - but in case where
-  //we failed to replace in access container we can give the
-  //new item back to the allocator
-  auto guard = folly::makeGuard([&]() {
-    auto ref = newItemHdl->unmarkMoving();
-    if (UNLIKELY(ref == 0)) {
-      const auto res =
-          releaseBackToAllocator(*newItemHdl, RemoveContext::kNormal, false);
-      XDCHECK(res == ReleaseRes::kReleased);
-    }
-  });
+    Item& oldItem, WriteHandle& newItemHdl, bool fromBgThread) {
 
   XDCHECK(oldItem.isMoving());
   XDCHECK(!oldItem.isExpired());
@@ -1446,10 +1436,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   // mark new item as moving to block readers until the data is copied
   // (moveCb is called). Mark item in MMContainer temporarily (TODO: should
   // we remove markMoving requirement for the item to be linked?)
-  newItemHdl->markInMMContainer();
-  auto marked = newItemHdl->markMoving(false /* there is already a handle */);
-  newItemHdl->unmarkInMMContainer();
-  XDCHECK(marked) << newItemHdl->toString();
 
   auto predicate = [&](const Item& item){
     // we rely on moving flag being set (it should block all readers)
@@ -1475,15 +1461,6 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     XDCHECK(newItemHdl->isInclusive());
   }
 
-  auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
-                                   predicate);
-  // another thread may have called insertOrReplace which could have
-  // marked this item as unaccessible causing the replaceIf
-  // in the access container to fail - in this case we want
-  // to abort the move since the item is no longer valid
-  if (!replaced) {
-      return false;
-  }
   // what if another thread calls insertOrReplace now when
   // the item is moving and already replaced in the hash table?
   // 1. it succeeds in updating the hash table - so there is
@@ -1508,10 +1485,12 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
                 oldItem.getSize());
   }
 
-  // Adding the item to mmContainer has to succeed since no one can remove the item
-  auto& newContainer = getMMContainer(*newItemHdl);
-  auto mmContainerAdded = newContainer.add(*newItemHdl);
-  XDCHECK(mmContainerAdded);
+  if (!fromBgThread) {
+    // Adding the item to mmContainer has to succeed since no one can remove the item
+    auto& newContainer = getMMContainer(*newItemHdl);
+    auto mmContainerAdded = newContainer.add(*newItemHdl);
+    XDCHECK(mmContainerAdded);
+  }
 
   // no one can add or remove chained items at this point
   if (oldItem.hasChainedItem()) {
@@ -1532,6 +1511,15 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
 
     XDCHECK(!oldItem.hasChainedItem());
     XDCHECK(newItemHdl->hasChainedItem());
+  }
+  auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
+                                   predicate);
+  // another thread may have called insertOrReplace which could have
+  // marked this item as unaccessible causing the replaceIf
+  // in the access container to fail - in this case we want
+  // to abort the move since the item is no longer valid
+  if (!replaced) {
+      return false;
   }
   newItemHdl.unmarkNascent();
   return true;
@@ -1943,7 +1931,10 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
     Item *nextTierItem = static_cast<Item*>(item.getNextTierCopy());
     if (nextTierItem) {
         auto nextTierItemHdl = acquire(nextTierItem);
-        if (!handleInclusiveWriteback(item, nextTierItemHdl)) {
+        if (fromBgThread) {
+            return nextTierItemHdl;
+        }
+        if (!handleInclusiveWriteback(item, nextTierItemHdl, fromBgThread)) {
             return WriteHandle{};
         }
         XDCHECK_EQ(nextTierItemHdl->getKey(),item.getKey());
@@ -1968,13 +1959,19 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
 
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
-      if (!moveRegularItemWithSync(item, newItemHdl)) {
+      if (fromBgThread) {
+          return newItemHdl;
+      }
+      if (!moveRegularItemWithSync(item, newItemHdl, fromBgThread)) {
+          (*stats_.numWritebacksFailBadMove)[tid][pid][cid].inc();
           return WriteHandle{};
       }
       XDCHECK_EQ(newItemHdl->getKey(),item.getKey());
       item.unmarkMoving();
       return newItemHdl;
     } else {
+      //failed due to no
+      (*stats_.numWritebacksFailNoAlloc)[tid][pid][cid].inc();
       return WriteHandle{};
     }
   }
@@ -2010,7 +2007,7 @@ CacheAllocator<CacheTrait>::tryPromoteToNextMemoryTier(
 
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
-      if (!moveRegularItemWithSync(item, newItemHdl)) {
+      if (!moveRegularItemWithSync(item, newItemHdl, fromBgThread)) {
           return WriteHandle{};
       }
       item.unmarkMoving();
@@ -3169,7 +3166,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
     for (const ClassId cid : classIds) {
       uint64_t allocAttempts, evictionAttempts, allocFailures,
                fragmentationSize, classHits, chainedItemEvictions,
-               regularItemEvictions, numWritebacks, numPromotions, numPromotionsHits = 0;
+               regularItemEvictions, numWritebacks, numWritebacksFailBadMove, numWritebacksFailNoAlloc, numPromotions, numPromotionsHits = 0;
       MMContainerStat mmContainerStats;
       for (TierId tid = 0; tid < getNumTiers(); tid++) {
         allocAttempts += (*stats_.allocAttempts)[tid][poolId][cid].get();
@@ -3180,6 +3177,8 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
         chainedItemEvictions += (*stats_.chainedItemEvictions)[tid][poolId][cid].get();
         regularItemEvictions += (*stats_.regularItemEvictions)[tid][poolId][cid].get();
         numWritebacks += (*stats_.numWritebacks)[tid][poolId][cid].get();
+        numWritebacksFailBadMove += (*stats_.numWritebacksFailBadMove)[tid][poolId][cid].get();
+        numWritebacksFailNoAlloc += (*stats_.numWritebacksFailNoAlloc)[tid][poolId][cid].get();
         numPromotions += (*stats_.numPromotions)[tid][poolId][cid].get();
         numPromotionsHits += (*stats_.numPromotionsHits)[tid][poolId][cid].get();
         mmContainerStats += getMMContainerStat(tid, poolId, cid);
@@ -3197,6 +3196,8 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
             chainedItemEvictions,
             regularItemEvictions,
             numWritebacks,
+            numWritebacksFailBadMove,
+            numWritebacksFailNoAlloc,
             numPromotions,
             numPromotionsHits,
             mmContainerStats}});
@@ -3253,6 +3254,8 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(TierId tid, PoolId poolId) co
             (*stats_.chainedItemEvictions)[tid][poolId][cid].get(),
             (*stats_.regularItemEvictions)[tid][poolId][cid].get(),
             (*stats_.numWritebacks)[tid][poolId][cid].get(),
+            (*stats_.numWritebacksFailBadMove)[tid][poolId][cid].get(),
+            (*stats_.numWritebacksFailNoAlloc)[tid][poolId][cid].get(),
             (*stats_.numPromotions)[tid][poolId][cid].get(),
             (*stats_.numPromotionsHits)[tid][poolId][cid].get(),
             getMMContainerStat(tid, poolId, cid)}});
@@ -3656,7 +3659,7 @@ bool CacheAllocator<CacheTrait>::tryMovingForSlabRelease(
       //in this case oldItem is no longer valid (not accessible, 
       //it gets removed from MMContainer and evictForSlabRelease
       //will send it back to the allocator
-      bool ret = moveRegularItemWithSync(oldItem, newItemHdl);
+      bool ret = moveRegularItemWithSync(oldItem, newItemHdl, false);
       if (!ret) {
           //we failed to move - newItemHdl was released back to allocator
           //by the moveRegularItemWithSync but oldItem is not accessible

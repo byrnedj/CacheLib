@@ -127,6 +127,8 @@ struct CacheStat {
 
   // number of items that are moved to next tier
   uint64_t numWritebacks{0};
+  uint64_t numWritebacksFailBadMove{0};
+  uint64_t numWritebacksFailNoAlloc{0};
   
   uint64_t numPromotions{0};
   uint64_t numPromotionsHits{0};
@@ -210,6 +212,12 @@ struct PoolStats {
 
   // number of writebacks for this pool
   uint64_t numWritebacks() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numWritebacksFailBadMove() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numWritebacksFailNoAlloc() const noexcept;
   
   // number of writebacks for this pool
   uint64_t numPromotions() const noexcept;
@@ -476,6 +484,8 @@ struct GlobalCacheStats {
 
   // number of writebacks across all the pools in the cache.
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numWritebacksFailBadMove;
+  std::vector<uint64_t> numWritebacksFailNoAlloc;
   
   std::vector<uint64_t> numPromotions;
   std::vector<uint64_t> numPromotionsHits;

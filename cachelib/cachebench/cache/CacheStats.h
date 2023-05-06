@@ -56,6 +56,8 @@ struct Stats {
 
   std::vector<uint64_t> numEvictions;
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numWritebacksFailBadMove;
+  std::vector<uint64_t> numWritebacksFailNoAlloc;
   std::vector<uint64_t> numPromotions;
   std::vector<uint64_t> numPromotionsHits;
   std::vector<uint64_t> numCacheHits;
@@ -169,10 +171,11 @@ struct Stats {
             << std::endl;
     }
     for (TierId tid = 0; tid < nTiers; tid++) {
-        out << folly::sformat("Tier {} Evictions : {:,} Writebacks: {:,} Success: {:.2f}%",
-                tid, numEvictions[tid], numWritebacks[tid],
-                invertPctFn(numEvictions[tid] - numWritebacks[tid], numEvictions[tid])) << std::endl;
-        out << folly::sformat("Tier {} Promotions : {:,} Promotion Hits: {:,} Ratio of tier hits from promotion: {:.2f}%",
+        out << folly::sformat("Tier {} Evictions : {:,} Writebacks: {:,}, Bad Move: {:,}, No Alloc: {:,},  Success: {:.2f}%",
+                tid, numEvictions[tid], numWritebacks[tid], numWritebacksFailBadMove[tid],  //pctFn(numWritebacksFailBadMove[tid],numWritebacks[tid]), 
+                numWritebacksFailNoAlloc[tid], //pctFn(numWritebacksFailNoAlloc[tid],numWritebacks[tid]),
+                invertPctFn(numWritebacksFailBadMove[tid] + numWritebacksFailNoAlloc[tid], numWritebacks[tid])) << std::endl;
+        out << folly::sformat("Tier {} Promotions : {:,} Promotion Hits: {:,} Promoted hit ratio: {:.2f}%",
                 tid, numPromotions[tid], numPromotionsHits[tid],
                 pctFn(numPromotionsHits[tid],numCacheHits[tid])) << std::endl;
     }

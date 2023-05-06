@@ -266,7 +266,7 @@ struct ReadHandleImpl {
       if (isReady()) {
         return;
       }
-      bool intime = baton_.try_wait_for(std::chrono::seconds(5));
+      bool intime = baton_.try_wait_for(std::chrono::seconds(20));
       XDCHECK(intime);
       XDCHECK(isReady());
     }

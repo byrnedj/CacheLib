@@ -211,6 +211,33 @@ bool MMLru::Container<T, HookPtr>::add(T& node) noexcept {
   });
 }
 
+//accept range - or pair of iterator begin or end
+//sergey - add in a single list
+template <typename T, MMLru::Hook<T> T::*HookPtr>
+int MMLru::Container<T, HookPtr>::addBatch(std::vector<T*>& nodes) noexcept {
+  const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
+
+  return lruMutex_->lock_combine([this, &nodes, currTime]() {
+    int i = 0;
+    for (auto node : nodes) {
+      if (node->isInMMContainer()) {
+        return i;
+      }
+      if (config_.lruInsertionPointSpec == 0 || insertionPoint_ == nullptr) {
+        lru_.linkAtHead(*node);
+      } else {
+        lru_.insertBefore(*insertionPoint_, *node);
+      }
+      node->markInMMContainer();
+      setUpdateTime(*node, currTime);
+      unmarkAccessed(*node);
+      updateLruInsertionPoint();
+      i++;
+    }
+    return -1;
+  });
+}
+
 template <typename T, MMLru::Hook<T> T::*HookPtr>
 typename MMLru::Container<T, HookPtr>::LockedIterator
 MMLru::Container<T, HookPtr>::getEvictionIterator() const noexcept {
