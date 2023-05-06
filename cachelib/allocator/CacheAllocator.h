@@ -1969,7 +1969,7 @@ class CacheAllocator : public CacheBase {
   // exposed for the background evictor to iterate through the memory and evict
   // in batch. This should improve insertion path for tiered memory config
   size_t traverseAndEvictItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
-auto& mmContainer = getMMContainer(tid, pid, cid);
+    auto& mmContainer = getMMContainer(tid, pid, cid);
     size_t evictions = 0;
     size_t evictionCandidates = 0;
     std::vector<Item*> candidates;
@@ -2026,7 +2026,8 @@ auto& mmContainer = getMMContainer(tid, pid, cid);
     }
     
     //need an Item& for each handle
-    int added = mmContainer.addBatch(new_items);
+    auto& newMMContainer = getMMContainer(tid+1, pid, cid);
+    int added = newMMContainer.addBatch(new_items);
     if (added != -1) {
       throw std::runtime_error(
         folly::sformat("Was not able to add all new items, failed item {} and handle {}", new_items[added]->toString(),new_items_hdl[added]->toString()));
