@@ -2007,6 +2007,9 @@ CacheAllocator<CacheTrait>::tryPromoteToNextMemoryTier(
 
     if (newItemHdl) {
       XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
+      if (fromBgThread) {
+          return newItemHdl;
+      }
       if (!moveRegularItemWithSync(item, newItemHdl, fromBgThread)) {
           return WriteHandle{};
       }

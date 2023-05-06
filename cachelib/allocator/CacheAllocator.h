@@ -1996,7 +1996,7 @@ class CacheAllocator : public CacheBase {
           mmContainer.remove(itr);
           candidates.push_back(candidate);
         } else {
-            ++itr;
+          ++itr;
         }
       }
     });
@@ -2062,7 +2062,7 @@ class CacheAllocator : public CacheBase {
         //moveRegularItem failed due to insertOrReplace being called 
         //at the same time
         //new item hdl is in mmContainer, remove it
-        mmContainer.remove(*new_items[index]);
+        newMMContainer.remove(*new_items[index]);
         //it should be released by the destructor
       }
       XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction() && !candidates_with_alloc[index]->isMoving());
@@ -2158,6 +2158,9 @@ class CacheAllocator : public CacheBase {
     auto& mmContainer = getMMContainer(tid, pid, cid);
     size_t promotions = 0;
     std::vector<Item*> candidates;
+    std::vector<Item*> candidates_with_alloc;
+    std::vector<WriteHandle> new_items_hdl;
+    std::vector<Item*> new_items;
     candidates.reserve(batch);
 
     size_t tries = 0;
@@ -2179,19 +2182,49 @@ class CacheAllocator : public CacheBase {
           mmContainer.remove(itr);
           candidate->unmarkRecent();
           candidates.push_back(candidate);
+        } else {
+          ++itr;
         }
 
-        ++itr;
       }
     });
 
     for (Item *candidate : candidates) {
       auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
-      if (promoted) {
+      if (!promoted) {
+        // we failed to allocate a new item, this item is no  longer moving
+        // put back in mmContainer and wake up waiters
+	bool added = mmContainer.add(*candidate);
+        XDCHECK(added);
+        auto ref = candidate->unmarkMoving();
+        XDCHECK_NE(ref,0);
+	auto hdl = acquire(candidate);
+	wakeUpWaiters(*candidate,std::move(hdl));
+      } else {
+          candidates_with_alloc.push_back(candidate);
+          new_items.push_back(promoted.get()); //new handle
+          new_items_hdl.push_back(std::move(promoted));
+      }
+    }
+    //need an Item& for each handle
+    auto& newMMContainer = getMMContainer(tid-1, pid, cid);
+    int added = newMMContainer.addBatch(new_items);
+    if (added != -1) {
+      throw std::runtime_error(
+        folly::sformat("Was not able to add all new items promoter, failed item {} and handle {}", new_items[added]->toString(),new_items_hdl[added]->toString()));
+    }
+    
+    for (auto index = 0U; index < candidates_with_alloc.size(); index++) {
+      bool moved = moveRegularItemWithSync(*candidates_with_alloc[index],
+                                            new_items_hdl[index],
+                                            true);
+      auto ref = candidates_with_alloc[index]->unmarkMoving();
+      if (moved) {
         promotions++;
-        promoted->markPromoted();
+        new_items_hdl[index]->markPromoted();
         (*stats_.numPromotions)[tid][pid][cid].inc();
-        XDCHECK(!candidate->isMarkedForEviction() && !candidate->isMoving());
+        XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction());
+        XDCHECK(!candidates_with_alloc[index]->isMoving());
         // it's safe to recycle the item here as there are no more
         // references and the item could not been marked as moving
         // by other thread since it's detached from MMContainer.
@@ -2199,51 +2232,32 @@ class CacheAllocator : public CacheBase {
         // but we need to wake up waiters before releasing
         // since candidate's key can change after being sent
         // back to allocator
-        bool inclusive = candidate->isInclusive();
+        bool inclusive = candidates_with_alloc[index]->isInclusive();
         if (inclusive) {
-            XDCHECK(candidate->isCopy());
+            XDCHECK(candidates_with_alloc[index]->isCopy());
         } else {
-            XDCHECK(!candidate->isAccessible());
-            XDCHECK(!candidate->isInMMContainer());
-            XDCHECK_EQ(candidate->getRefCount(),0);
+            XDCHECK(!candidates_with_alloc[index]->isAccessible());
+            XDCHECK(!candidates_with_alloc[index]->isInMMContainer());
+            XDCHECK_EQ(candidates_with_alloc[index]->getRefCount(),0);
         }
-        wakeUpWaiters(*candidate, std::move(promoted));
+        wakeUpWaiters(*candidates_with_alloc[index], std::move(new_items_hdl[index]));
         if (!inclusive) {
           const auto res =
-              releaseBackToAllocator(*candidate, 
+              releaseBackToAllocator(*candidates_with_alloc[index], 
                       RemoveContext::kEviction, false);
           XDCHECK(res == ReleaseRes::kReleased);
         }
       } else {
-        // we failed to allocate a new item, this item is no  longer moving
-        auto ref = candidate->unmarkMoving();
-        if (UNLIKELY(ref == 0)) {
-	  wakeUpWaiters(*candidate,{});
-          const auto res =
-              releaseBackToAllocator(*candidate, 
-                      RemoveContext::kNormal, false);
-          XDCHECK(res == ReleaseRes::kReleased);
-        } else if (candidate->isAccessible()) {
-          //case where we failed to allocate in lower tier
-          //item is still present in accessContainer
-          //item is no longer moving - acquire and
-          //wake up waiters with this handle
-	  auto hdl = acquire(candidate);
-	  insertInMMContainer(*hdl);
-	  wakeUpWaiters(*candidate,std::move(hdl));
-        } else if (!candidate->isAccessible()) {
-          //case where we failed to replace in access
-          //container due to another thread calling insertOrReplace
-          //unmark moving and return null handle
-	  wakeUpWaiters(*candidate,{});
-	  if (UNLIKELY(ref == 0)) {
-              const auto res =
-                releaseBackToAllocator(*candidate, RemoveContext::kNormal,
-                                        false);
-              XDCHECK(res == ReleaseRes::kReleased);
-          }
-        } else {
-          XDCHECK(false);
+        newMMContainer.remove(*new_items[index]);
+        //case where we failed to replace in access
+        //container due to another thread calling insertOrReplace
+        //unmark moving and return null handle
+	wakeUpWaiters(*candidates_with_alloc[index],{});
+	if (UNLIKELY(ref == 0)) {
+            const auto res =
+              releaseBackToAllocator(*candidates_with_alloc[index], RemoveContext::kNormal,
+                                      false);
+            XDCHECK(res == ReleaseRes::kReleased);
         }
       }
     }
