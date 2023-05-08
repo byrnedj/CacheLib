@@ -26,6 +26,7 @@
 #include <folly/container/F14Map.h>
 #include <gtest/gtest.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/MPMCQueue.h>
 
 #include <chrono>
 #include <functional>
@@ -1071,7 +1072,7 @@ class CacheAllocator : public CacheBase {
                       util::Throttler::Config reaperThrottleConfig);
   
   bool startNewBackgroundPromoter(std::chrono::milliseconds interval,
-                      std::shared_ptr<BackgroundMoverStrategy> strategy, size_t threads);
+                      std::shared_ptr<BackgroundMoverStrategy> strategy, size_t threads, bool useQueue);
   bool startNewBackgroundEvictor(std::chrono::milliseconds interval,
                       std::shared_ptr<BackgroundMoverStrategy> strategy, size_t threads);
 
@@ -1472,7 +1473,14 @@ class CacheAllocator : public CacheBase {
       std::vector<std::array<std::array<MMContainerPtr, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>>;
 
+  using PromoQueuePtr = std::unique_ptr<folly::MPMCQueue<Item*>>;
+  using PromoQueue = folly::MPMCQueue<Item*>;
+  using PromoQueues =
+      std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
+                 MemoryPoolManager::kMaxPools>>;
+
   void createMMContainers(const PoolId pid, MMConfig config);
+  void createPromoQueues(const PoolId pid);
 
   TierId getTierId(const Item& item) const;
   TierId getTierId(const void* ptr) const;
@@ -1485,6 +1493,8 @@ class CacheAllocator : public CacheBase {
   MMContainer& getMMContainer(const Item& item) const noexcept;
 
   MMContainer& getMMContainer(TierId tid, PoolId pid, ClassId cid) const noexcept;
+  
+  PromoQueue& getPromoQueue(TierId tid, PoolId pid, ClassId cid) const noexcept;
 
   // Get stats of the specified pid and cid.
   // If such mmcontainer is not valid (pool id or cid out of bound)
@@ -2043,9 +2053,9 @@ class CacheAllocator : public CacheBase {
                                             new_items_hdl[index],
                                             true);
       }
+      auto ref = candidates_with_alloc[index]->unmarkMoving();
       if (moved) {
         evictions++;
-        auto ref = candidates_with_alloc[index]->unmarkMoving();
         
         XDCHECK(!new_items_hdl[index]->isMarkedForEviction());
         XDCHECK(!new_items_hdl[index]->isMoving());
@@ -2065,7 +2075,10 @@ class CacheAllocator : public CacheBase {
         newMMContainer.remove(*new_items[index]);
         //it should be released by the destructor
       }
-      XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction() && !candidates_with_alloc[index]->isMoving());
+      XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction());
+      XDCHECK(!candidates_with_alloc[index]->isMoving()) << candidates_with_alloc[index]->toString();
+      XDCHECK(!candidates_with_alloc[index]->isInMMContainer());
+      XDCHECK(!candidates_with_alloc[index]->isAccessible());
 
       if (candidates_with_alloc[index]->hasChainedItem()) {
         (*stats_.chainedItemEvictions)[tid][pid][cid].inc();
@@ -2153,6 +2166,109 @@ class CacheAllocator : public CacheBase {
     }
   }
   */
+  
+  size_t promoteFromQueue(unsigned int tid, unsigned int pid, unsigned int cid, 
+                                 size_t batch) {
+    auto& promoQueue = getPromoQueue(tid,pid,cid);
+    size_t promotions = 0;
+    while (promoQueue.size() > batch) {
+      std::vector<Item*> candidates;
+      candidates.reserve(batch);
+      std::vector<Item*> candidates_with_alloc;
+      std::vector<WriteHandle> new_items_hdl;
+      std::vector<Item*> new_items;
+      while (candidates.size() < batch) {
+          //attempt to mark moving
+          Item* candidate;
+          bool ret = promoQueue.read(candidate);
+          XDCHECK(candidate);
+          if (candidate->isRecent() && candidate->markMoving(true)) {
+              candidate->unmarkRecent();
+              candidates.push_back(candidate);
+          } else {
+              //promo failed count
+          }
+      }
+      auto& mmContainer = getMMContainer(tid, pid, cid);
+      mmContainer.removeBatch(candidates);
+
+      for (Item *candidate : candidates) {
+        auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
+        if (!promoted) {
+          // we failed to allocate a new item, this item is no  longer moving
+          // put back in mmContainer and wake up waiters
+          bool added = mmContainer.add(*candidate);
+          XDCHECK(added);
+          auto ref = candidate->unmarkMoving();
+          XDCHECK_NE(ref,0);
+          auto hdl = acquire(candidate);
+          wakeUpWaiters(*candidate,std::move(hdl));
+        } else {
+            candidates_with_alloc.push_back(candidate);
+            new_items.push_back(promoted.get()); //new handle
+            new_items_hdl.push_back(std::move(promoted));
+        }
+      }
+      //need an Item& for each handle
+      auto& newMMContainer = getMMContainer(tid-1, pid, cid);
+      int added = newMMContainer.addBatch(new_items);
+      if (added != -1) {
+        throw std::runtime_error(
+          folly::sformat("Was not able to add all new items promoter, failed item {} and handle {}", new_items[added]->toString(),new_items_hdl[added]->toString()));
+      }
+      
+      for (auto index = 0U; index < candidates_with_alloc.size(); index++) {
+        bool moved = moveRegularItemWithSync(*candidates_with_alloc[index],
+                                              new_items_hdl[index],
+                                              true);
+        auto ref = candidates_with_alloc[index]->unmarkMoving();
+        if (moved) {
+          promotions++;
+          new_items_hdl[index]->markPromoted();
+          (*stats_.numPromotions)[tid][pid][cid].inc();
+          XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction());
+          XDCHECK(!candidates_with_alloc[index]->isMoving());
+          // it's safe to recycle the item here as there are no more
+          // references and the item could not been marked as moving
+          // by other thread since it's detached from MMContainer.
+          //
+          // but we need to wake up waiters before releasing
+          // since candidate's key can change after being sent
+          // back to allocator
+          bool inclusive = candidates_with_alloc[index]->isInclusive();
+          if (inclusive) {
+              XDCHECK(candidates_with_alloc[index]->isCopy());
+          } else {
+              XDCHECK(!candidates_with_alloc[index]->isAccessible());
+              XDCHECK(!candidates_with_alloc[index]->isInMMContainer());
+              XDCHECK_EQ(candidates_with_alloc[index]->getRefCount(),0);
+          }
+          wakeUpWaiters(*candidates_with_alloc[index], std::move(new_items_hdl[index]));
+          if (!inclusive) {
+            const auto res =
+                releaseBackToAllocator(*candidates_with_alloc[index], 
+                        RemoveContext::kEviction, false);
+            XDCHECK(res == ReleaseRes::kReleased);
+          }
+        } else {
+          newMMContainer.remove(*new_items[index]);
+          //case where we failed to replace in access
+          //container due to another thread calling insertOrReplace
+          //unmark moving and return null handle
+          wakeUpWaiters(*candidates_with_alloc[index],{});
+          if (UNLIKELY(ref == 0)) {
+              const auto res =
+                releaseBackToAllocator(*candidates_with_alloc[index], RemoveContext::kNormal,
+                                        false);
+              XDCHECK(res == ReleaseRes::kReleased);
+          }
+        }
+      }
+    }
+    return promotions;
+
+  }
+
 
   size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
     auto& mmContainer = getMMContainer(tid, pid, cid);
@@ -2570,6 +2686,8 @@ class CacheAllocator : public CacheBase {
   // the cache allocator.
   // we need mmcontainer per allocator pool/allocation class.
   MMContainers mmContainers_;
+  PromoQueues promoQueues_;
+  //QueueFilters queueFilters_;
 
   // container that is used for accessing the allocations by their key.
   std::unique_ptr<AccessContainer> accessContainer_;

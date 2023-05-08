@@ -281,6 +281,8 @@ struct CacheConfig : public JSONConfig {
   
   uint64_t maxEvictionPromotionHotness{60};
 
+  bool usePromotionQueue{false};
+
   //
   // Options below are not to be populated with JSON
   //

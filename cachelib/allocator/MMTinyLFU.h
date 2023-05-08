@@ -328,6 +328,7 @@ class MMTinyLFU {
     //          is unchanged.
     bool add(T& node) noexcept;
     bool addBatch(std::vector<T*>& nodes) noexcept;
+    bool removeBatch(std::vector<T*>& nodes) noexcept;
 
     // removes the node from the lru and sets it previous and next to nullptr.
     //

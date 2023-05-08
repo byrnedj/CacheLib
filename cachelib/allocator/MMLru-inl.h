@@ -308,6 +308,24 @@ bool MMLru::Container<T, HookPtr>::remove(T& node) noexcept {
   });
 }
 
+//accept range - or pair of iterator begin or end
+//sergey - add in a single list
+template <typename T, MMLru::Hook<T> T::*HookPtr>
+int MMLru::Container<T, HookPtr>::removeBatch(std::vector<T*>& nodes) noexcept {
+
+  return lruMutex_->lock_combine([this, &nodes]() {
+    int i = 0;
+    for (auto node : nodes) {
+      if (!node->isInMMContainer()) {
+        return i;
+      }
+      removeLocked(*node);
+      i++;
+    }
+    return -1;
+  });
+}
+
 template <typename T, MMLru::Hook<T> T::*HookPtr>
 void MMLru::Container<T, HookPtr>::remove(Iterator& it) noexcept {
   T& node = *it;

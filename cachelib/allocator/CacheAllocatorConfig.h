@@ -275,7 +275,7 @@ class CacheAllocatorConfig {
 
   CacheAllocatorConfig& enableBackgroundPromoter(
       std::shared_ptr<BackgroundMoverStrategy> backgroundMoverStrategy,
-      std::chrono::milliseconds regularInterval, size_t threads);
+      std::chrono::milliseconds regularInterval, size_t threads, bool useQueue);
 
   // This enables an optimization for Pool rebalancing and resizing.
   // The rough idea is to ensure only the least useful items are evicted when
@@ -485,6 +485,8 @@ class CacheAllocatorConfig {
 
   size_t backgroundEvictorThreads{1};
   size_t backgroundPromoterThreads{1};
+  
+  bool usePromotionQueue{false};
 
   // time interval to sleep between iterations of pool size optimization,
   // for regular pools and compact caches
@@ -993,10 +995,11 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundEvictor(
 template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundPromoter(
     std::shared_ptr<BackgroundMoverStrategy> strategy,
-    std::chrono::milliseconds interval, size_t promoterThreads) {
+    std::chrono::milliseconds interval, size_t promoterThreads, bool useQueue) {
   backgroundPromoterStrategy = strategy;
   backgroundPromoterInterval = interval;
   backgroundPromoterThreads = promoterThreads;
+  usePromotionQueue = useQueue;
   return *this;
 }
 

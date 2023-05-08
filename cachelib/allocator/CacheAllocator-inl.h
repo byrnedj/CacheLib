@@ -80,6 +80,7 @@ CacheAllocator<CacheTrait>::CacheAllocator(
       mmContainers_(type == InitMemType::kMemAttach
                         ? deserializeMMContainers(*deserializer_, compressor_)
                         : MMContainers{getNumTiers()}),
+      promoQueues_(PromoQueues{getNumTiers()}),
       accessContainer_(initAccessContainer(
           type, detail::kShmHashTableName, config.accessConfig)),
       chainedItemAccessContainer_(
@@ -339,7 +340,8 @@ void CacheAllocator<CacheTrait>::initWorkers() {
   if (config_.backgroundPromoterEnabled()) {
       startNewBackgroundPromoter(config_.backgroundPromoterInterval,
                                 config_.backgroundPromoterStrategy,
-                                config_.backgroundPromoterThreads);
+                                config_.backgroundPromoterThreads,
+                                config_.usePromotionQueue);
   }
 }
 
@@ -2269,6 +2271,17 @@ CacheAllocator<CacheTrait>::getMMContainer(TierId tid,
 }
 
 template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::PromoQueue&
+CacheAllocator<CacheTrait>::getPromoQueue(TierId tid,
+                                           PoolId pid,
+                                           ClassId cid) const noexcept {
+  XDCHECK_LT(static_cast<size_t>(tid), promoQueues_.size());
+  XDCHECK_LT(static_cast<size_t>(pid), promoQueues_[tid].size());
+  XDCHECK_LT(static_cast<size_t>(cid), promoQueues_[tid][pid].size());
+  return *promoQueues_[tid][pid][cid];
+}
+
+template <typename CacheTrait>
 MMContainerStat CacheAllocator<CacheTrait>::getMMContainerStat(
     TierId tid, PoolId pid, ClassId cid) const noexcept {
   if(static_cast<size_t>(tid) >= mmContainers_.size()) {
@@ -2468,7 +2481,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   if (tid > 0) {
       //spawn a fiber to do the promotion
       if (mode == AccessMode::kRead) {
-        item.markRecent();
+        //item.markRecent();
         Item *itemPtr = const_cast<Item*>(handle.get());
         if (config_.useThreadPool && itemPtr->getRefCount() == 1) {
         auto key = itemPtr->getKey();
@@ -2569,6 +2582,10 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
 
         } else if (!config_.useThreadPool && config_.threadPoolThreads == 2) {
           syncPromotion(item);
+        } else if (!config_.useThreadPool && !itemPtr->isRecent()) {
+          itemPtr->markRecent();
+          auto &promoQueue = getPromoQueue(tid,pid,cid);
+          promoQueue.write(itemPtr);
         }
       }
   } else if (tid == 0 && item.wasPromoted()) {
@@ -2618,7 +2635,7 @@ void CacheAllocator<CacheTrait>::syncPromotion(Item& item) {
       XDCHECK(removed);
       XDCHECK(moving);
       XCHECK_EQ(tid,1);
-      auto promoted = tryPromoteToNextMemoryTier(item, true);
+      auto promoted = tryPromoteToNextMemoryTier(item, false);
       if (promoted) {
         promoted->markPromoted();
         (*stats_.numPromotions)[tid][pid][cid].inc();
@@ -2967,6 +2984,7 @@ PoolId CacheAllocator<CacheTrait>::addPool(
     pid = res;
   }
 
+  createPromoQueues(pid);
   createMMContainers(pid, std::move(config));
   setRebalanceStrategy(pid, std::move(rebalanceStrategy));
   setResizeStrategy(pid, std::move(resizeStrategy));
@@ -3028,6 +3046,17 @@ void CacheAllocator<CacheTrait>::overridePoolConfig(TierId tid, PoolId pid,
             : 0);
     DCHECK_NOTNULL(mmContainers_[tid][pid][cid].get());
     mmContainers_[tid][pid][cid]->setConfig(mmConfig);
+  }
+}
+
+template <typename CacheTrait>
+void CacheAllocator<CacheTrait>::createPromoQueues(const PoolId pid) {
+  auto& pool = allocator_[0]->getPool(pid);
+
+  for (unsigned int cid = 0; cid < pool.getNumClassId(); ++cid) {
+    for (TierId tid = 0; tid < getNumTiers(); tid++) {
+      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(100000));
+    }
   }
 }
 
@@ -4604,14 +4633,14 @@ template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::startNewBackgroundPromoter(
     std::chrono::milliseconds interval,
     std::shared_ptr<BackgroundMoverStrategy> strategy,
-    size_t threads) {
+    size_t threads,
+    bool useQueue) {
   XDCHECK(threads > 0);
   XDCHECK(getNumTiers() > 1);
   backgroundPromoter_.resize(threads);
   bool result = true;
-
   for (size_t i = 0; i < threads; i++) {
-    auto ret = startNewWorker("BackgroundPromoter" + std::to_string(i), backgroundPromoter_[i], interval, strategy, MoverDir::Promote);
+    auto ret = startNewWorker("BackgroundPromoter" + std::to_string(i), backgroundPromoter_[i], interval, strategy, useQueue ? MoverDir::PromoteFromQueue : MoverDir::Promote);
     result = result && ret;
 
     if (result) {

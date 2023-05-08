@@ -127,11 +127,12 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, minEvictionBatch);
   JSONSetVal(configJson, minPromotionBatch);
   JSONSetVal(configJson, maxEvictionPromotionHotness);
+  JSONSetVal(configJson, usePromotionQueue);
   
   // if you added new fields to the configuration, update the JSONSetVal
   // to make them available for the json configs and increment the size
   // below
-  checkCorrectSize<CacheConfig, 896>();
+  checkCorrectSize<CacheConfig, 904>();
 
   if (numPools != poolSizes.size()) {
     throw std::invalid_argument(folly::sformat(
@@ -172,8 +173,8 @@ std::shared_ptr<BackgroundMoverStrategy> CacheConfig::getBackgroundEvictorStrate
   if (backgroundEvictorIntervalMilSec == 0) {
     return nullptr;
   }
-  if (maxEvictionBatch == 100) {
-    return std::make_shared<DefaultBackgroundMoverStrategy>();
+  if (maxEvictionBatch % 100 == 0) {
+    return std::make_shared<DefaultBackgroundMoverStrategy>(maxEvictionBatch);
   } else {
     return std::make_shared<FreeThresholdStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark, maxEvictionBatch, minEvictionBatch);
   }
@@ -183,8 +184,8 @@ std::shared_ptr<BackgroundMoverStrategy> CacheConfig::getBackgroundPromoterStrat
   if (backgroundPromoterIntervalMilSec == 0) {
     return nullptr;
   }
-  if (maxPromotionBatch == 100) {
-    return std::make_shared<DefaultBackgroundMoverStrategy>();
+  if (maxPromotionBatch % 100 == 0) {
+    return std::make_shared<DefaultBackgroundMoverStrategy>(maxPromotionBatch);
   } else {
     return std::make_shared<PromotionStrategy>(promotionAcWatermark, maxPromotionBatch, minPromotionBatch);
   }

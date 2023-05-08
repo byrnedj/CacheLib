@@ -39,15 +39,22 @@ class BackgroundMoverStrategy {
 };
 
 class DefaultBackgroundMoverStrategy : public BackgroundMoverStrategy {
+  public:
+    DefaultBackgroundMoverStrategy(uint64_t batchSize) 
+      : batchSize_(batchSize) {}
+    ~DefaultBackgroundMoverStrategy() {}
+
   std::vector<size_t> calculateBatchSizes(
       const CacheBase& cache,
       std::vector<MemoryDescriptorType> acVec) {
     std::vector<size_t> batches{};
     for (auto [tid, pid, cid] : acVec) {
-        batches.push_back(100);
+        batches.push_back(batchSize_);
     }
     return batches;
   }
+  private:
+    uint64_t batchSize_{100};
 };
 
 /*
