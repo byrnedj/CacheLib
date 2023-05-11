@@ -266,8 +266,14 @@ struct ReadHandleImpl {
       if (isReady()) {
         return;
       }
-      bool intime = baton_.try_wait_for(std::chrono::seconds(20));
-      XDCHECK(intime);
+      bool intime = baton_.try_wait_for(std::chrono::seconds(2));
+      if (!intime) {
+          int size = alloc_.printPromoMap();
+          int qsize = alloc_.printPromoQueueSize();
+          XDCHECK_EQ(0,size);
+          XDCHECK_EQ(0,qsize);
+          XDCHECK(intime);
+      }
       XDCHECK(isReady());
     }
 

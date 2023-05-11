@@ -91,6 +91,7 @@ CacheAllocator<CacheTrait>::CacheAllocator(
                         std::make_shared<MurmurHash2>()),
       movesMap_(kShards),
       moveLock_(kShards), 
+      promoMap_(kShards),
       cacheCreationTime_{
           type != InitMemType::kMemAttach
               ? util::getCurrentTimeSec()
@@ -1378,7 +1379,7 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
    * accessible
    */
   XDCHECK(!newItemHdl->isAccessible());
-  XDCHECK(!newItemHdl->isInMMContainer());
+  //XDCHECK(!newItemHdl->isInMMContainer());
   
   auto tid = getTierId(oldItem);
   auto allocInfo = allocator_[tid]->getAllocInfo(oldItem.getMemory());
@@ -1688,10 +1689,13 @@ void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
   accessContainer_->remove(it);
   removeFromMMContainer(it);
 
+  if (it.wasPromoted()) {
+      it.unmarkPromoted();
+  }
   // Since we managed to mark the item for eviction we must be the only
   // owner of the item.
   const auto ref = it.unmarkForEviction();
-  XDCHECK(ref == 0u);
+  XDCHECK(ref == 0u) << it.toString();
 }
 
 template <typename CacheTrait>
@@ -2582,10 +2586,37 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
 
         } else if (!config_.useThreadPool && config_.threadPoolThreads == 2) {
           syncPromotion(item);
-        } else if (!config_.useThreadPool && !itemPtr->isRecent()) {
-          itemPtr->markRecent();
-          auto &promoQueue = getPromoQueue(tid,pid,cid);
-          promoQueue.write(itemPtr);
+        } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0  && !itemPtr->isRecent()) {
+          bool moving = itemPtr->markMovingIfRefCount(1);
+          if (moving) {
+            itemPtr->markRecent();
+            auto &promoQueue = getPromoQueue(tid,pid,cid);
+            //bool added = promoQueue.write(itemPtr);
+            {
+              auto plock = getPromoLockForClass(cid);
+              //use a handle
+              // safe to acquire handle for a moving Item
+              auto incRes = incRef(*itemPtr, false);
+              XDCHECK(incRes == RefcountWithFlags::incResult::incOk);
+              auto hdl = WriteHandle{itemPtr,*this};
+              promoQueue.push(std::move(hdl));
+            }
+            //if (!added) {
+            //    auto ref = itemPtr->unmarkMoving();
+            //    XDCHECK_NE(ref,0);
+            //    auto hdl = acquire(itemPtr);
+            //    wakeUpWaiters(*itemPtr,std::move(hdl));
+            //    //queue full
+            //} else {
+            //  auto shard = getShardForKey(item.getKey());
+            //  auto& promoMap = getPromoMapForShard(shard);
+            //  {
+            //    auto lock = getMoveLockForShard(shard);
+            //    auto ret = promoMap.try_emplace(item.getKey(),itemPtr);
+            //    XDCHECK_EQ(ret.first->second,itemPtr);
+            //  }
+            //}
+          }
         }
       }
   } else if (tid == 0 && item.wasPromoted()) {
@@ -3055,7 +3086,8 @@ void CacheAllocator<CacheTrait>::createPromoQueues(const PoolId pid) {
 
   for (unsigned int cid = 0; cid < pool.getNumClassId(); ++cid) {
     for (TierId tid = 0; tid < getNumTiers(); tid++) {
-      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(100000));
+      //promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(10000));
+      promoQueues_[tid][pid][cid].reset(new std::queue<WriteHandle>());
     }
   }
 }

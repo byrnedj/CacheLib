@@ -1473,9 +1473,14 @@ class CacheAllocator : public CacheBase {
       std::vector<std::array<std::array<MMContainerPtr, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>>;
 
-  using PromoQueuePtr = std::unique_ptr<folly::MPMCQueue<Item*>>;
-  using PromoQueue = folly::MPMCQueue<Item*>;
-  using PromoQueues =
+  //using PromoQueuePtr = std::unique_ptr<folly::MPMCQueue<Item*>>;
+  //using PromoQueue = folly::MPMCQueue<Item*>;
+  //using PromoQueues =
+  //    std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
+  //               MemoryPoolManager::kMaxPools>>;
+  using PromoQueuePtr = std::unique_ptr<std::queue<WriteHandle>>;
+  using PromoQueue = std::queue<WriteHandle>;
+  using PromoQueues = 
       std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>>;
 
@@ -2073,6 +2078,7 @@ class CacheAllocator : public CacheBase {
         //at the same time
         //new item hdl is in mmContainer, remove it
         newMMContainer.remove(*new_items[index]);
+        wakeUpWaiters(*candidates_with_alloc[index], {});
         //it should be released by the destructor
       }
       XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction());
@@ -2171,23 +2177,52 @@ class CacheAllocator : public CacheBase {
                                  size_t batch) {
     auto& promoQueue = getPromoQueue(tid,pid,cid);
     size_t promotions = 0;
-    while (promoQueue.size() > batch) {
+    //while (promoQueue.size() > batch) {
+    while (true) {
       std::vector<Item*> candidates;
       candidates.reserve(batch);
       std::vector<Item*> candidates_with_alloc;
+      std::vector<WriteHandle> candidates_with_alloc_hdl;
       std::vector<WriteHandle> new_items_hdl;
       std::vector<Item*> new_items;
       while (candidates.size() < batch) {
           //attempt to mark moving
-          Item* candidate;
-          bool ret = promoQueue.read(candidate);
-          XDCHECK(candidate);
-          if (candidate->isRecent() && candidate->markMoving(true)) {
-              candidate->unmarkRecent();
-              candidates.push_back(candidate);
-          } else {
-              //promo failed count
+          WriteHandle hdl;
+          {
+            auto plock = getPromoLockForClass(cid);
+            if (promoQueue.size() == 0) {
+                break;
+            }
+            hdl = std::move(promoQueue.front());
+            if (hdl.get() == nullptr) {
+                break;
+            } else {
+                promoQueue.pop();
+            }
           }
+          Item *candidate = hdl.get();
+          //promoQueue.blockingRead(candidate);
+          //promoQueue.blockingRead(candidate);
+          //auto shard = getShardForKey(candidate->getKey());
+          //auto& promoMap = getPromoMapForShard(shard);
+          //{
+          //  auto lock = getMoveLockForShard(shard);
+          //  auto ret = promoMap.find(candidate->getKey());
+          //  XDCHECK_EQ(ret->second,candidate);
+          //  XDCHECK_NE(ret,promoMap.end());
+          //  promoMap.erase(ret);
+          //}
+
+          //locking hashtable
+          XDCHECK(candidate->isMoving()) << candidate->toString();
+          XDCHECK(candidate->isRecent());
+          candidates.push_back(candidate);
+          candidates_with_alloc_hdl.push_back(std::move(hdl));
+          //if (candidate->isRecent() && candidate->markMoving(true)) {
+          //    candidate->unmarkRecent();
+          //} else {
+          //    //promo failed count
+          //}
       }
       auto& mmContainer = getMMContainer(tid, pid, cid);
       mmContainer.removeBatch(candidates);
@@ -2241,10 +2276,10 @@ class CacheAllocator : public CacheBase {
           } else {
               XDCHECK(!candidates_with_alloc[index]->isAccessible());
               XDCHECK(!candidates_with_alloc[index]->isInMMContainer());
-              XDCHECK_EQ(candidates_with_alloc[index]->getRefCount(),0);
+              //XDCHECK_EQ(candidates_with_alloc[index]->getRefCount(),0);
           }
           wakeUpWaiters(*candidates_with_alloc[index], std::move(new_items_hdl[index]));
-          if (!inclusive) {
+          if (!inclusive && candidates_with_alloc[index]->getRefCount() == 0) {
             const auto res =
                 releaseBackToAllocator(*candidates_with_alloc[index], 
                         RemoveContext::kEviction, false);
@@ -2610,6 +2645,11 @@ class CacheAllocator : public CacheBase {
       folly::F14ValueMap<folly::StringPiece,
                          std::unique_ptr<MoveCtx>,
                          folly::HeterogeneousAccessHash<folly::StringPiece>>;
+  
+  using PromoMap =
+      folly::F14ValueMap<folly::StringPiece,
+                         Item*,
+                         folly::HeterogeneousAccessHash<folly::StringPiece>>;
 
   static size_t getShardForKey(folly::StringPiece key) {
     return folly::Hash()(key) % kShards;
@@ -2618,11 +2658,45 @@ class CacheAllocator : public CacheBase {
   MoveMap& getMoveMapForShard(size_t shard) {
     return movesMap_[shard].movesMap_;
   }
+  
+  PromoMap& getPromoMapForShard(size_t shard) {
+    return promoMap_[shard].promoMap_;
+  }
+  
+  int printPromoMap() {
+    size_t total = 0;
+    for (int i = 0; i < kShards; i++) {
+        auto& promoMap = promoMap_[i].promoMap_;
+        total += promoMap.size();
+    }
+    return total;
+  }
+  
+  int printPromoQueueSize() {
+    size_t total = 0;
+    const auto pools = getPoolIds();
+    for (TierId tid = 0; tid < getNumTiers(); tid++) {
+      for (PoolId pid : pools) {
+        const auto& pool = allocator_[currentTier()]->getPool(pid);
+        const auto& allocSizes = pool.getAllocSizes();
+        for (ClassId cid = 0; cid < static_cast<ClassId>(allocSizes.size()); ++cid) {
+            int size = promoQueues_[tid][pid][cid]->size();
+            XDCHECK_GE(size,-1);
+            total += size;
+        }
+      }
+    }
+    return total;
+  }
 
   MoveMap& getMoveMap(folly::StringPiece key) {
     return getMoveMapForShard(getShardForKey(key));
   }
 
+  std::unique_lock<std::mutex> getPromoLockForClass(size_t cid) {
+    return std::unique_lock<std::mutex>(moveLock_[cid].moveLock_);
+  }
+  
   std::unique_lock<std::mutex> getMoveLockForShard(size_t shard) {
     return std::unique_lock<std::mutex>(moveLock_[shard].moveLock_);
   }
@@ -2736,6 +2810,10 @@ class CacheAllocator : public CacheBase {
   struct MovesMapShard {
     alignas(folly::hardware_destructive_interference_size) MoveMap movesMap_;
   };
+  
+  struct PromoMapShard {
+    alignas(folly::hardware_destructive_interference_size) PromoMap promoMap_;
+  };
 
   struct MoveLock {
     alignas(folly::hardware_destructive_interference_size) std::mutex moveLock_;
@@ -2743,6 +2821,9 @@ class CacheAllocator : public CacheBase {
 
   // a map of all pending moves
   std::vector<MovesMapShard> movesMap_;
+  
+  // a map of all pending promo
+  std::vector<PromoMapShard> promoMap_;
 
   // a map of move locks for each shard
   std::vector<MoveLock> moveLock_;
