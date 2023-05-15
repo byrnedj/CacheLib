@@ -74,7 +74,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
     const auto batch = batches[i];
 
     classes.insert(cid);
-    const auto& mpStats = cache_.getPoolByTid(pid, tid).getStats();
+    //const auto& mpStats = cache_.getPoolByTid(pid, tid).getStats();
 
     if (!batch) {
       continue;
@@ -84,7 +84,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
     auto moved = moverFunc(cache_, tid, pid, cid, batch);
     moves += moved;
     moves_per_class_[tid][pid][cid] += moved;
-    totalBytesMoved.add(moved * mpStats.acStats.at(cid).allocSize);
+    //totalBytesMoved.add(moved * mpStats.acStats.at(cid).allocSize);
   }
 
   numTraversals.inc();
