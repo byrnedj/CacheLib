@@ -315,14 +315,16 @@ int MMLru::Container<T, HookPtr>::removeBatch(std::vector<T*>& nodes) noexcept {
 
   return lruMutex_->lock_combine([this, &nodes]() {
     int i = 0;
+    int unremoved = 0;
     for (auto node : nodes) {
       if (!node->isInMMContainer()) {
-        return i;
+        unremoved = i;
+      } else {
+        removeLocked(*node);
       }
-      removeLocked(*node);
       i++;
     }
-    return -1;
+    return unremoved;
   });
 }
 

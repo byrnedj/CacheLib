@@ -1473,16 +1473,16 @@ class CacheAllocator : public CacheBase {
       std::vector<std::array<std::array<MMContainerPtr, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>>;
 
-  //using PromoQueuePtr = std::unique_ptr<folly::MPMCQueue<Item*>>;
-  //using PromoQueue = folly::MPMCQueue<Item*>;
-  //using PromoQueues =
-  //    std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
-  //               MemoryPoolManager::kMaxPools>>;
-  using PromoQueuePtr = std::unique_ptr<std::queue<Item*>>;
-  using PromoQueue = std::queue<Item*>;
-  using PromoQueues = 
+  using PromoQueuePtr = std::unique_ptr<folly::MPMCQueue<Item*>>;
+  using PromoQueue = folly::MPMCQueue<Item*>;
+  using PromoQueues =
       std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>>;
+  //using PromoQueuePtr = std::unique_ptr<std::queue<Item*>>;
+  //using PromoQueue = std::queue<Item*>;
+  //using PromoQueues = 
+  //    std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
+  //               MemoryPoolManager::kMaxPools>>;
 
   void createMMContainers(const PoolId pid, MMConfig config);
   void createPromoQueues(const PoolId pid);
@@ -2191,20 +2191,25 @@ class CacheAllocator : public CacheBase {
       std::vector<Item*> new_items;
       while (candidates.size() < batch) {
           //attempt to mark moving
-          Item *candidate;
-          {
-            auto plock = getPromoLockForClass(cid);
-            if (promoQueue.size() == 0) {
-                break;
-            }
-            candidate = promoQueue.front();
-            if (candidate == nullptr) {
-                break;
-            } else {
-                promoQueue.pop();
-            }
+          Item *candidate = nullptr;
+          //{
+          //  auto plock = getPromoLockForClass(cid);
+          //  candidate = promoQueue.front();
+          //  if (candidate == nullptr) {
+          //      break;
+          //  } else {
+          //      promoQueue.pop();
+          //  }
+          //}
+          if (promoQueue.size() == 0) {
+              break;
           }
-          //promoQueue.blockingRead(candidate);
+
+          promoQueue.read(candidate);
+
+          if (candidate == nullptr) {
+              break;
+          }
           //promoQueue.blockingRead(candidate);
           //auto shard = getShardForKey(candidate->getKey());
           //auto& promoMap = getPromoMapForShard(shard);
@@ -2219,8 +2224,10 @@ class CacheAllocator : public CacheBase {
           //locking hashtable
           XDCHECK(candidate->isMoving()) << candidate->toString();
           XDCHECK(candidate->isRecent());
+          XDCHECK(candidate->isInMMContainer());
           //XDCHECK(candidate->isInclusive());
           candidates.push_back(candidate);
+          candidate = nullptr;
           //if (candidate->isRecent() && candidate->markMoving(true)) {
           //    candidate->unmarkRecent();
           //} else {
@@ -2232,7 +2239,8 @@ class CacheAllocator : public CacheBase {
       }
       auto& mmContainer = getMMContainer(tid, pid, cid);
       auto removed = mmContainer.removeBatch(candidates);
-      if (removed != -1) {
+      if (removed != 0) {
+        XDCHECK_EQ(removed,0) << candidates[removed]->toString();
         throw std::runtime_error(
           folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
       }

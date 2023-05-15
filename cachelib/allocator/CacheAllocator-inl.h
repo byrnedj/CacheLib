@@ -2621,22 +2621,25 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           if (moving) {
             itemPtr->markRecent();
             auto &promoQueue = getPromoQueue(tid,pid,cid);
-            //bool added = promoQueue.write(itemPtr);
-            {
-              auto plock = getPromoLockForClass(cid);
-              //use a handle
-              // safe to acquire handle for a moving Item
-              //XDCHECK(itemPtr->isInclusive());
-              //auto incRes = incRef(*itemPtr, false);
-              //XDCHECK(incRes == RefcountWithFlags::incResult::incOk);
-              //auto hdl = WriteHandle{itemPtr,*this};
-              promoQueue.push(itemPtr);
+            bool added = promoQueue.write(itemPtr);
+            if (!added) {
+                itemPtr->unmarkRecent();
+                auto ref = itemPtr->unmarkMoving();
+                XDCHECK_NE(ref,0);
+                auto hdl = acquire(itemPtr);
+                wakeUpWaiters(*itemPtr,std::move(hdl));
             }
-            //if (!added) {
-            //    auto ref = itemPtr->unmarkMoving();
-            //    XDCHECK_NE(ref,0);
-            //    auto hdl = acquire(itemPtr);
-            //    wakeUpWaiters(*itemPtr,std::move(hdl));
+
+            //{
+            //  auto plock = getPromoLockForClass(cid);
+            //  //use a handle
+            //  // safe to acquire handle for a moving Item
+            //  //XDCHECK(itemPtr->isInclusive());
+            //  //auto incRes = incRef(*itemPtr, false);
+            //  //XDCHECK(incRes == RefcountWithFlags::incResult::incOk);
+            //  //auto hdl = WriteHandle{itemPtr,*this};
+            //  promoQueue.push(itemPtr);
+            //}
             //    //queue full
             //} else {
             //  auto shard = getShardForKey(item.getKey());
@@ -3117,8 +3120,8 @@ void CacheAllocator<CacheTrait>::createPromoQueues(const PoolId pid) {
 
   for (unsigned int cid = 0; cid < pool.getNumClassId(); ++cid) {
     for (TierId tid = 0; tid < getNumTiers(); tid++) {
-      //promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(10000));
-      promoQueues_[tid][pid][cid].reset(new std::queue<Item*>());
+      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(20000));
+      //promoQueues_[tid][pid][cid].reset(new std::queue<Item*>());
     }
   }
 }
