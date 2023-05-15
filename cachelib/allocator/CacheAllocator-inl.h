@@ -1250,6 +1250,7 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
     replaced = accessContainer_->insertOrReplace(*(handle.getInternal()));
 
     if (replaced) {
+      replaced->unmarkPromoted();
       if (handle->isInclusive()) {
           handle->markDirty();
           handle->setNextTierCopy(replaced->getNextTierCopy());
@@ -1390,6 +1391,7 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
     (*stats_.numWritebacks)[tid][pid][cid].inc();
   }
 
+  XDCHECK(newItemHdl->isInclusive());
   newItemHdl->unmarkCopy();
   newItemHdl->setNextTierCopy(0);
   oldItem.setNextTierCopy(0);
@@ -1410,6 +1412,8 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
   auto replaced = accessContainer_->replaceIf(oldItem, *newItemHdl,
                          predicate);
   if (!replaced) {
+      auto& newContainer = getMMContainer(*newItemHdl);
+      newContainer.remove(*newItemHdl);
       //we failed to replace - this means there was an insert or replace
       //so both items can and should be released back to allocator
       return replaced;
@@ -1462,6 +1466,11 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
       newItemHdl->setNextTierCopy(0);
     }
     XDCHECK(newItemHdl->isInclusive());
+  }
+
+  if (srcTid > dstTid) {
+    newItemHdl->markPromoted();
+    XDCHECK(newItemHdl->isInMMContainer());
   }
 
   // what if another thread calls insertOrReplace now when
@@ -1522,6 +1531,8 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   // in the access container to fail - in this case we want
   // to abort the move since the item is no longer valid
   if (!replaced) {
+      auto& newContainer = getMMContainer(*newItemHdl);
+      newContainer.remove(*newItemHdl);
       return false;
   }
   newItemHdl.unmarkNascent();
@@ -1703,6 +1714,20 @@ typename CacheAllocator<CacheTrait>::Item*
 CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
   auto& mmContainer = getMMContainer(tid, pid, cid);
   bool lastTier = tid+1 >= getNumTiers();
+  /*
+  if (!lastTier && getMMContainerStat(tid,pid,cid).size < 7000) {
+      
+      const Item* it;
+      while (true) {
+        it = reinterpret_cast<const Item*>(allocator_[tid]->getRandomAlloc());
+        const auto allocInfo = allocator_[tid]->getAllocInfo(it->getMemory());
+        if (allocInfo.classId == cid) {
+            break;
+        }
+      }
+      XDCHECK(it->isInMMContainer()) << it->toString();
+  }
+  */
   // Keep searching for a candidate until we were able to evict it
   // or until the search limit has been exhausted
   unsigned int searchTries = 0;
@@ -1757,9 +1782,12 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
           // unmarkForEviction() returns 0 - so just go through normal path.
           if (!toRecycle_->isChainedItem() ||
               &toRecycle->asChainedItem().getParentItem(compressor_) ==
-                  candidate)
+                  candidate) {
             mmContainer.remove(itr);
+          }
           return;
+        } else {
+          (*stats_.numWritebacksFailBadMove)[tid][pid][cid].inc();
         }
 
         if (candidate_->hasChainedItem()) {
@@ -1941,6 +1969,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
             return nextTierItemHdl;
         }
         if (!handleInclusiveWriteback(item, nextTierItemHdl, fromBgThread)) {
+            (*stats_.numWritebacksFailBadMove)[tid][pid][cid].inc();
             return WriteHandle{};
         }
         XDCHECK_EQ(nextTierItemHdl->getKey(),item.getKey());
@@ -2586,7 +2615,8 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
 
         } else if (!config_.useThreadPool && config_.threadPoolThreads == 2) {
           syncPromotion(item);
-        } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0  && !itemPtr->isRecent()) {
+        } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
+                   config_.usePromotionQueue && !itemPtr->isRecent()) {
           bool moving = itemPtr->markMovingIfRefCount(1);
           if (moving) {
             itemPtr->markRecent();
@@ -2596,10 +2626,11 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
               auto plock = getPromoLockForClass(cid);
               //use a handle
               // safe to acquire handle for a moving Item
-              auto incRes = incRef(*itemPtr, false);
-              XDCHECK(incRes == RefcountWithFlags::incResult::incOk);
-              auto hdl = WriteHandle{itemPtr,*this};
-              promoQueue.push(std::move(hdl));
+              //XDCHECK(itemPtr->isInclusive());
+              //auto incRes = incRef(*itemPtr, false);
+              //XDCHECK(incRes == RefcountWithFlags::incResult::incOk);
+              //auto hdl = WriteHandle{itemPtr,*this};
+              promoQueue.push(itemPtr);
             }
             //if (!added) {
             //    auto ref = itemPtr->unmarkMoving();
@@ -3087,7 +3118,7 @@ void CacheAllocator<CacheTrait>::createPromoQueues(const PoolId pid) {
   for (unsigned int cid = 0; cid < pool.getNumClassId(); ++cid) {
     for (TierId tid = 0; tid < getNumTiers(); tid++) {
       //promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(10000));
-      promoQueues_[tid][pid][cid].reset(new std::queue<WriteHandle>());
+      promoQueues_[tid][pid][cid].reset(new std::queue<Item*>());
     }
   }
 }

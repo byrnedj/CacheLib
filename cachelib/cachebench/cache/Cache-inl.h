@@ -421,6 +421,7 @@ typename Cache<Allocator>::WriteHandle Cache<Allocator>::allocate(
     if (handle) {
       CacheValue::initialize(handle->getMemory());
       if (config_.useInclusive) {
+         XDCHECK(!handle->isInclusive());
          handle->markInclusive();
       }
     }

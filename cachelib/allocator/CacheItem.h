@@ -275,6 +275,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
   // Returns true if the item is in access container, false otherwise
   bool isAccessible() const noexcept;
   void markInclusive() noexcept;
+  bool isInclusive() const noexcept;
 
  protected:
   // construct an item without expiry timestamp.
@@ -331,7 +332,6 @@ class CACHELIB_PACKED_ATTR CacheItem {
    * Is item inclusive w.r.t to higher tiers
    * also - if item is dirty, or how we can mark dirty
    */
-  bool isInclusive() const noexcept;
   bool isDirty() const noexcept;
   void markDirty() noexcept;
   
