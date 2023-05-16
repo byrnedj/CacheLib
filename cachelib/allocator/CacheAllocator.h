@@ -2183,7 +2183,7 @@ class CacheAllocator : public CacheBase {
     auto& promoQueue = getPromoQueue(tid,pid,cid);
     size_t promotions = 0;
     //while (promoQueue.size() > batch) {
-    while (true) {
+    //while (true) {
       std::vector<Item*> candidates;
       candidates.reserve(batch);
       std::vector<Item*> candidates_with_alloc;
@@ -2220,13 +2220,17 @@ class CacheAllocator : public CacheBase {
           //  XDCHECK_NE(ret,promoMap.end());
           //  promoMap.erase(ret);
           //}
-
-          //locking hashtable
-          XDCHECK(candidate->isMoving()) << candidate->toString();
-          XDCHECK(candidate->isRecent());
-          XDCHECK(candidate->isInMMContainer());
-          //XDCHECK(candidate->isInclusive());
-          candidates.push_back(candidate);
+         
+          if (candidate->markMoving(true)) {
+            //locking hashtable
+            XDCHECK(candidate->isMoving()) << candidate->toString();
+            XDCHECK(candidate->isRecent());
+            XDCHECK(candidate->isInMMContainer());
+            //XDCHECK(candidate->isInclusive());
+            candidates.push_back(candidate);
+          } else {
+            candidate->unmarkRecent();
+          }
           candidate = nullptr;
           //if (candidate->isRecent() && candidate->markMoving(true)) {
           //    candidate->unmarkRecent();
@@ -2327,7 +2331,7 @@ class CacheAllocator : public CacheBase {
           XDCHECK_EQ(new_items[index]->getRefCount(),1);
         }
       }
-    }
+    //}
     return promotions;
 
   }

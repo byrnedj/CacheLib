@@ -380,7 +380,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       Value conditionBitMask = getAdminRef<kLinked>();
       const bool flagSet = curValue & conditionBitMask;
       const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
-      if ((curValue & kAccessRefMask) < count) {
+      if ((curValue & kAccessRefMask) != count) {
         return false;
       }
       if (!flagSet || alreadyExclusive) {

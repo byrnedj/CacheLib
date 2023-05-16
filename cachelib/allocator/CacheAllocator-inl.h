@@ -2617,17 +2617,17 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           syncPromotion(item);
         } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
                    config_.usePromotionQueue && !itemPtr->isRecent()) {
-          bool moving = itemPtr->markMovingIfRefCount(1);
-          if (moving) {
+          //bool moving = itemPtr->markMovingIfRefCount(1);
+          //if (moving) {
             itemPtr->markRecent();
             auto &promoQueue = getPromoQueue(tid,pid,cid);
             bool added = promoQueue.write(itemPtr);
             if (!added) {
                 itemPtr->unmarkRecent();
-                auto ref = itemPtr->unmarkMoving();
-                XDCHECK_NE(ref,0);
-                auto hdl = acquire(itemPtr);
-                wakeUpWaiters(*itemPtr,std::move(hdl));
+                //auto ref = itemPtr->unmarkMoving();
+                //XDCHECK_NE(ref,0);
+                //auto hdl = acquire(itemPtr);
+                //wakeUpWaiters(*itemPtr,std::move(hdl));
             }
 
             //{
@@ -2650,7 +2650,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
             //    XDCHECK_EQ(ret.first->second,itemPtr);
             //  }
             //}
-          }
+          //}
         }
       }
   } else if (tid == 0 && item.wasPromoted()) {
