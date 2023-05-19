@@ -33,6 +33,22 @@ BackgroundMover<CacheT>::BackgroundMover(
 }
 
 template <typename CacheT>
+void BackgroundMover<CacheT>::TraversalStats::recordTraversalTime(uint64_t msTaken) {
+  lastTraversalTimeMs_.store(msTaken, std::memory_order_relaxed);
+  minTraversalTimeMs_.store(std::min(minTraversalTimeMs_.load(), msTaken),
+                            std::memory_order_relaxed);
+  maxTraversalTimeMs_.store(std::max(maxTraversalTimeMs_.load(), msTaken),
+                            std::memory_order_relaxed);
+  totalTraversalTimeMs_.fetch_add(msTaken, std::memory_order_relaxed);
+}
+
+template <typename CacheT>
+uint64_t BackgroundMover<CacheT>::TraversalStats::getAvgTraversalTimeMs(
+    uint64_t numTraversals) const {
+  return numTraversals ? totalTraversalTimeMs_ / numTraversals : 0;
+}
+
+template <typename CacheT>
 BackgroundMover<CacheT>::~BackgroundMover() {
   stop(std::chrono::seconds(0));
 }
@@ -69,6 +85,8 @@ void BackgroundMover<CacheT>::checkAndRun() {
   std::set<ClassId> classes{};
   auto batches = strategy_->calculateBatchSizes(cache_, assignedMemory);
 
+  const auto begin = util::getCurrentTimeNs();
+  //const auto& mpStats = cache_.getPoolByTid(0, 0).getStats();
   for (size_t i = 0; i < batches.size(); i++) {
     const auto [tid, pid, cid] = assignedMemory[i];
     const auto batch = batches[i];
@@ -82,14 +100,24 @@ void BackgroundMover<CacheT>::checkAndRun() {
 
     // try moving BATCH items from the class in order to reach free target
     auto moved = moverFunc(cache_, tid, pid, cid, batch);
-    moves += moved;
-    moves_per_class_[tid][pid][cid] += moved;
+    if (moved > 0) {
+      moves += moved;
+      moves_per_class_[assignedMemory[i]] += moved;
+    }
+    runs_per_class_[assignedMemory[i]]++;
+    if (direction_ == MoverDir::PromoteFromQueue) {
+      queue_per_class_[assignedMemory[i]] += 
+          BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
+    }
     //totalBytesMoved.add(moved * mpStats.acStats.at(cid).allocSize);
   }
-
-  numTraversals.inc();
-  numMovedItems.add(moves);
-  totalClasses.add(classes.size());
+  auto end = util::getCurrentTimeNs();
+  if (moves > 0) {
+    traversalStats_.recordTraversalTime(end > begin ? end - begin : 0);
+    numMovedItems.add(moves);
+    numTraversals.inc();
+    totalClasses.add(classes.size());
+  }
 
 }
 
@@ -97,17 +125,28 @@ template <typename CacheT>
 BackgroundMoverStats BackgroundMover<CacheT>::getStats() const noexcept {
   BackgroundMoverStats stats;
   stats.numMovedItems = numMovedItems.get();
-  stats.runCount = numTraversals.get();
   stats.totalBytesMoved = totalBytesMoved.get();
   stats.totalClasses = totalClasses.get();
+  auto runCount = getRunCount();
+  stats.runCount = runCount;
+  stats.numTraversals = numTraversals.get();
+  stats.avgItemsMoved = (double) stats.numMovedItems / (double)runCount;
+  stats.lastTraversalTimeMs = traversalStats_.getLastTraversalTimeMs();
+  stats.avgTraversalTimeMs = traversalStats_.getAvgTraversalTimeMs(runCount);
+  stats.minTraversalTimeMs = traversalStats_.getMinTraversalTimeMs();
+  stats.maxTraversalTimeMs = traversalStats_.getMaxTraversalTimeMs();
 
   return stats;
 }
 
 template <typename CacheT>
-std::map<TierId, std::map<PoolId, std::map<ClassId, uint64_t>>>
+std::vector<std::map<MemoryDescriptorType,uint64_t>>
 BackgroundMover<CacheT>::getClassStats() const noexcept {
-  return moves_per_class_;
+  std::vector<std::map<MemoryDescriptorType,uint64_t>> classStats;
+  classStats.push_back(moves_per_class_);
+  classStats.push_back(runs_per_class_);
+  classStats.push_back(queue_per_class_);
+  return classStats;
 }
 
 } // namespace cachelib

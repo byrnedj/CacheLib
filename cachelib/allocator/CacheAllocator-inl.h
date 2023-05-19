@@ -2315,6 +2315,16 @@ CacheAllocator<CacheTrait>::getPromoQueue(TierId tid,
 }
 
 template <typename CacheTrait>
+uint64_t CacheAllocator<CacheTrait>::getQueueSize(TierId tid,
+                                           PoolId pid,
+                                           ClassId cid) const noexcept {
+  XDCHECK_LT(static_cast<size_t>(tid), promoQueues_.size());
+  XDCHECK_LT(static_cast<size_t>(pid), promoQueues_[tid].size());
+  XDCHECK_LT(static_cast<size_t>(cid), promoQueues_[tid][pid].size());
+  return promoQueues_[tid][pid][cid]->size();
+}
+
+template <typename CacheTrait>
 MMContainerStat CacheAllocator<CacheTrait>::getMMContainerStat(
     TierId tid, PoolId pid, ClassId cid) const noexcept {
   if(static_cast<size_t>(tid) >= mmContainers_.size()) {

@@ -1175,47 +1175,41 @@ class CacheAllocator : public CacheBase {
     auto stats = reaper_ ? reaper_->getStats() : ReaperStats{};
     return stats;
   }
-  
-  // returns the background mover stats
-  BackgroundMoverStats getBackgroundMoverStats(MoverDir direction) const {
-    
-    auto stats = BackgroundMoverStats{};
+
+  // returns the background mover stats per thread
+  std::vector<BackgroundMoverStats> getBackgroundMoverStats(MoverDir direction) const {
+    auto stats = std::vector<BackgroundMoverStats>();
     if (direction == MoverDir::Evict) {
-        for (auto &bg : backgroundEvictor_)
-          stats += bg->getStats();
+      for (auto& bg : backgroundEvictor_)
+        stats.push_back(bg->getStats());
     } else if (direction == MoverDir::Promote) {
-        for (auto &bg : backgroundPromoter_)
-          stats += bg->getStats();
+      for (auto& bg : backgroundPromoter_)
+        stats.push_back(bg->getStats());
     }
     return stats;
-
   }
-  
-  
-  std::map<TierId, std::map<PoolId, std::map<ClassId, uint64_t>>>
+
+  std::map<MemoryDescriptorType,std::vector<uint64_t>>
   getBackgroundMoverClassStats(MoverDir direction) const {
-    std::map<TierId, std::map<PoolId, std::map<ClassId, uint64_t>>> stats;
+    std::map<MemoryDescriptorType,std::vector<uint64_t>> stats;
+    auto record = [&](auto &bg) {
+      //gives a unique descriptor
+      auto classStats = bg->getClassStats();
+      for (const auto& map : classStats) {
+        for (const auto& [key,value] : map) {
+            stats[key].push_back(value);
+        }
+      }
+    };
 
     if (direction == MoverDir::Evict) {
-        for (auto &bg : backgroundEvictor_) {
-          for (auto &tid : bg->getClassStats()) {
-            for (auto &pid : tid.second) {
-              for (auto &cid : pid.second) {
-                stats[tid.first][pid.first][cid.first] += cid.second;
-              }
-            }
-          }
-        }
+      for (auto& bg : backgroundEvictor_) {
+          record(bg);
+      }
     } else if (direction == MoverDir::Promote) {
-        for (auto &bg : backgroundPromoter_) {
-          for (auto &tid : bg->getClassStats()) {
-            for (auto &pid : tid.second) {
-              for (auto &cid : pid.second) {
-                stats[tid.first][pid.first][cid.first] += cid.second;
-              }
-            }
-          }
-        }
+      for (auto& bg : backgroundPromoter_) {
+          record(bg);
+      }
     }
 
     return stats;
@@ -1500,6 +1494,7 @@ class CacheAllocator : public CacheBase {
   MMContainer& getMMContainer(TierId tid, PoolId pid, ClassId cid) const noexcept;
   
   PromoQueue& getPromoQueue(TierId tid, PoolId pid, ClassId cid) const noexcept;
+  uint64_t getQueueSize(TierId tid, PoolId pid, ClassId cid) const noexcept;
 
   // Get stats of the specified pid and cid.
   // If such mmcontainer is not valid (pool id or cid out of bound)
@@ -2821,8 +2816,6 @@ class CacheAllocator : public CacheBase {
 
   // free memory monitor
   std::unique_ptr<MemoryMonitor> memMonitor_;
-  
-  // background evictor
   std::vector<std::unique_ptr<BackgroundMover<CacheT>>> backgroundEvictor_;
   std::vector<std::unique_ptr<BackgroundMover<CacheT>>> backgroundPromoter_;
 
