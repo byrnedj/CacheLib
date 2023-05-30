@@ -2942,6 +2942,9 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
         } else if (!config_.useThreadPool && config_.threadPoolThreads == 2) {
           syncPromotion(item);
         } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
+                   !config_.usePromotionQueue && !itemPtr->isRecent()) {
+          itemPtr->markRecent();
+        } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
                    config_.usePromotionQueue && !itemPtr->isRecent()) {
           //bool moving = itemPtr->markMovingIfRefCount(1);
           //if (moving) {
@@ -2950,6 +2953,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
             bool added = promoQueue.write(itemPtr);
             if (!added) {
                 itemPtr->unmarkRecent();
+                //(*stats_.numWritebacksFailNoSpace)[tid][pid][cid].inc();
                 //auto ref = itemPtr->unmarkMoving();
                 //XDCHECK_NE(ref,0);
                 //auto hdl = acquire(itemPtr);
@@ -3446,7 +3450,7 @@ void CacheAllocator<CacheTrait>::createPromoQueues(const PoolId pid) {
 
   for (unsigned int cid = 0; cid < pool.getNumClassId(); ++cid) {
     for (TierId tid = 0; tid < getNumTiers(); tid++) {
-      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(20000));
+      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(2000000));
       //promoQueues_[tid][pid][cid].reset(new std::queue<Item*>());
     }
   }

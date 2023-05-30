@@ -2108,9 +2108,7 @@ class CacheAllocator : public CacheBase {
 
     size_t tries = 0;
     mmContainer.withEvictionIterator([tid, pid, cid, &tries, &candidates, &batch, &mmContainer, this](auto &&itr) {
-      while (candidates.size() < batch && 
-        (config_.maxEvictionPromotionHotness == 0 || tries < config_.maxEvictionPromotionHotness) && 
-         itr) {
+      while (candidates.size() < batch && itr) {
         tries++;
         (*stats_.evictionAttempts)[tid][pid][cid].inc();
         Item* candidate = itr.get();
@@ -2440,75 +2438,38 @@ class CacheAllocator : public CacheBase {
 
   }
   
-  size_t promoteFromQueue(unsigned int tid, unsigned int pid, unsigned int cid, 
+  size_t promoteFromMMContainer(unsigned int tid, unsigned int pid, unsigned int cid, 
                                  size_t batch) {
-    auto& promoQueue = getPromoQueue(tid,pid,cid);
+    auto& mmContainer = getMMContainer(tid,pid,cid);
     size_t promotions = 0;
-    //while (promoQueue.size() > batch) {
-    //while (true) {
-      std::vector<Item*> candidates;
-      candidates.reserve(batch);
-      std::vector<Item*> candidates_with_alloc;
-      std::vector<WriteHandle> new_items_hdl;
-      std::vector<Item*> new_items;
-      while (candidates.size() < batch) {
+    std::vector<Item*> candidates;
+    candidates.reserve(batch);
+    std::vector<Item*> candidates_with_alloc;
+    std::vector<WriteHandle> new_items_hdl;
+    std::vector<Item*> new_items;
+    mmContainer.withPromotionIterator([&candidates, batch, &mmContainer, this](auto &&itr){
+      while (candidates.size() < batch && itr) {
           //attempt to mark moving
-          Item *candidate = nullptr;
-          //{
-          //  auto plock = getPromoLockForClass(cid);
-          //  candidate = promoQueue.front();
-          //  if (candidate == nullptr) {
-          //      break;
-          //  } else {
-          //      promoQueue.pop();
-          //  }
-          //}
-          if (promoQueue.size() == 0) {
-              break;
-          }
-
-          promoQueue.read(candidate);
-
-          if (candidate == nullptr) {
-              break;
-          }
-          //promoQueue.blockingRead(candidate);
-          //auto shard = getShardForKey(candidate->getKey());
-          //auto& promoMap = getPromoMapForShard(shard);
-          //{
-          //  auto lock = getMoveLockForShard(shard);
-          //  auto ret = promoMap.find(candidate->getKey());
-          //  XDCHECK_EQ(ret->second,candidate);
-          //  XDCHECK_NE(ret,promoMap.end());
-          //  promoMap.erase(ret);
-          //}
+          Item *candidate = itr.get();
          
-          if (candidate->markMoving(true)) {
+          if (candidate->isRecent() && candidate->markMoving(true)) {
             //locking hashtable
+            mmContainer.remove(itr);
             XDCHECK(candidate->isMoving()) << candidate->toString();
             XDCHECK(candidate->isRecent());
             XDCHECK(candidate->isInMMContainer());
+            candidate->unmarkRecent();
             //XDCHECK(candidate->isInclusive());
             candidates.push_back(candidate);
           } else {
             candidate->unmarkRecent();
+            ++itr;
           }
-          candidate = nullptr;
-          //if (candidate->isRecent() && candidate->markMoving(true)) {
-          //    candidate->unmarkRecent();
-          //} else {
-          //    //promo failed count
-          //}
-      }
+        }
+      });
+
       if (candidates.size() == 0) {
           return promotions;
-      }
-      auto& mmContainer = getMMContainer(tid, pid, cid);
-      auto removed = mmContainer.removeBatch(candidates);
-      if (removed != 0) {
-        XDCHECK_EQ(removed,0) << candidates[removed]->toString();
-        throw std::runtime_error(
-          folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
       }
 
       for (Item *candidate : candidates) {
@@ -2594,6 +2555,140 @@ class CacheAllocator : public CacheBase {
         }
       }
     //}
+    return promotions;
+
+  }
+  
+  size_t promoteFromQueue(unsigned int tid, unsigned int pid, unsigned int cid, 
+                                 size_t batch) {
+    auto& promoQueue = getPromoQueue(tid,pid,cid);
+    size_t promotions = 0;
+    if (promoQueue.size() < batch)  {
+        return promotions;
+    }
+    std::vector<Item*> candidates;
+    candidates.reserve(batch);
+    std::vector<Item*> candidates_with_alloc;
+    std::vector<WriteHandle> new_items_hdl;
+    std::vector<Item*> new_items;
+    while (candidates.size() < batch) {
+        //attempt to mark moving
+        Item *candidate = nullptr;
+        if (promoQueue.size() == 0) {
+            break;
+        }
+
+        promoQueue.read(candidate);
+
+        if (candidate == nullptr) {
+            break;
+        }
+        if (candidate->isRecent() && candidate->markMoving(true)) {
+          //locking hashtable
+          XDCHECK(candidate->isMoving()) << candidate->toString();
+          XDCHECK(candidate->isRecent());
+          XDCHECK(candidate->isInMMContainer());
+          candidate->unmarkRecent();
+          //XDCHECK(candidate->isInclusive());
+          candidates.push_back(candidate);
+        } else {
+          candidate->unmarkRecent();
+        }
+        candidate = nullptr;
+    }
+    if (candidates.size() == 0) {
+        return promotions;
+    }
+    auto& mmContainer = getMMContainer(tid, pid, cid);
+    auto removed = mmContainer.removeBatch(candidates);
+    if (removed != 0) {
+      XDCHECK_EQ(removed,0) << candidates[removed]->toString();
+      throw std::runtime_error(
+        folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
+    }
+
+    for (Item *candidate : candidates) {
+      auto promoted = tryPromoteToNextMemoryTier(*candidate, true);
+      if (!promoted) {
+        // we failed to allocate a new item, this item is no  longer moving
+        // put back in mmContainer and wake up waiters
+        bool added = mmContainer.add(*candidate);
+        XDCHECK(added);
+        auto ref = candidate->unmarkMoving();
+        XDCHECK_NE(ref,0);
+        auto hdl = acquire(candidate);
+        wakeUpWaiters(*candidate,std::move(hdl));
+      } else {
+          candidates_with_alloc.push_back(candidate);
+          new_items.push_back(promoted.get()); //new handle
+          new_items_hdl.push_back(std::move(promoted));
+      }
+    }
+    //need an Item& for each handle
+    auto& newMMContainer = getMMContainer(tid-1, pid, cid);
+    int added = newMMContainer.addBatch(new_items);
+    if (added != -1) {
+      throw std::runtime_error(
+        folly::sformat("Was not able to add all new items promoter, failed item {} and handle {}", new_items[added]->toString(),new_items_hdl[added]->toString()));
+    }
+    
+    for (auto index = 0U; index < candidates_with_alloc.size(); index++) {
+      bool moved = moveRegularItemWithSync(*candidates_with_alloc[index],
+                                            new_items_hdl[index],
+                                            true);
+      if (moved) {
+        promotions++;
+        (*stats_.numPromotions)[tid][pid][cid].inc();
+        // it's safe to recycle the item here as there are no more
+        // references and the item could not been marked as moving
+        // by other thread since it's detached from MMContainer.
+        //
+        // but we need to wake up waiters before releasing
+        // since candidate's key can change after being sent
+        // back to allocator
+        bool inclusive = candidates_with_alloc[index]->isInclusive();
+        if (inclusive) {
+            XDCHECK(candidates_with_alloc[index]->isCopy());
+        } else {
+            XDCHECK(!candidates_with_alloc[index]->isAccessible());
+            XDCHECK(!candidates_with_alloc[index]->isInMMContainer());
+            //XDCHECK_EQ(candidates_with_alloc[index]->getRefCount(),0);
+        }
+        auto ref = candidates_with_alloc[index]->unmarkMoving();
+        XDCHECK(!candidates_with_alloc[index]->isMarkedForEviction());
+        XDCHECK(!candidates_with_alloc[index]->isMoving());
+        wakeUpWaiters(*candidates_with_alloc[index], std::move(new_items_hdl[index]));
+        if (ref == 0) {
+          const auto res =
+              releaseBackToAllocator(*candidates_with_alloc[index], 
+                      RemoveContext::kEviction, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
+      } else {
+        candidates_with_alloc[index]->unmarkCopy();
+        new_items[index]->unmarkPromoted();
+        XDCHECK(!candidates_with_alloc[index]->isAccessible());
+        //candidates_with_alloc[index]->unmarkInclusive();
+        //case where we failed to replace in access
+        //container due to another thread calling insertOrReplace
+        //unmark moving and return null handle
+        auto ref = candidates_with_alloc[index]->unmarkMoving();
+        wakeUpWaiters(*candidates_with_alloc[index],{});
+        if (ref == 0) {
+          const auto res =
+            releaseBackToAllocator(*candidates_with_alloc[index], RemoveContext::kNormal,
+                                    false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
+        XDCHECK(!new_items[index]->isInMMContainer());
+        XDCHECK(!new_items[index]->isAccessible());
+        XDCHECK(!new_items[index]->wasPromoted());
+        XDCHECK(!new_items[index]->isCopy());
+        XDCHECK(!new_items[index]->isMoving());
+        XDCHECK(!new_items[index]->isMarkedForEviction());
+        XDCHECK_EQ(new_items[index]->getRefCount(),1);
+      }
+    }
     return promotions;
 
   }

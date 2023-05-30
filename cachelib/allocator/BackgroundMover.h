@@ -71,6 +71,13 @@ struct BackgroundMoverAPIWrapper {
                                         unsigned int cid) {
     return cache.getQueueSize(tid, pid, cid);
   }
+  static size_t promoteFromMMContainer(C& cache,
+                                        unsigned int tid,
+                                        unsigned int pid,
+                                        unsigned int cid,
+                                        size_t batch) {
+    return cache.promoteFromMMContainer(tid, pid, cid, batch);
+  }
 };
 
 enum class MoverDir { Evict = 0, Promote, PromoteFromQueue };

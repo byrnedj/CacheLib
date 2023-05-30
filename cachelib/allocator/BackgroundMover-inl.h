@@ -26,7 +26,7 @@ BackgroundMover<CacheT>::BackgroundMover(
   if (direction_ == MoverDir::Evict) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItemsBatch;
   } else if (direction_ == MoverDir::Promote) {
-    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndPromoteItems;
+    moverFunc = BackgroundMoverAPIWrapper<CacheT>::promoteFromMMContainer;
   } else if (direction_ == MoverDir::PromoteFromQueue) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::promoteFromQueueBatch;
   }
@@ -102,12 +102,17 @@ void BackgroundMover<CacheT>::checkAndRun() {
     auto moved = moverFunc(cache_, tid, pid, cid, batch);
     if (moved > 0) {
       moves += moved;
-      moves_per_class_[assignedMemory[i]] += moved;
     }
+    moves_per_class_[assignedMemory[i]] += moved;
     runs_per_class_[assignedMemory[i]]++;
     if (direction_ == MoverDir::PromoteFromQueue) {
       queue_per_class_[assignedMemory[i]] += 
           BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
+      if (cid == 1 && moved > 0) {
+          XDCHECK(false);
+      }
+    } else {
+      queue_per_class_[assignedMemory[i]] += 0;
     }
     //totalBytesMoved.add(moved * mpStats.acStats.at(cid).allocSize);
   }
@@ -142,6 +147,7 @@ BackgroundMoverStats BackgroundMover<CacheT>::getStats() const noexcept {
 template <typename CacheT>
 std::vector<std::map<MemoryDescriptorType,uint64_t>>
 BackgroundMover<CacheT>::getClassStats() const noexcept {
+  //std::map<MemoryDescriptorType,std::vector<uint64_t>> classStats;
   std::vector<std::map<MemoryDescriptorType,uint64_t>> classStats;
   classStats.push_back(moves_per_class_);
   classStats.push_back(runs_per_class_);
