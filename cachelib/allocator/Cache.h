@@ -91,7 +91,17 @@ struct MemoryDescriptorType {
         return false;
     }
     
+    bool operator==(const MemoryDescriptorType& rhs) {
+        if (this->tid_ == rhs.tid_ &&
+            this->pid_ == rhs.pid_ &&
+            this->cid_ == rhs.cid_) {
+            return true;
+        }
+        return false;
+    }
+    
     friend bool operator<(const MemoryDescriptorType& lhs, const MemoryDescriptorType& rhs);
+    friend bool operator==(const MemoryDescriptorType& lhs, const MemoryDescriptorType& rhs);
 };
 
 inline bool operator<(const MemoryDescriptorType& lhs, const MemoryDescriptorType& rhs) {
@@ -101,6 +111,15 @@ inline bool operator<(const MemoryDescriptorType& lhs, const MemoryDescriptorTyp
           else return false;
       }
       return false;
+  }
+  return false;
+}
+
+inline bool operator==(const MemoryDescriptorType& lhs, const MemoryDescriptorType& rhs) {
+  if (lhs.tid_ == rhs.tid_ &&
+      lhs.pid_ == rhs.pid_ &&
+      lhs.cid_ == rhs.cid_) {
+      return true;
   }
   return false;
 }
