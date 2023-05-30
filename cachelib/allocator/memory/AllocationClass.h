@@ -109,6 +109,7 @@ class AllocationClass {
   //          don't have any free memory. The caller will have to add a slab
   //          to this slab class to make further allocations out of it.
   void* allocate();
+  std::vector<void*> allocate(uint32_t batch);
 
   // @param ctx     release context for the slab owning this alloc
   // @param memory  memory to check

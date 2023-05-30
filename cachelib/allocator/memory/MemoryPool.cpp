@@ -262,6 +262,74 @@ Slab* MemoryPool::getSlabLocked() noexcept {
   return slab;
 }
 
+std::vector<void*> MemoryPool::allocateBatchByClass(ClassId cid, uint32_t batch) {
+  auto& ac = getAllocationClassFor(cid);
+  const auto allocSize = ac.getAllocSize();
+  auto allocs = ac.allocate(batch);
+
+  if (allocs.size() == batch) {
+    currAllocSize_ += allocSize * batch;
+    return allocs;
+  } else {
+    currAllocSize_ += allocSize * allocs.size();
+  }
+
+  // atomically see if we can acquire a slab by checking if we have
+  // reached the limit by size. If not, then they can be acquired from
+  // either the slab allocator or our free list. It is important to check
+  // this before we grab it from the slab allocator or free list. Things
+  // that release slab, bump down the currSlabAllocSize_ after actually
+  // releasing and adding it to free list or slab allocator.
+  if (allSlabsAllocated()) {
+    return allocs;
+  }
+
+  // TODO: introduce a new sharded lock by allocation class id for this slow
+  // path Currently this would also serialize the slow paths of two different
+  // allocation class ids that need slab to initiate an allocation.
+  uint32_t remain = batch - allocs.size();
+  LockHolder l(lock_);
+  auto allocs2 = ac.allocate(remain);
+  allocs.insert(allocs.end(),allocs2.begin(),allocs2.end());
+  currAllocSize_ += allocSize * allocs2.size();
+  if (allocs.size() == batch) {
+    return allocs;
+  }
+
+  remain = batch - allocs.size();
+  XDCHECK_GT(remain,0);
+  while (remain) {
+    XDCHECK_GT(remain,0);
+    // see if we have a slab to add to the allocation class.
+    auto slab = getSlabLocked();
+    if (slab == nullptr) {
+      // out of memory
+      return allocs;
+    }
+
+    // add it to the allocation class and try to allocate.
+    allocs.push_back(ac.addSlabAndAllocate(slab));
+    remain--;
+    currAllocSize_ += allocSize;
+    if (remain == 0) {
+        return allocs;
+    }
+
+    //try more
+    auto allocs3 = ac.allocate(remain);
+    allocs.insert(allocs.end(),allocs3.begin(),allocs3.end());
+    currAllocSize_ += allocSize * allocs3.size();
+    remain = remain - allocs3.size();
+    if (allocs.size() == batch) {
+      XDCHECK_EQ(remain,0);
+      return allocs;
+    }
+    remain = batch - allocs.size();
+  }
+  XDCHECK_EQ(remain,0);
+  return allocs;
+}
+
 void* MemoryPool::allocate(uint32_t size) {
   auto& ac = getAllocationClassFor(size);
 

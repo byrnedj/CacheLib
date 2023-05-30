@@ -24,11 +24,11 @@ BackgroundMover<CacheT>::BackgroundMover(
     MoverDir direction)
     : cache_(cache), strategy_(strategy), direction_(direction) {
   if (direction_ == MoverDir::Evict) {
-    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItems;
+    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItemsBatch;
   } else if (direction_ == MoverDir::Promote) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndPromoteItems;
   } else if (direction_ == MoverDir::PromoteFromQueue) {
-    moverFunc = BackgroundMoverAPIWrapper<CacheT>::promoteFromQueue;
+    moverFunc = BackgroundMoverAPIWrapper<CacheT>::promoteFromQueueBatch;
   }
 }
 

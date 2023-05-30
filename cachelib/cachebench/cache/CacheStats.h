@@ -233,7 +233,7 @@ struct Stats {
     for (auto &bgWorkerStats : backgroundEvictorStats) {
         out << folly::sformat(" == Background Evictor Thread {} ==", bgId) << std::endl;
         out << folly::sformat("Evicted Items : {:,}, Traversals : {:,}, Run Count : {:,}, "
-                              "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, Avg Items Evicted: {6.2f}",
+                              "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, Avg Items Evicted: {:6.2f}",
                               bgWorkerStats.numMovedItems, bgWorkerStats.numTraversals,
                               bgWorkerStats.runCount, bgWorkerStats.avgTraversalTimeMs,
                               bgWorkerStats.minTraversalTimeMs, bgWorkerStats.maxTraversalTimeMs,
@@ -247,7 +247,7 @@ struct Stats {
         out << folly::sformat(" == Background Promoter Thread {} ==", bgId) << std::endl;
         out << folly::sformat("Promoted Items : {:,}, Traversals : {:,}, Run Count : {:,}, "
                               "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, "
-                              "Avg Items Promoted: {6.2f}, Avg Queue Size: {}",
+                              "Avg Items Promoted: {:6.2f}, Avg Queue Size: {}",
                               bgWorkerStats.numMovedItems, bgWorkerStats.numTraversals,
                               bgWorkerStats.runCount, bgWorkerStats.avgTraversalTimeMs,
                               bgWorkerStats.minTraversalTimeMs, bgWorkerStats.maxTraversalTimeMs,
@@ -297,7 +297,7 @@ struct Stats {
         uint64_t evicted = stats[0];
         uint64_t runs = stats[1];
         if (evicted > 0) {
-          out << folly::sformat("tid{:2} pid{:2} cid{:4} evicted: {:4}, runs: {:4}, avg: {6.2f}",
+          out << folly::sformat("tid{:2} pid{:2} cid{:4} evicted: {:4}, runs: {:4}, avg: {:6.2f}",
             tid, pid, cid, evicted, runs, (double)evicted/(double)runs) << std::endl;
         }
       });
@@ -310,8 +310,8 @@ struct Stats {
         uint64_t runs = stats[1];
         uint64_t queue_size = stats[2];
         if (promoted > 0) {
-          out << folly::sformat("tid{:2} pid{:2} cid{:4} promoted: {:4}, runs {:4}, avg: {6.2f}, "
-                                "avg queue size: {6.2f}",
+          out << folly::sformat("tid{:2} pid{:2} cid{:4} promoted: {:4}, runs {:4}, avg: {:6.2f}, "
+                                "avg queue size: {:6.2f}",
             tid, pid, cid, promoted, runs, (double)promoted/(double)runs, 
             (double)queue_size/(double)runs) << std::endl;
         }

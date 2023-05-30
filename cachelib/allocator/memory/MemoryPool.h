@@ -139,6 +139,7 @@ class MemoryPool {
   // @return pointer to allocation or nullptr on failure to allocate.
   // @throw  std::invalid_argument if size is invalid.
   void* allocate(uint32_t size);
+  std::vector<void*> allocateBatchByClass(ClassId cid, uint32_t batch);
 
   // Allocate a slab with zeroed memory
   //

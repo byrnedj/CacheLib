@@ -1543,6 +1543,11 @@ class CacheAllocator : public CacheBase {
                                    uint32_t creationTime,
                                    uint32_t expiryTime,
                                    bool fromBgThread);
+   std::vector<WriteHandle> allocateInternalTierBatch(TierId tid,
+                                                  PoolId pid,
+                                                  ClassId cid,
+                                                  std::vector<Item*> oldItems);
+   void findEviction(TierId tid, PoolId pid, ClassId cid, std::vector<void*>& allocs, uint64_t batch);
 
   // Allocate a chained item
   //
@@ -1974,6 +1979,119 @@ class CacheAllocator : public CacheBase {
     auto slabsSkipped = allocator_[currentTier()]->forEachAllocation(std::forward<Fn>(f));
     stats().numReaperSkippedSlabs.add(slabsSkipped);
   }
+  
+  size_t traverseAndEvictItemsBatch(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
+    auto& mmContainer = getMMContainer(tid, pid, cid);
+    size_t evictions = 0;
+    size_t evictionCandidates = 0;
+    std::vector<Item*> candidates;
+    candidates.reserve(batch);
+
+    size_t tries = 0;
+    mmContainer.withEvictionIterator([tid, pid, cid, &tries, &candidates, &batch, &mmContainer, this](auto &&itr) {
+      while (candidates.size() < batch && 
+        (config_.maxEvictionPromotionHotness == 0 || tries < config_.maxEvictionPromotionHotness) && 
+         itr) {
+        tries++;
+        (*stats_.evictionAttempts)[tid][pid][cid].inc();
+        Item* candidate = itr.get();
+        XDCHECK(candidate);
+
+        if (candidate->isChainedItem()) {
+          throw std::runtime_error("Not supported for chained items");
+        }
+
+        if (candidate->markMoving(true)) {
+          mmContainer.remove(itr);
+          candidates.push_back(candidate);
+        } else {
+          ++itr;
+        }
+      }
+    });
+
+    if (candidates.size() == 0) {
+        return evictions;
+    }
+    std::vector<WriteHandle> new_items_hdl = 
+        allocateInternalTierBatch(tid+1,pid,cid, candidates);
+    std::vector<Item*> new_items;
+    new_items.reserve(new_items_hdl.size());
+    unsigned int validHandleCnt = 0;
+    for (auto itr = new_items_hdl.begin(); itr != new_items_hdl.end();) {
+        new_items.push_back((*itr).get());
+        validHandleCnt++;
+        ++itr;
+    }
+    XDCHECK_EQ(validHandleCnt,candidates.size());
+
+    //need an Item& for each handle
+    auto& newMMContainer = getMMContainer(tid+1, pid, cid);
+    int added = newMMContainer.addBatch(new_items);
+    if (added != -1) {
+      throw std::runtime_error(
+        folly::sformat("Was not able to add all new items, failed item {} and handle {}", 
+            new_items[added]->toString(),new_items_hdl[added]->toString()));
+    }
+    for (auto index = 0U; index < candidates.size(); index++) {
+      bool moved = false;
+      bool writeback = false;
+      bool inclusive = candidates[index]->isInclusive();
+      if (inclusive && 
+              candidates[index]->getNextTierCopy() != nullptr) {
+        moved = handleInclusiveWriteback(*candidates[index],
+                                         new_items_hdl[index],
+                                         true);
+      } else {
+        moved = moveRegularItemWithSync(*candidates[index],
+                                        new_items_hdl[index],
+                                        true);
+        writeback = true;
+      }
+      if (moved) {
+        auto ref = candidates[index]->unmarkMoving();
+        evictions++;
+        XDCHECK(!new_items_hdl[index]->isMarkedForEviction());
+        XDCHECK(!new_items_hdl[index]->isMoving());
+        XDCHECK(!candidates[index]->isMarkedForEviction());
+        XDCHECK(!candidates[index]->isMoving());
+        XDCHECK(!candidates[index]->isAccessible());
+        XDCHECK_EQ(candidates[index]->getKey(),new_items_hdl[index]->getKey());
+
+        wakeUpWaiters(*candidates[index], std::move(new_items_hdl[index]));
+      } else {
+        (*stats_.numWritebacksFailBadMove)[tid][pid][cid].inc();
+        //moveRegularItem failed due to insertOrReplace being called 
+        //at the same time
+        //new item hdl is in mmContainer, remove it
+        if (candidates[index]->wasPromoted()) {
+          candidates[index]->unmarkPromoted();
+        }
+        auto ref = candidates[index]->unmarkMoving();
+        XDCHECK_EQ(0,ref) << candidates[index]->toString();
+        wakeUpWaiters(*candidates[index], {});
+        //it should be released by the destructor
+      }
+      XDCHECK(!candidates[index]->isMarkedForEviction());
+      XDCHECK(!candidates[index]->isMoving()) << candidates[index]->toString();
+      XDCHECK(!candidates[index]->isInMMContainer());
+      XDCHECK(!candidates[index]->isAccessible());
+
+      if (candidates[index]->hasChainedItem()) {
+        (*stats_.chainedItemEvictions)[tid][pid][cid].inc();
+      } else {
+        (*stats_.regularItemEvictions)[tid][pid][cid].inc();
+      }
+
+      // it's safe to recycle the item here as there are no more
+      // references and the item could not been marked as moving
+      // by other thread since it's detached from MMContainer.
+      auto res = releaseBackToAllocator(*candidates[index], RemoveContext::kEviction,
+                                /* isNascent */ false);
+      XDCHECK(res == ReleaseRes::kReleased);
+    }
+    return evictions;
+  }
 
 
   // exposed for the background evictor to iterate through the memory and evict
@@ -2172,6 +2290,155 @@ class CacheAllocator : public CacheBase {
     }
   }
   */
+  
+  size_t promoteFromQueueBatch(unsigned int tid, unsigned int pid, unsigned int cid, 
+                                 size_t batch) {
+    auto& promoQueue = getPromoQueue(tid,pid,cid);
+    size_t promotions = 0;
+    //while (promoQueue.size() > batch) {
+    //while (true) {
+      std::vector<Item*> candidates;
+      candidates.reserve(batch);
+      while (candidates.size() < batch) {
+          //attempt to mark moving
+          Item *candidate = nullptr;
+          //{
+          //  auto plock = getPromoLockForClass(cid);
+          //  candidate = promoQueue.front();
+          //  if (candidate == nullptr) {
+          //      break;
+          //  } else {
+          //      promoQueue.pop();
+          //  }
+          //}
+          if (promoQueue.size() == 0) {
+              break;
+          }
+
+          promoQueue.read(candidate);
+
+          if (candidate == nullptr) {
+              break;
+          }
+          //promoQueue.blockingRead(candidate);
+          //auto shard = getShardForKey(candidate->getKey());
+          //auto& promoMap = getPromoMapForShard(shard);
+          //{
+          //  auto lock = getMoveLockForShard(shard);
+          //  auto ret = promoMap.find(candidate->getKey());
+          //  XDCHECK_EQ(ret->second,candidate);
+          //  XDCHECK_NE(ret,promoMap.end());
+          //  promoMap.erase(ret);
+          //}
+         
+          if (candidate->isRecent() && candidate->markMoving(true)) {
+            //locking hashtable
+            XDCHECK(candidate->isMoving()) << candidate->toString();
+            XDCHECK(candidate->isRecent());
+            XDCHECK(candidate->isInMMContainer());
+            //XDCHECK(candidate->isInclusive());
+            candidates.push_back(candidate);
+          } else {
+            candidate->unmarkRecent();
+          }
+          candidate = nullptr;
+          //if (candidate->isRecent() && candidate->markMoving(true)) {
+          //    candidate->unmarkRecent();
+          //} else {
+          //    //promo failed count
+          //}
+      }
+      if (candidates.size() == 0) {
+          return promotions;
+      }
+      auto& mmContainer = getMMContainer(tid, pid, cid);
+      auto removed = mmContainer.removeBatch(candidates);
+      if (removed != 0) {
+        XDCHECK_EQ(removed,0) << candidates[removed]->toString();
+        throw std::runtime_error(
+          folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
+      }
+
+      std::vector<WriteHandle> new_items_hdl = 
+          allocateInternalTierBatch(tid-1,pid,cid, candidates);
+      std::vector<Item*> new_items;
+      new_items.reserve(new_items_hdl.size());
+      unsigned int validHandleCnt = 0;
+      for (auto itr = new_items_hdl.begin(); itr != new_items_hdl.end();) {
+          new_items.push_back((*itr).get());
+          validHandleCnt++;
+          ++itr;
+      }
+      XDCHECK_EQ(validHandleCnt,candidates.size());
+
+      //need an Item& for each handle
+      auto& newMMContainer = getMMContainer(tid-1, pid, cid);
+      int added = newMMContainer.addBatch(new_items);
+      if (added != -1) {
+        throw std::runtime_error(
+          folly::sformat("Was not able to add all new items promoter, failed item {} and handle {}", new_items[added]->toString(),new_items_hdl[added]->toString()));
+      }
+      
+      for (auto index = 0U; index < candidates.size(); index++) {
+        bool moved = moveRegularItemWithSync(*candidates[index],
+                                              new_items_hdl[index],
+                                              true);
+        if (moved) {
+          promotions++;
+          (*stats_.numPromotions)[tid][pid][cid].inc();
+          // it's safe to recycle the item here as there are no more
+          // references and the item could not been marked as moving
+          // by other thread since it's detached from MMContainer.
+          //
+          // but we need to wake up waiters before releasing
+          // since candidate's key can change after being sent
+          // back to allocator
+          bool inclusive = candidates[index]->isInclusive();
+          if (inclusive) {
+              XDCHECK(candidates[index]->isCopy());
+          } else {
+              XDCHECK(!candidates[index]->isAccessible());
+              XDCHECK(!candidates[index]->isInMMContainer());
+              //XDCHECK_EQ(candidates[index]->getRefCount(),0);
+          }
+          auto ref = candidates[index]->unmarkMoving();
+          XDCHECK(!candidates[index]->isMarkedForEviction());
+          XDCHECK(!candidates[index]->isMoving());
+          wakeUpWaiters(*candidates[index], std::move(new_items_hdl[index]));
+          if (ref == 0) {
+            const auto res =
+                releaseBackToAllocator(*candidates[index], 
+                        RemoveContext::kEviction, false);
+            XDCHECK(res == ReleaseRes::kReleased);
+          }
+        } else {
+          candidates[index]->unmarkCopy();
+          new_items[index]->unmarkPromoted();
+          XDCHECK(!candidates[index]->isAccessible());
+          //case where we failed to replace in access
+          //container due to another thread calling insertOrReplace
+          //unmark moving and return null handle
+          auto ref = candidates[index]->unmarkMoving();
+          wakeUpWaiters(*candidates[index],{});
+          if (ref == 0) {
+            const auto res =
+              releaseBackToAllocator(*candidates[index], RemoveContext::kNormal,
+                                      false);
+            XDCHECK(res == ReleaseRes::kReleased);
+          }
+          XDCHECK(!new_items[index]->isInMMContainer());
+          XDCHECK(!new_items[index]->isAccessible());
+          XDCHECK(!new_items[index]->wasPromoted());
+          XDCHECK(!new_items[index]->isCopy());
+          XDCHECK(!new_items[index]->isMoving());
+          XDCHECK(!new_items[index]->isMarkedForEviction());
+          XDCHECK_EQ(new_items[index]->getRefCount(),1);
+        }
+      }
+    //}
+    return promotions;
+
+  }
   
   size_t promoteFromQueue(unsigned int tid, unsigned int pid, unsigned int cid, 
                                  size_t batch) {

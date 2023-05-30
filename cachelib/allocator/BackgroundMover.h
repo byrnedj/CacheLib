@@ -36,6 +36,13 @@ struct BackgroundMoverAPIWrapper {
     return cache.traverseAndEvictItems(tid, pid, cid, batch);
   }
 
+  static size_t traverseAndEvictItemsBatch(C& cache,
+                                      unsigned int tid,
+                                      unsigned int pid,
+                                      unsigned int cid,
+                                      size_t batch) {
+    return cache.traverseAndEvictItemsBatch(tid, pid, cid, batch);
+  }
   static size_t traverseAndPromoteItems(C& cache,
                                         unsigned int tid,
                                         unsigned int pid,
@@ -49,6 +56,14 @@ struct BackgroundMoverAPIWrapper {
                                         unsigned int cid,
                                         size_t batch) {
     return cache.promoteFromQueue(tid, pid, cid, batch);
+  }
+  
+  static size_t promoteFromQueueBatch(C& cache,
+                                        unsigned int tid,
+                                        unsigned int pid,
+                                        unsigned int cid,
+                                        size_t batch) {
+    return cache.promoteFromQueueBatch(tid, pid, cid, batch);
   }
   static size_t getQueueSize(C& cache,
                                         unsigned int tid,

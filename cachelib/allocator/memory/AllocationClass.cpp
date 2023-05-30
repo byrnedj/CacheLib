@@ -159,6 +159,25 @@ void* AllocationClass::allocate() {
   return lock_->lock_combine([this]() -> void* { return allocateLocked(); });
 }
 
+
+std::vector<void*> AllocationClass::allocate(uint32_t batch) {
+  std::vector<void*> allocs;
+  if (!canAllocate_) {
+    return allocs;
+  }
+  lock_->lock_combine([this, batch, &allocs]() { 
+    for (int i = 0; i < batch; i++) {
+      void* alloc = allocateLocked(); 
+      if (alloc) {
+        allocs.push_back(alloc);
+      } else {
+        break; //done allocating - or out of space
+      }
+    }
+  });
+  return allocs;
+}
+
 void* AllocationClass::allocateLocked() {
   // fast path for case when the cache is mostly full.
   if (freedAllocations_.empty() && freeSlabs_.empty() &&
