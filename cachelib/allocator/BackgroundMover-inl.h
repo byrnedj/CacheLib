@@ -84,7 +84,19 @@ void BackgroundMover<CacheT>::checkAndRun() {
   while (true) {
     unsigned int moves = 0;
     //std::set<ClassId> classes{};
-    auto batches = strategy_->calculateBatchSizes(cache_, assignedMemory);
+    std::vector<uint32_t> batches{};
+    if (direction_ == MoverDir::PromoteFromQueue) {
+      for (auto [tid, pid, cid] : assignedMemory) {
+        auto batch = BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
+        batches.push_back(batch);
+      }
+    } else {
+      auto batches2 = strategy_->calculateBatchSizes(cache_, assignedMemory);
+      for (int i = 0; i < batches2.size(); i++) {
+          batches.push_back(batches2[i]);
+      }
+
+    }
     const auto begin = util::getCurrentTimeNs();
     for (size_t i = 0; i < batches.size(); i++) {
       const auto [tid, pid, cid] = assignedMemory[i];

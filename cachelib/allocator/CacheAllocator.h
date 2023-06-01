@@ -2328,17 +2328,17 @@ class CacheAllocator : public CacheBase {
           //  XDCHECK_NE(ret,promoMap.end());
           //  promoMap.erase(ret);
           //}
+          candidates.push_back(candidate);
          
-          if (candidate->isRecent() && candidate->markMoving(true)) {
-            //locking hashtable
-            XDCHECK(candidate->isMoving()) << candidate->toString();
-            XDCHECK(candidate->isRecent());
-            XDCHECK(candidate->isInMMContainer());
-            //XDCHECK(candidate->isInclusive());
-            candidates.push_back(candidate);
-          } else {
-            candidate->unmarkRecent();
-          }
+          //if (candidate->markMoving(false)) {
+          //  //locking hashtable
+          //  XDCHECK(candidate->isMoving()) << candidate->toString();
+          //  XDCHECK(candidate->isInMMContainer());
+          //  //XDCHECK(candidate->isInclusive());
+          //  candidates.push_back(candidate);
+          //} else {
+          //  candidate->unmarkRecent();
+          //}
           candidate = nullptr;
           //if (candidate->isRecent() && candidate->markMoving(true)) {
           //    candidate->unmarkRecent();
@@ -2452,7 +2452,7 @@ class CacheAllocator : public CacheBase {
           //attempt to mark moving
           Item *candidate = itr.get();
          
-          if (candidate->isRecent() && candidate->markMoving(true)) {
+          if (candidate->markMoving(true)) {
             //locking hashtable
             mmContainer.remove(itr);
             XDCHECK(candidate->isMoving()) << candidate->toString();

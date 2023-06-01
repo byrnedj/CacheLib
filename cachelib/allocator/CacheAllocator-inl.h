@@ -2945,20 +2945,21 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
                    !config_.usePromotionQueue && !itemPtr->isRecent()) {
           itemPtr->markRecent();
         } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
-                   config_.usePromotionQueue && !itemPtr->isRecent()) {
-          //bool moving = itemPtr->markMovingIfRefCount(1);
-          //if (moving) {
-            itemPtr->markRecent();
+                   config_.usePromotionQueue) {
+          bool moving = itemPtr->markMovingIfRefCount(1);
+          if (moving) {
+            //itemPtr->markRecent();
             auto &promoQueue = getPromoQueue(tid,pid,cid);
             bool added = promoQueue.write(itemPtr);
             if (!added) {
-                itemPtr->unmarkRecent();
+                itemPtr->unmarkMoving();
                 //(*stats_.numWritebacksFailNoSpace)[tid][pid][cid].inc();
                 //auto ref = itemPtr->unmarkMoving();
                 //XDCHECK_NE(ref,0);
-                //auto hdl = acquire(itemPtr);
-                //wakeUpWaiters(*itemPtr,std::move(hdl));
+                auto hdl = acquire(itemPtr);
+                wakeUpWaiters(*itemPtr,std::move(hdl));
             }
+          }
 
             //{
             //  auto plock = getPromoLockForClass(cid);

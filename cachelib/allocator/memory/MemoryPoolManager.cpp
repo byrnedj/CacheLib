@@ -137,6 +137,7 @@ MemoryPool& MemoryPoolManager::getPoolById(PoolId id) const {
     XDCHECK(pools_[id] != nullptr);
     return *pools_[id];
   }
+  XDCHECK(false);
   throw std::invalid_argument(folly::sformat("Invalid pool id {}", id));
 }
 
