@@ -231,28 +231,32 @@ struct Stats {
 
     int bgId = 1;
     for (auto &bgWorkerStats : backgroundEvictorStats) {
-        out << folly::sformat(" == Background Evictor Thread {} ==", bgId) << std::endl;
-        out << folly::sformat("Evicted Items : {:,}, Traversals : {:,}, Run Count : {:,}, \n"
-                              "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, Avg Items Evicted: {:.2f}",
-                              bgWorkerStats.numMovedItems, bgWorkerStats.numTraversals,
-                              bgWorkerStats.runCount, bgWorkerStats.avgTraversalTimeMs,
-                              bgWorkerStats.minTraversalTimeMs, bgWorkerStats.maxTraversalTimeMs,
-                              (double)bgWorkerStats.numMovedItems/(double)bgWorkerStats.numTraversals) 
-            << std::endl;
+        if (bgWorkerStats.numMovedItems > 0) {
+          out << folly::sformat(" == Background Evictor Thread {} ==", bgId) << std::endl;
+          out << folly::sformat("Evicted Items : {:,}, Traversals : {:,}, Run Count : {:,}, \n"
+                                "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, Avg Items Evicted: {:.2f}",
+                                bgWorkerStats.numMovedItems, bgWorkerStats.numTraversals,
+                                bgWorkerStats.runCount, bgWorkerStats.avgTraversalTimeMs,
+                                bgWorkerStats.minTraversalTimeMs, bgWorkerStats.maxTraversalTimeMs,
+                                (double)bgWorkerStats.numMovedItems/(double)bgWorkerStats.numTraversals) 
+              << std::endl;
+        }
         bgId++;
 
     }
     bgId = 1;
     for (auto &bgWorkerStats : backgroundPromoStats) {
-        out << folly::sformat(" == Background Promoter Thread {} ==", bgId) << std::endl;
-        out << folly::sformat("Promoted Items : {:,}, Traversals : {:,}, Run Count : {:,}, \n"
-                              "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, \n"
-                              "Avg Items Promoted: {:.2f}",
-                              bgWorkerStats.numMovedItems, bgWorkerStats.numTraversals,
-                              bgWorkerStats.runCount, bgWorkerStats.avgTraversalTimeMs,
-                              bgWorkerStats.minTraversalTimeMs, bgWorkerStats.maxTraversalTimeMs,
-                              (double)bgWorkerStats.numMovedItems/(double)bgWorkerStats.numTraversals) 
-            << std::endl;
+        if (bgWorkerStats.numMovedItems > 0) {
+          out << folly::sformat(" == Background Promoter Thread {} ==", bgId) << std::endl;
+          out << folly::sformat("Promoted Items : {:,}, Traversals : {:,}, Run Count : {:,}, \n"
+                                "Avg Time Per Traversal (ns) : {}, Min : {}, Max : {}, \n"
+                                "Avg Items Promoted: {:.2f}",
+                                bgWorkerStats.numMovedItems, bgWorkerStats.numTraversals,
+                                bgWorkerStats.runCount, bgWorkerStats.avgTraversalTimeMs,
+                                bgWorkerStats.minTraversalTimeMs, bgWorkerStats.maxTraversalTimeMs,
+                                (double)bgWorkerStats.numMovedItems/(double)bgWorkerStats.numTraversals) 
+              << std::endl;
+        }
         bgId++;
 
     }
@@ -294,6 +298,8 @@ struct Stats {
     uint64_t totalpromote = 0;
     for (int i = 0; i < backgroundEvictorStats.size(); i++) {
         totalevict += backgroundEvictorStats[i].numMovedItems;
+    }
+    for (int i = 0; i < backgroundPromoStats.size(); i++) {
         totalpromote += backgroundPromoStats[i].numMovedItems;
     }
     if (!backgroundEvictionClasses.empty() && totalevict > 0 ) {
@@ -306,7 +312,7 @@ struct Stats {
             tid, pid, cid, evicted, runs, (double)evicted/(double)runs) << std::endl;
         }
       });
-      out << folly::sformat("Total evictions: {:,}",totalevict) << std::endl;
+      out << folly::sformat("Total background evictions: {:,}",totalevict) << std::endl;
     }
     
     if (!backgroundPromotionClasses.empty() && totalpromote > 0) {
