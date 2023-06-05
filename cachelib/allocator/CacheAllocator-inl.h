@@ -2946,7 +2946,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           itemPtr->markRecent();
         } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
                    config_.usePromotionQueue) {
-          bool moving = itemPtr->markMovingIfRefCount(1);
+          bool moving = itemPtr->markMoving(false);
           if (moving) {
             //itemPtr->markRecent();
             auto &promoQueue = getPromoQueue(tid,pid,cid);

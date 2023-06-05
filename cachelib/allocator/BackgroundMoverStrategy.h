@@ -44,9 +44,9 @@ class DefaultBackgroundMoverStrategy : public BackgroundMoverStrategy {
     for (auto [tid, pid, cid] : acVec) {
         double usage = cache.getPoolByTid(pid, tid).getApproxUsage(cid);
         uint32_t perSlab = cache.getPoolByTid(pid, tid).getPerSlab(cid);
-        if (usage > 0.98 && usage < 1.0) {
-          //uint32_t batch = batchSize_ > perSlab ? perSlab : batchSize_;
-          uint32_t batch = 10;
+        if (usage >= 0.95) {
+          uint32_t batch = batchSize_ > perSlab ? perSlab : batchSize_;
+          //uint32_t batch = 10;
           batches.push_back(batch);
         } else {
           batches.push_back(0);

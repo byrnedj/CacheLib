@@ -83,24 +83,16 @@ void BackgroundMover<CacheT>::checkAndRun() {
 
   while (true) {
     unsigned int moves = 0;
-    //std::set<ClassId> classes{};
-    std::vector<uint32_t> batches{};
-    if (direction_ == MoverDir::PromoteFromQueue) {
-      for (auto [tid, pid, cid] : assignedMemory) {
-        auto batch = BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
-        batches.push_back(batch);
-      }
-    } else {
-      auto batches2 = strategy_->calculateBatchSizes(cache_, assignedMemory);
-      for (int i = 0; i < batches2.size(); i++) {
-          batches.push_back(batches2[i]);
-      }
-
-    }
     const auto begin = util::getCurrentTimeNs();
-    for (size_t i = 0; i < batches.size(); i++) {
+    for (size_t i = 0; i < assignedMemory.size(); i++) {
       const auto [tid, pid, cid] = assignedMemory[i];
-      const auto batch = batches[i];
+      uint32_t batch = 0;
+      if (direction_ == MoverDir::PromoteFromQueue) {
+        batch = BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
+      } else {
+        batch = 
+            BackgroundMoverAPIWrapper<CacheT>::getBatchForTarget(cache_, tid, pid, cid, 0.95);
+      }
 
       if (batch == 0) {
         continue;
@@ -130,7 +122,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
       //totalClasses.add(classes.size());
     }
     //we didn't move that many objects done with this run
-    if (moves == 0 || moves < batches.size() || shouldStopWork()) {
+    if (moves == 0 || moves < (assignedMemory.size()/2) || shouldStopWork()) {
         break;
     }
   }

@@ -1989,9 +1989,7 @@ class CacheAllocator : public CacheBase {
 
     size_t tries = 0;
     mmContainer.withEvictionIterator([tid, pid, cid, &tries, &candidates, &batch, &mmContainer, this](auto &&itr) {
-      while (candidates.size() < batch && 
-        (config_.maxEvictionPromotionHotness == 0 || tries < config_.maxEvictionPromotionHotness) && 
-         itr) {
+      while (candidates.size() < batch && itr) {
         tries++;
         (*stats_.evictionAttempts)[tid][pid][cid].inc();
         Item* candidate = itr.get();

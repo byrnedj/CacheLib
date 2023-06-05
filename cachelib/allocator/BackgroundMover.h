@@ -71,6 +71,14 @@ struct BackgroundMoverAPIWrapper {
                                         unsigned int cid) {
     return cache.getQueueSize(tid, pid, cid);
   }
+  
+  static size_t getBatchForTarget(C& cache,
+                                        unsigned int tid,
+                                        unsigned int pid,
+                                        unsigned int cid,
+                                        double target) {
+    return cache.getPoolByTid(pid,tid).getBatchForTarget(cid, target);
+  }
   static size_t promoteFromMMContainer(C& cache,
                                         unsigned int tid,
                                         unsigned int pid,
