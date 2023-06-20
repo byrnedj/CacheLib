@@ -2316,6 +2316,20 @@ class CacheAllocator : public CacheBase {
           if (candidate == nullptr) {
               break;
           }
+
+          if (!candidate->isInMMContainer()) {
+              auto ref = candidate->unmarkMoving();
+              wakeUpWaiters(*candidate,{});
+              if (ref == 0) {
+                const auto res =
+                  releaseBackToAllocator(*candidate, 
+                        RemoveContext::kEviction, false);
+                 XDCHECK(res == ReleaseRes::kReleased);
+
+              }
+              candidate = nullptr;
+              continue;
+          }
           //promoQueue.blockingRead(candidate);
           //auto shard = getShardForKey(candidate->getKey());
           //auto& promoMap = getPromoMapForShard(shard);
