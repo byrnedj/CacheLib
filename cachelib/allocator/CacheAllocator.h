@@ -2046,6 +2046,9 @@ class CacheAllocator : public CacheBase {
                                         true);
         writeback = true;
       }
+      if (writeback) {
+          (*stats_.numWritebacks)[tid][pid][cid].inc();
+      }
       if (moved) {
         auto ref = candidates[index]->unmarkMoving();
         evictions++;
@@ -2055,7 +2058,6 @@ class CacheAllocator : public CacheBase {
         XDCHECK(!candidates[index]->isMoving());
         XDCHECK(!candidates[index]->isAccessible());
         XDCHECK_EQ(candidates[index]->getKey(),new_items_hdl[index]->getKey());
-
         wakeUpWaiters(*candidates[index], std::move(new_items_hdl[index]));
       } else {
         (*stats_.numWritebacksFailBadMove)[tid][pid][cid].inc();
