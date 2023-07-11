@@ -99,6 +99,10 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     allocatorConfig_.usePosixForShm();
   }
   
+  if (config_.directAddInclusive) {
+    allocatorConfig_.directAddInclusive = config_.directAddInclusive;
+  }
+  
   allocatorConfig_.useThreadPool = config_.useThreadPool;
   allocatorConfig_.threadPoolThreads = config_.threadPoolThreads;
 
@@ -662,6 +666,7 @@ Stats Cache<Allocator>::getStats() const {
     }
     ret.numEvictions.push_back(aggregate.numEvictions());
     ret.numWritebacks.push_back(aggregate.numWritebacks());
+    ret.numInclWrites.push_back(aggregate.numInclWrites());
     ret.numWritebacksFailBadMove.push_back(aggregate.numWritebacksFailBadMove());
     ret.numWritebacksFailNoAlloc.push_back(aggregate.numWritebacksFailNoAlloc());
     ret.numPromotions.push_back(aggregate.numPromotions());

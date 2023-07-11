@@ -226,6 +226,8 @@ struct CacheConfig : public JSONConfig {
   // Use Posix Shm instead of SysVShm
   bool usePosixShm{false};
   
+  bool directAddInclusive{false};
+  
   // make cache inclusive
   bool useInclusive{false};
 

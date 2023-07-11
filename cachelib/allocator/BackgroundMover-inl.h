@@ -106,9 +106,9 @@ void BackgroundMover<CacheT>::checkAndRun() {
       if (direction_ == MoverDir::PromoteFromQueue) {
         queue_per_class_[assignedMemory[i]] += 
             BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
-        if (cid == 1 && moved > 0) {
-            XDCHECK(false);
-        }
+        //if (cid == 1 && moved > 0) {
+        //    XDCHECK(false);
+        //}
       } else {
         queue_per_class_[assignedMemory[i]] += 0;
       }

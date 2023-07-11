@@ -92,6 +92,7 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, memoryOnlyTTL);
 
   JSONSetVal(configJson, usePosixShm);
+  JSONSetVal(configJson, directAddInclusive);
   JSONSetVal(configJson, useThreadPool);
   JSONSetVal(configJson, threadPoolThreads);
   JSONSetVal(configJson, useInclusive);

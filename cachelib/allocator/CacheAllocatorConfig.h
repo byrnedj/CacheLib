@@ -380,7 +380,7 @@ class CacheAllocatorConfig {
   size_t getCacheSize() const noexcept { return size; }
 
   bool isUsingPosixShm() const noexcept { return usePosixShm; }
-
+  
   // validate the config, and return itself if valid
   const CacheAllocatorConfig& validate() const;
 
@@ -608,6 +608,9 @@ class CacheAllocatorConfig {
   // This can only be turned on the first time we're creating the cache.
   // This option has no effect when attaching to existing cache.
   bool lockMemory{false};
+
+  // should we allocate an copy item immediately in next tier for inclusive
+  bool directAddInclusive{false};
 
   // These configs configure how MemoryAllocator will be generating
   // allocation class sizes for each pool by default

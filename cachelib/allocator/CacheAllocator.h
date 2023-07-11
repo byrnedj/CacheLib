@@ -2013,6 +2013,20 @@ class CacheAllocator : public CacheBase {
     }
     std::vector<WriteHandle> new_items_hdl = 
         allocateInternalTierBatch(tid+1,pid,cid, candidates);
+    if (new_items_hdl.empty()) {
+      for (auto index = 0u; index < candidates.size(); index++) {
+        if (candidates[index]->wasPromoted()) {
+          candidates[index]->unmarkPromoted();
+        }
+
+        accessContainer_->remove(*candidates[index]);
+        auto ref = candidates[index]->unmarkMoving();
+        XDCHECK_EQ(0,ref) << candidates[index]->toString();
+        wakeUpWaiters(*candidates[index], {});
+      }
+      return evictions;
+
+    }
     std::vector<Item*> new_items;
     new_items.reserve(new_items_hdl.size());
     unsigned int validHandleCnt = 0;
@@ -2031,7 +2045,7 @@ class CacheAllocator : public CacheBase {
         folly::sformat("Was not able to add all new items, failed item {} and handle {}", 
             new_items[added]->toString(),new_items_hdl[added]->toString()));
     }
-    for (auto index = 0U; index < candidates.size(); index++) {
+    for (auto index = 0u; index < candidates.size(); index++) {
       bool moved = false;
       bool writeback = false;
       bool inclusive = candidates[index]->isInclusive();
@@ -2373,6 +2387,27 @@ class CacheAllocator : public CacheBase {
 
       std::vector<WriteHandle> new_items_hdl = 
           allocateInternalTierBatch(tid-1,pid,cid, candidates);
+      if (new_items_hdl.empty()) {
+          //auto reinserted = mmContainer.addBatch(candidates);
+          //if (reinserted != 0) {
+          //  XDCHECK_EQ(reinserted,0) << candidates[reinserted]->toString();
+          //  throw std::runtime_error(
+          //    folly::sformat("Was not able toreinsert all new items promoter, failed item {}", candidates[reinserted]->toString()));
+          //}
+          for (auto index = 0U; index < candidates.size(); index++) {
+              //bool added = promoQueue.write(candidates[index]);
+              //if (!added) {
+              //  throw std::runtime_error(
+              //   folly::sformat("Was not able toreinsert to queue promoter, failed item {}", candidates[index]->toString()));
+              //}
+              accessContainer_->remove(*candidates[index]);
+              auto ref = candidates[index]->unmarkMoving();
+              XDCHECK_EQ(0,ref) << candidates[index]->toString();
+              wakeUpWaiters(*candidates[index], {});
+          }
+          return promotions;
+
+      }
       std::vector<Item*> new_items;
       new_items.reserve(new_items_hdl.size());
       unsigned int validHandleCnt = 0;

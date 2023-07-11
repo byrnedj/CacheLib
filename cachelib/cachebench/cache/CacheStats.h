@@ -35,6 +35,7 @@ struct Stats {
 
   std::vector<uint64_t> numEvictions;
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numInclWrites;
   std::vector<uint64_t> numWritebacksFailBadMove;
   std::vector<uint64_t> numWritebacksFailNoAlloc;
   std::vector<uint64_t> numPromotions;
@@ -157,6 +158,9 @@ struct Stats {
         out << folly::sformat("Tier {} Promotions : {:,} Promotion Hits: {:,} Promoted hit ratio: {:.2f}%",
                 tid, numPromotions[tid], numPromotionsHits[tid],
                 pctFn(numPromotionsHits[tid],numCacheHits[tid])) << std::endl;
+        if (numInclWrites[tid] > 0) {
+            out << folly::sformat("Tier {} Inclusive Writes : {:,}", tid, numInclWrites[tid]) << std::endl;
+        }
     }
     
     auto foreachAC = [&](auto &classStats, auto cb) {
@@ -474,7 +478,7 @@ struct Stats {
     }
 
     if (numCacheEvictions > 0) {
-      out << folly::sformat("Total evictions executed {:,}", numCacheEvictions)
+      out << folly::sformat("Total evictions executed : {:,}", numCacheEvictions)
               << std::endl;
     }
   }

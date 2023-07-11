@@ -69,7 +69,7 @@ class CacheStressor : public Stressor {
     // items during slab release, we want readers and writers of chained
     // allocs to be synchronized
     typename CacheT::ChainedItemMovingSync movingSync;
-    if (config_.usesChainedItems() &&
+    if (
         (cacheConfig.moveOnSlabRelease || config_.checkConsistency)) {
       lockEnabled_ = true;
 
@@ -241,6 +241,11 @@ class CacheStressor : public Stressor {
     using Lock = std::unique_lock<folly::SharedMutex>;
     return lockEnabled_ ? Lock{getLock(key)} : Lock{};
   }
+  
+  auto chainedItemTryAcquireUniqueLock(Key key) {
+    using Lock = std::unique_lock<folly::SharedMutex>;
+    return lockEnabled_ ? Lock{getLock(key), std::try_to_lock} : Lock{};
+  }
 
   // populate the input item handle according to the stress setup.
   void populateItem(WriteHandle& handle, const std::string& itemValue = "") {
@@ -361,9 +366,11 @@ class CacheStressor : public Stressor {
               // upgrade access privledges, (lock_upgrade is not
               // appropriate here)
               slock = {};
-              xlock = chainedItemAcquireUniqueLock(*key);
-              setKey(pid, stats, key, *(req.sizeBegin), req.ttlSecs,
-                     req.admFeatureMap, req.itemValue);
+              xlock = chainedItemTryAcquireUniqueLock(*key);
+              if (xlock) {
+                setKey(pid, stats, key, *(req.sizeBegin), req.ttlSecs,
+                       req.admFeatureMap, req.itemValue);
+              }
             }
           } else {
             result = OpResultType::kGetHit;

@@ -31,6 +31,7 @@ void Stats::init() {
   chainedItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   regularItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacks = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  numInclWrites = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacksFailBadMove = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacksFailNoAlloc = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numPromotions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
@@ -52,6 +53,7 @@ void Stats::init() {
   initToZero(*chainedItemEvictions);
   initToZero(*regularItemEvictions);
   initToZero(*numWritebacks);
+  initToZero(*numInclWrites);
   initToZero(*numWritebacksFailBadMove);
   initToZero(*numWritebacksFailNoAlloc);
   initToZero(*numPromotions);
@@ -65,7 +67,7 @@ struct SizeVerify {};
 
 void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 #ifndef SKIP_SIZE_VERIFY
-  SizeVerify<sizeof(Stats)> a = SizeVerify<16224>{};
+  SizeVerify<sizeof(Stats)> a = SizeVerify<16240>{};
   std::ignore = a;
 #endif
   ret.numCacheGets = numCacheGets.get();
@@ -164,6 +166,7 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
     ret.numEvictions.push_back(chainedEvictions[tid] + regularEvictions[tid]);
   }
   ret.numWritebacks = accum(*numWritebacks);
+  ret.numInclWrites = accum(*numInclWrites);
   ret.numWritebacksFailBadMove = accum(*numWritebacksFailBadMove);
   ret.numWritebacksFailNoAlloc = accum(*numWritebacksFailNoAlloc);
   ret.numPromotions = accum(*numPromotions);
@@ -234,6 +237,7 @@ PoolStats& PoolStats::operator+=(const PoolStats& other) {
       d.fragmentationSize += s.fragmentationSize;
       d.numHits += s.numHits;
       d.numWritebacks += s.numWritebacks;
+      d.numInclWrites += s.numInclWrites;
       d.numWritebacksFailBadMove += s.numWritebacksFailBadMove;
       d.numWritebacksFailNoAlloc += s.numWritebacksFailNoAlloc;
       d.numPromotions += s.numPromotions;
@@ -297,6 +301,14 @@ uint64_t PoolStats::numWritebacks() const noexcept {
   uint64_t n = 0;
   for (const auto& s : cacheStats) {
     n += s.second.numWritebacks;
+  }
+  return n;
+}
+
+uint64_t PoolStats::numInclWrites() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numInclWrites;
   }
   return n;
 }

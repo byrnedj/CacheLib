@@ -499,6 +499,11 @@ CacheAllocator<CacheTrait>::allocateInternalTierBatch(TierId tid,
               totalAllocs++;
           }
       }
+      if (totalAllocs != batch) {
+          //we probably have to quit or fallback to 
+          //single allocation
+          return std::vector<WriteHandle>(); 
+      }
       XDCHECK_EQ(totalAllocs,batch);
     }
   }
@@ -1338,6 +1343,7 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
     replaced = accessContainer_->insertOrReplace(*(handle.getInternal()));
 
     if (replaced) {
+      TierId tid = getTierId(*replaced);
       replaced->unmarkPromoted();
       if (handle->isInclusive()) {
           handle->markDirty();
@@ -1351,6 +1357,25 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
         nvmCache_->markNvmItemRemovedLocked(hk);
       }
 
+    } else if (!replaced && handle->isInclusive() && config_.directAddInclusive) {
+        auto& item = *(handle.getInternal());
+        TierId tid = getTierId(&item);
+        
+        const auto allocInfo = allocator_[tid]->getAllocInfo(static_cast<const void*>(&item));
+        auto newItemHdl = allocateInternalTier(tid+1, allocInfo.poolId,
+                     item.getKey(),
+                     item.getSize(),
+                     item.getCreationTime(),
+                     item.getExpiryTime(),
+                     false);
+        if (newItemHdl) {
+          item.setNextTierCopy(newItemHdl.getInternal());
+          newItemHdl->markCopy();
+          newItemHdl->markInclusive();
+          std::memcpy(newItemHdl->getMemory(), item.getMemory(), item.getSize());
+          (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
+        }
+        
     }
   } catch (const std::exception&) {
     removeFromMMContainer(*(handle.getInternal()));
@@ -1475,6 +1500,7 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
   auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
   auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
   if (oldItem.isDirty()) {
+    XDCHECK(false) << oldItem.toString();
     std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(), oldItem.getSize());
     (*stats_.numWritebacks)[tid][pid][cid].inc();
   }
@@ -1579,7 +1605,9 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     // responsibility to invalidate them. The move can only fail after this
     // statement if the old item has been removed or replaced, in which case it
     // should be fine for it to be left in an inconsistent state.
-    config_.moveCb(oldItem, *newItemHdl, nullptr);
+    //config_.moveCb(oldItem, *newItemHdl, nullptr);
+    std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
+                oldItem.getSize());
   } else {
     std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
                 oldItem.getSize());
@@ -1887,6 +1915,7 @@ void CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId ci
     for (int i = 0; i < candidates.size(); i++) {
         if (candidates[i]->isInclusive()) {
           Item *nextTierItem = static_cast<Item*>(candidates[i]->getNextTierCopy());
+          XDCHECK(nextTierItem) << candidates[i]->toString();
           if (nextTierItem) {
               nextAllocs.push_back(acquire(nextTierItem));
               validItems++;
@@ -2279,6 +2308,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
   }
   if (item.isInclusive()) {
     Item *nextTierItem = static_cast<Item*>(item.getNextTierCopy());
+    XDCHECK(nextTierItem) << item.toString();
     if (nextTierItem) {
         auto nextTierItemHdl = acquire(nextTierItem);
         if (fromBgThread) {
@@ -2902,7 +2932,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
                   XDCHECK_EQ(itemPtr->getRefCount(),0);
                 const auto res =
                     releaseBackToAllocator(*itemPtr, 
-                            RemoveContext::kEviction, false);
+                            RemoveContext::kNormal, false);
                 XDCHECK(res == ReleaseRes::kReleased);
               }
             } else {
@@ -3595,7 +3625,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
     for (const ClassId cid : classIds) {
       uint64_t allocAttempts, evictionAttempts, allocFailures,
                fragmentationSize, classHits, chainedItemEvictions,
-               regularItemEvictions, numWritebacks, numWritebacksFailBadMove, numWritebacksFailNoAlloc, numPromotions, numPromotionsHits = 0;
+               regularItemEvictions, numWritebacks, numWritebacksFailBadMove, numWritebacksFailNoAlloc, numPromotions, numPromotionsHits, numInclWrites = 0;
       MMContainerStat mmContainerStats;
       for (TierId tid = 0; tid < getNumTiers(); tid++) {
         allocAttempts += (*stats_.allocAttempts)[tid][poolId][cid].get();
@@ -3606,6 +3636,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
         chainedItemEvictions += (*stats_.chainedItemEvictions)[tid][poolId][cid].get();
         regularItemEvictions += (*stats_.regularItemEvictions)[tid][poolId][cid].get();
         numWritebacks += (*stats_.numWritebacks)[tid][poolId][cid].get();
+        numInclWrites += (*stats_.numInclWrites)[tid][poolId][cid].get();
         numWritebacksFailBadMove += (*stats_.numWritebacksFailBadMove)[tid][poolId][cid].get();
         numWritebacksFailNoAlloc += (*stats_.numWritebacksFailNoAlloc)[tid][poolId][cid].get();
         numPromotions += (*stats_.numPromotions)[tid][poolId][cid].get();
@@ -3625,6 +3656,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
             chainedItemEvictions,
             regularItemEvictions,
             numWritebacks,
+            numInclWrites,
             numWritebacksFailBadMove,
             numWritebacksFailNoAlloc,
             numPromotions,
@@ -3683,6 +3715,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(TierId tid, PoolId poolId) co
             (*stats_.chainedItemEvictions)[tid][poolId][cid].get(),
             (*stats_.regularItemEvictions)[tid][poolId][cid].get(),
             (*stats_.numWritebacks)[tid][poolId][cid].get(),
+            (*stats_.numInclWrites)[tid][poolId][cid].get(),
             (*stats_.numWritebacksFailBadMove)[tid][poolId][cid].get(),
             (*stats_.numWritebacksFailNoAlloc)[tid][poolId][cid].get(),
             (*stats_.numPromotions)[tid][poolId][cid].get(),

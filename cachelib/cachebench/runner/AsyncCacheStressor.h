@@ -245,7 +245,9 @@ class AsyncCacheStressor : public Stressor {
           // allocate and insert on miss
           // upgrade access privledges, (lock_upgrade is not
           // appropriate here)
-          l.unlock();
+          if (lockEnabled_) {
+            l.unlock();
+          }
           auto xlock = chainedItemAcquireUniqueLock(key);
           setKey(pid, stats, &key, *(req->sizeBegin), req->ttlSecs,
                  req->admFeatureMap);
