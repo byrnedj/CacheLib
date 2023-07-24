@@ -262,6 +262,20 @@ Slab* MemoryPool::getSlabLocked() noexcept {
   return slab;
 }
 
+bool MemoryPool::assignSlabs(ClassId cid, uint64_t n) {
+  auto& ac = getAllocationClassFor(cid);
+  for (int i = 0; i < n; i++) {
+    auto slab = getSlabLocked();
+    if (slab) {
+      ac.addSlab(const_cast<Slab*>(slab));
+    } else {
+      return false;
+    }
+  }
+  return true;
+
+}
+
 std::vector<void*> MemoryPool::allocateBatchByClass(ClassId cid, uint32_t batch) {
   auto& ac = getAllocationClassFor(cid);
   const auto allocSize = ac.getAllocSize();

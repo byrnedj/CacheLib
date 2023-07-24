@@ -111,6 +111,9 @@ struct CacheConfig : public JSONConfig {
   size_t minAllocSize{64};
 
   std::vector<uint64_t> allocSizes{};
+  std::vector<uint64_t> tier0ClassAssignments{};
+  std::vector<uint64_t> tier1ClassAssignments{};
+  std::vector<uint64_t> classInclusives{};
 
   // These specify the number of pools and how keys will
   // be distributed among the pools

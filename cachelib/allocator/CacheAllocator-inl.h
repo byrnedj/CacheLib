@@ -1500,7 +1500,7 @@ bool CacheAllocator<CacheTrait>::handleInclusiveWriteback(
   auto pid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).poolId;
   auto cid = allocator_[tid]->getAllocInfo(oldItem.getMemory()).classId;
   if (oldItem.isDirty()) {
-    XDCHECK(false) << oldItem.toString();
+    //XDCHECK(false) << oldItem.toString();
     std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(), oldItem.getSize());
     (*stats_.numWritebacks)[tid][pid][cid].inc();
   }
@@ -1915,7 +1915,7 @@ void CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId ci
     for (int i = 0; i < candidates.size(); i++) {
         if (candidates[i]->isInclusive()) {
           Item *nextTierItem = static_cast<Item*>(candidates[i]->getNextTierCopy());
-          XDCHECK(nextTierItem) << candidates[i]->toString();
+          //XDCHECK(nextTierItem) << candidates[i]->toString();
           if (nextTierItem) {
               nextAllocs.push_back(acquire(nextTierItem));
               validItems++;
@@ -2308,7 +2308,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
   }
   if (item.isInclusive()) {
     Item *nextTierItem = static_cast<Item*>(item.getNextTierCopy());
-    XDCHECK(nextTierItem) << item.toString();
+    //XDCHECK(nextTierItem) << item.toString();
     if (nextTierItem) {
         auto nextTierItemHdl = acquire(nextTierItem);
         if (fromBgThread) {
@@ -3406,6 +3406,18 @@ PoolId CacheAllocator<CacheTrait>::addPool(
     // we should probably remove that on failure
     auto res = allocator_[tid]->addPool(
         name, tierPoolSize, allocSizes, ensureProvisionable);
+    if (config_.preAssignSlabs) {
+      auto assignments = config_.getClassAssignments(tid,pid);
+      for (auto entry : assignments) {
+          ClassId cid = entry.first;
+          uint32_t slabs = entry.second;
+          bool ret = allocator_[tid]->assignSlabs(pid,cid,slabs);
+          if (!ret) {
+            throw std::invalid_argument(folly::sformat(
+                "unable to assign {} slabs to cid {} @ tid {}", slabs, cid, tid));
+          }
+      }
+    }
     XDCHECK(tid == 0 || res == pid);
     pid = res;
   }

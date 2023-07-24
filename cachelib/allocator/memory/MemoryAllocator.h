@@ -168,6 +168,7 @@ class MemoryAllocator {
   //        invalid.
   void* allocate(PoolId id, uint32_t size);
   std::vector<void*> allocateBatchByClass(PoolId pid, ClassId cid, uint32_t batch);
+  bool assignSlabs(PoolId pid, ClassId cid, uint32_t n);
 
   // Allocate a zeroed Slab
   //

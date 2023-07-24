@@ -80,6 +80,33 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     allocatorConfig_.setDefaultAllocSizes(std::move(allocSizes));
   }
 
+  if (!config_.classInclusives.empty()) {
+    std::map<uint32_t,uint32_t> classInclusives;
+    uint32_t i = 0;
+    for (uint64_t s : config_.classInclusives) {
+      classInclusives[i] = s;
+      i++;
+    }
+    allocatorConfig_.setClassInclusives(std::move(classInclusives));
+  }
+  
+  if (!config_.tier0ClassAssignments.empty()) {
+    std::map<MemoryDescriptorType,uint32_t> classAssignments;
+    uint32_t cid = 0;
+    for (uint64_t s : config_.tier0ClassAssignments) {
+      auto md = MemoryDescriptorType(0,0,cid);
+      classAssignments[md] = s; 
+      cid++;
+    }
+    cid = 0;
+    for (uint64_t s : config_.tier1ClassAssignments) {
+      auto md = MemoryDescriptorType(1,0,cid);
+      classAssignments[md] = s; 
+      cid++;
+    }
+    allocatorConfig_.setClassAssignments(std::move(classAssignments));
+  }
+
   // Set hash table config
   allocatorConfig_.setAccessConfig(typename Allocator::AccessConfig{
       static_cast<uint32_t>(config_.htBucketPower),
@@ -424,10 +451,12 @@ typename Cache<Allocator>::WriteHandle Cache<Allocator>::allocate(
     handle = cache_->allocate(pid, key, CacheValue::getSize(size), ttlSecs);
     if (handle) {
       CacheValue::initialize(handle->getMemory());
-      if (config_.useInclusive) {
-         XDCHECK(!handle->isInclusive());
+      XDCHECK(!handle->isInclusive());
+      auto allocInfo = cache_->getAllocInfo(handle.get());
+      if (config_.classInclusives[allocInfo.classId] == 1) {
          handle->markInclusive();
       }
+      
     }
   } catch (const std::invalid_argument& e) {
     XLOGF(DBG, "Unable to allocate, reason: {}", e.what());

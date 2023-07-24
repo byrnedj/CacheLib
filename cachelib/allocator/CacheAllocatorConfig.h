@@ -69,6 +69,9 @@ class CacheAllocatorConfig {
 
   // Set default allocation sizes for a cache pool
   CacheAllocatorConfig& setDefaultAllocSizes(std::set<uint32_t> allocSizes);
+  
+  CacheAllocatorConfig& setClassInclusives(std::map<uint32_t, uint32_t> classInclusives);
+  CacheAllocatorConfig& setClassAssignments(std::map<MemoryDescriptorType,uint32_t> classAssignments);
 
   // Set default allocation sizes based on arguments
   CacheAllocatorConfig& setDefaultAllocSizes(
@@ -373,6 +376,21 @@ class CacheAllocatorConfig {
     return reaperInterval.count() > 0;
   }
 
+  bool isClassInclusive(uint32_t cid) {
+    return classInclusives[cid] == 1;
+  }
+
+  std::map<uint32_t,uint32_t> getClassAssignments(uint32_t tid, uint32_t pid) {
+      std::map<uint32_t,uint32_t> assignments;
+      for (auto& entry : classAssignments) {
+          MemoryDescriptorType md = entry.first;
+          if (md.tid_ == tid && md.pid_ == pid) {
+              assignments[md.cid_] = entry.second;
+          }
+      }
+      return assignments;
+  }
+
   const std::string& getCacheDir() const noexcept { return cacheDir; }
 
   const std::string& getCacheName() const noexcept { return cacheName; }
@@ -423,6 +441,10 @@ class CacheAllocatorConfig {
   // This set of alloc sizes will be used for pools that user do not supply
   // a custom set of alloc sizes.
   std::set<uint32_t> defaultAllocSizes;
+
+  bool preAssignSlabs{false};
+  std::map<MemoryDescriptorType,uint32_t> classAssignments;
+  std::map<uint32_t,uint32_t> classInclusives;
 
   // whether to detach allocator memory upon a core dump
   bool disableFullCoredump{true};
@@ -686,6 +708,21 @@ template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setDefaultAllocSizes(
     std::set<uint32_t> allocSizes) {
   defaultAllocSizes = allocSizes;
+  return *this;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setClassInclusives(
+    std::map<uint32_t,uint32_t> inclusives) {
+  classInclusives = std::move(inclusives);
+  return *this;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setClassAssignments(
+    std::map<MemoryDescriptorType,uint32_t> assignments) {
+  classAssignments = std::move(assignments);
+  preAssignSlabs = true;
   return *this;
 }
 
