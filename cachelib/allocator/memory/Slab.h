@@ -77,7 +77,7 @@ class CACHELIB_PACKED_ATTR Slab {
   static constexpr PoolId kInvalidPoolId = -1;
 
   // size of the slab in bytes.
-  static constexpr unsigned int kNumSlabBits = 22;
+  static constexpr unsigned int kNumSlabBits = 20;
 
   // minimum of 64 byte allocations.
   static constexpr unsigned int kMinAllocPower = 6;
