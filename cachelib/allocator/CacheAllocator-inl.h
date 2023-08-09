@@ -3395,6 +3395,7 @@ PoolId CacheAllocator<CacheTrait>::addPool(
 
   for (TierId tid = 0; tid < getNumTiers(); tid++) {
     totalCacheSize += allocator_[tid]->getMemorySize();
+    XLOGF(INFO,"assignd {} to tid {}", allocator_[tid]->getMemorySize(), tid);
   }
 
   for (TierId tid = 0; tid < getNumTiers(); tid++) {
@@ -3413,9 +3414,14 @@ PoolId CacheAllocator<CacheTrait>::addPool(
           uint32_t slabs = entry.second;
           bool ret = allocator_[tid]->assignSlabs(pid,cid,slabs);
           if (!ret) {
+            XDCHECK(ret) << folly::sformat(
+                "unable to assign {} slabs to cid {} @ tid {}", slabs, cid, tid);
             throw std::invalid_argument(folly::sformat(
                 "unable to assign {} slabs to cid {} @ tid {}", slabs, cid, tid));
           }
+          const auto allocSizesa = allocator_[tid]->getPool(res).getAllocSizes(); 
+          //const auto& allocSizesa = pool.getAllocSizes();
+          XLOGF(INFO,"assignd {} slabs to cid {} @ tid {} - allocSize {}", slabs, cid, tid, allocSizesa[cid]);
       }
     }
     XDCHECK(tid == 0 || res == pid);

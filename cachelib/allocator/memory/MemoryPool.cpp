@@ -269,6 +269,7 @@ bool MemoryPool::assignSlabs(ClassId cid, uint64_t n) {
     if (slab) {
       ac.addSlab(const_cast<Slab*>(slab));
     } else {
+      XDCHECK(false) << folly::sformat("could only assing {} of {}", i, n);
       return false;
     }
   }

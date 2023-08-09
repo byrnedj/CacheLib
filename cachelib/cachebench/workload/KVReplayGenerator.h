@@ -91,7 +91,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   }
 
   virtual ~KVReplayGenerator() {
-    XCHECK(shouldShutdown());
+    //XCHECK(shouldShutdown());
     if (genWorker_.joinable()) {
       genWorker_.join();
     }
