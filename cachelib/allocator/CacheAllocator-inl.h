@@ -1360,20 +1360,21 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
     } else if (!replaced && handle->isInclusive() && config_.directAddInclusive) {
         auto& item = *(handle.getInternal());
         TierId tid = getTierId(&item);
-        
-        const auto allocInfo = allocator_[tid]->getAllocInfo(static_cast<const void*>(&item));
-        auto newItemHdl = allocateInternalTier(tid+1, allocInfo.poolId,
-                     item.getKey(),
-                     item.getSize(),
-                     item.getCreationTime(),
-                     item.getExpiryTime(),
-                     false);
-        if (newItemHdl) {
-          item.setNextTierCopy(newItemHdl.getInternal());
-          newItemHdl->markCopy();
-          newItemHdl->markInclusive();
-          std::memcpy(newItemHdl->getMemory(), item.getMemory(), item.getSize());
-          (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
+        if (tid == 0) {
+          const auto allocInfo = allocator_[tid]->getAllocInfo(static_cast<const void*>(&item));
+          auto newItemHdl = allocateInternalTier(tid+1, allocInfo.poolId,
+                       item.getKey(),
+                       item.getSize(),
+                       item.getCreationTime(),
+                       item.getExpiryTime(),
+                       false);
+          if (newItemHdl) {
+            item.setNextTierCopy(newItemHdl.getInternal());
+            newItemHdl->markCopy();
+            newItemHdl->markInclusive();
+            std::memcpy(newItemHdl->getMemory(), item.getMemory(), item.getSize());
+            (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
+          }
         }
         
     }
