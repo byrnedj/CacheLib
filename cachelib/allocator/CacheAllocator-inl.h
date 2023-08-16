@@ -1541,7 +1541,7 @@ template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
     Item& oldItem, WriteHandle& newItemHdl, bool fromBgThread) {
 
-  XDCHECK(oldItem.isMoving());
+  //XDCHECK(oldItem.isMoving());
   XDCHECK(!oldItem.isExpired());
   // TODO: should we introduce new latency tracker. E.g. evictRegularLatency_
   // ??? util::LatencyTracker tracker{stats_.evictRegularLatency_};
@@ -2977,42 +2977,25 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           itemPtr->markRecent();
         } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
                    config_.usePromotionQueue) {
-          bool moving = itemPtr->markMoving(false);
-          if (moving) {
-            //itemPtr->markRecent();
-            auto &promoQueue = getPromoQueue(tid,pid,cid);
-            bool added = promoQueue.write(itemPtr);
-            if (!added) {
-                itemPtr->unmarkMoving();
-                //(*stats_.numWritebacksFailNoSpace)[tid][pid][cid].inc();
-                //auto ref = itemPtr->unmarkMoving();
-                //XDCHECK_NE(ref,0);
-                auto hdl = acquire(itemPtr);
-                wakeUpWaiters(*itemPtr,std::move(hdl));
+          auto shard = getShardForKey(itemPtr->getKey());
+          auto& promoMap = getPromoMapForShard(shard);
+          {
+            auto lock = getMoveLockForShard(shard);
+            auto ret = promoMap.find(itemPtr->getKey());
+            if (ret == promoMap.end()) {
+              auto &promoQueue = getPromoQueue(tid,pid,cid);
+              auto hdl = acquire(itemPtr);
+              if (hdl) {
+                bool added = promoQueue.write(itemPtr);
+                if (added) {
+                  promoMap.try_emplace(itemPtr->getKey(),std::move(hdl)); 
+                } else {
+                  auto hdl = acquire(itemPtr);
+                  wakeUpWaiters(*itemPtr,std::move(hdl));
+                }
+              }
             }
           }
-
-            //{
-            //  auto plock = getPromoLockForClass(cid);
-            //  //use a handle
-            //  // safe to acquire handle for a moving Item
-            //  //XDCHECK(itemPtr->isInclusive());
-            //  //auto incRes = incRef(*itemPtr, false);
-            //  //XDCHECK(incRes == RefcountWithFlags::incResult::incOk);
-            //  //auto hdl = WriteHandle{itemPtr,*this};
-            //  promoQueue.push(itemPtr);
-            //}
-            //    //queue full
-            //} else {
-            //  auto shard = getShardForKey(item.getKey());
-            //  auto& promoMap = getPromoMapForShard(shard);
-            //  {
-            //    auto lock = getMoveLockForShard(shard);
-            //    auto ret = promoMap.try_emplace(item.getKey(),itemPtr);
-            //    XDCHECK_EQ(ret.first->second,itemPtr);
-            //  }
-            //}
-          //}
         }
       }
   } else if (tid == 0 && item.wasPromoted()) {

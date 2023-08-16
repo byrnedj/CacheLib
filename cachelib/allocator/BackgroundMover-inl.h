@@ -92,6 +92,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
       } else {
         batch = 
             BackgroundMoverAPIWrapper<CacheT>::getBatchForTarget(cache_, tid, pid, cid, 0.95);
+        if (batch > 100) batch = 100;
       }
 
       if (batch == 0) {

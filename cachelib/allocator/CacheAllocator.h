@@ -2332,9 +2332,10 @@ class CacheAllocator : public CacheBase {
           if (candidate == nullptr) {
               break;
           }
-
+          XDCHECK(candidate->isInMMContainer());
           if (!candidate->isInMMContainer()) {
-              auto ref = candidate->unmarkMoving();
+              //auto ref = candidate->unmarkMoving();
+              //auto ref = candidate->decRef();
               wakeUpWaiters(*candidate,{});
               if (ref == 0) {
                 const auto res =
@@ -2387,6 +2388,7 @@ class CacheAllocator : public CacheBase {
 
       std::vector<WriteHandle> new_items_hdl = 
           allocateInternalTierBatch(tid-1,pid,cid, candidates);
+      XDCHECK(!new_items_hdl.empty());
       if (new_items_hdl.empty()) {
           //auto reinserted = mmContainer.addBatch(candidates);
           //if (reinserted != 0) {
@@ -2401,7 +2403,9 @@ class CacheAllocator : public CacheBase {
               //   folly::sformat("Was not able toreinsert to queue promoter, failed item {}", candidates[index]->toString()));
               //}
               accessContainer_->remove(*candidates[index]);
-              auto ref = candidates[index]->unmarkMoving();
+              //auto ref = candidates[index]->unmarkMoving();
+              //auto ref = candidates[index]->decRef();
+              auto ref = candidates[index]->getRefCount();
               XDCHECK_EQ(0,ref) << candidates[index]->toString();
               wakeUpWaiters(*candidates[index], {});
           }
@@ -2430,6 +2434,7 @@ class CacheAllocator : public CacheBase {
         bool moved = moveRegularItemWithSync(*candidates[index],
                                               new_items_hdl[index],
                                               true);
+
         if (moved) {
           promotions++;
           (*stats_.numPromotions)[tid][pid][cid].inc();
@@ -2448,16 +2453,31 @@ class CacheAllocator : public CacheBase {
               XDCHECK(!candidates[index]->isInMMContainer());
               //XDCHECK_EQ(candidates[index]->getRefCount(),0);
           }
-          auto ref = candidates[index]->unmarkMoving();
+          WriteHandle hdl{};
+          auto shard = getShardForKey(candidates[index]->getKey());
+          auto& promoMap = getPromoMapForShard(shard);
+          {
+            auto lock = getMoveLockForShard(shard);
+            //auto ret = promoMap.find(candidates[index]->getKey());
+            promoMap.eraseInto(candidates[index]->getKey(), 
+                    [&](auto &&key, auto &&value) { 
+                hdl = std::move(value); 
+            });
+          }
+          XDCHECK_EQ(hdl.get(),candidates[index]);
+          //auto ref = hdl->decRef();
+          //auto ref = candidates[index]->unmarkMoving();
+          //auto ref = candidates[index]->decRef();
+          //auto ref = candidates[index]->getRefCount();
           XDCHECK(!candidates[index]->isMarkedForEviction());
           XDCHECK(!candidates[index]->isMoving());
           wakeUpWaiters(*candidates[index], std::move(new_items_hdl[index]));
-          if (ref == 0) {
-            const auto res =
-                releaseBackToAllocator(*candidates[index], 
-                        RemoveContext::kEviction, false);
-            XDCHECK(res == ReleaseRes::kReleased);
-          }
+          //if (ref == 0) {
+          //  const auto res =
+          //      releaseBackToAllocator(*candidates[index], 
+          //              RemoveContext::kEviction, false);
+          //  XDCHECK(res == ReleaseRes::kReleased);
+          //}
         } else {
           candidates[index]->unmarkCopy();
           new_items[index]->unmarkPromoted();
@@ -2465,14 +2485,29 @@ class CacheAllocator : public CacheBase {
           //case where we failed to replace in access
           //container due to another thread calling insertOrReplace
           //unmark moving and return null handle
-          auto ref = candidates[index]->unmarkMoving();
-          wakeUpWaiters(*candidates[index],{});
-          if (ref == 0) {
-            const auto res =
-              releaseBackToAllocator(*candidates[index], RemoveContext::kNormal,
-                                      false);
-            XDCHECK(res == ReleaseRes::kReleased);
+          //auto ref = candidates[index]->unmarkMoving();
+          //auto ref = candidates[index]->getRefCount();
+          //auto ref = candidates[index]->decRef();
+          WriteHandle hdl{};
+          auto shard = getShardForKey(candidates[index]->getKey());
+          auto& promoMap = getPromoMapForShard(shard);
+          {
+            auto lock = getMoveLockForShard(shard);
+            //auto ret = promoMap.find(candidates[index]->getKey());
+            promoMap.eraseInto(candidates[index]->getKey(), 
+                    [&](auto &&key, auto &&value) { 
+                hdl = std::move(value); 
+            });
           }
+          XDCHECK_EQ(hdl.get(),candidates[index]);
+          //auto ref = hdl->decRef();
+          wakeUpWaiters(*candidates[index],{});
+          //if (ref == 0) {
+          //  const auto res =
+          //    releaseBackToAllocator(*candidates[index], RemoveContext::kNormal,
+          //                            false);
+          //  XDCHECK(res == ReleaseRes::kReleased);
+          //}
           XDCHECK(!new_items[index]->isInMMContainer());
           XDCHECK(!new_items[index]->isAccessible());
           XDCHECK(!new_items[index]->wasPromoted());
@@ -3086,7 +3121,7 @@ class CacheAllocator : public CacheBase {
   
   using PromoMap =
       folly::F14ValueMap<folly::StringPiece,
-                         Item*,
+                         WriteHandle,
                          folly::HeterogeneousAccessHash<folly::StringPiece>>;
 
   static size_t getShardForKey(folly::StringPiece key) {
