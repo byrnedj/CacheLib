@@ -1,5 +1,5 @@
 FROM quay.io/centos/centos:stream8
-
+RUN dnf clean all && dnf makecache
 RUN dnf install -y \
 cmake \
 sudo \
@@ -19,12 +19,14 @@ numactl
 
 # updated to fix compile errors and better symbol
 # resolving in VTune
-RUN dnf -y install gcc-toolset-12
-RUN echo "source /opt/rh/gcc-toolset-12/enable" >> /etc/bashrc
+#RUN dnf -y install gcc-toolset-12
+#RUN echo "source /opt/rh/gcc-toolset-12/enable" >> /etc/bashrc
+RUN echo "export CC=clang" >> /etc/bashrc
+RUN echo "export CXX=clang++" >> /etc/bashrc
 SHELL ["/bin/bash", "--login", "-c"]
 
 COPY ./install-cachelib-deps.sh ./install-cachelib-deps.sh
 RUN ./install-cachelib-deps.sh
 
-COPY ./install-dsa-deps.sh ./install-dsa-deps.sh
-RUN ./install-dsa-deps.sh
+#COPY ./install-dsa-deps.sh ./install-dsa-deps.sh
+#RUN ./install-dsa-deps.sh

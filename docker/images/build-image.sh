@@ -32,7 +32,7 @@ if [[ ! -f "${OS}-${OS_VER}.Dockerfile" ]]; then
 fi
 
 echo "Build a Docker image tagged with: ${CONTAINER_REG}:${TAG}"
-docker build -t ${CONTAINER_REG}:${TAG} \
+docker build --no-cache -t ${CONTAINER_REG}:${TAG} \
 	--build-arg http_proxy=$http_proxy \
 	--build-arg https_proxy=$https_proxy \
 	-f ${OS}-${OS_VER}.Dockerfile .
