@@ -2333,20 +2333,20 @@ class CacheAllocator : public CacheBase {
               break;
           }
           XDCHECK(candidate->isInMMContainer());
-          if (!candidate->isInMMContainer()) {
-              //auto ref = candidate->unmarkMoving();
-              //auto ref = candidate->decRef();
-              wakeUpWaiters(*candidate,{});
-              if (ref == 0) {
-                const auto res =
-                  releaseBackToAllocator(*candidate, 
-                        RemoveContext::kEviction, false);
-                 XDCHECK(res == ReleaseRes::kReleased);
+          //if (!candidate->isInMMContainer()) {
+          //    //auto ref = candidate->unmarkMoving();
+          //    //auto ref = candidate->decRef();
+          //    wakeUpWaiters(*candidate,{});
+          //    if (ref == 0) {
+          //      const auto res =
+          //        releaseBackToAllocator(*candidate, 
+          //              RemoveContext::kEviction, false);
+          //       XDCHECK(res == ReleaseRes::kReleased);
 
-              }
-              candidate = nullptr;
-              continue;
-          }
+          //    }
+          //    candidate = nullptr;
+          //    continue;
+          //}
           //promoQueue.blockingRead(candidate);
           //auto shard = getShardForKey(candidate->getKey());
           //auto& promoMap = getPromoMapForShard(shard);
