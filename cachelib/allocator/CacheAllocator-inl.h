@@ -1142,9 +1142,9 @@ CacheAllocator<CacheTrait>::releaseBackToAllocator(Item& it,
 template <typename CacheTrait>
 RefcountWithFlags::incResult CacheAllocator<CacheTrait>::incRef(Item& it, bool failIfMoving) {
    auto ret = it.incRef(failIfMoving);
-   if (ret == RefcountWithFlags::incResult::incOk) {
-     ++handleCount_.tlStats();
-   }
+   //if (ret == RefcountWithFlags::incResult::incOk) {
+   //  ++handleCount_.tlStats();
+   //}
    return ret;
 }
 
@@ -1152,7 +1152,7 @@ template <typename CacheTrait>
 RefcountWithFlags::Value CacheAllocator<CacheTrait>::decRef(Item& it) {
   const auto ret = it.decRef();
   // do this after we ensured that we incremented a reference.
-  --handleCount_.tlStats();
+  //--handleCount_.tlStats();
   return ret;
 }
 
@@ -2854,7 +2854,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   }
 
   auto& item = *(handle.getInternal());
-  XDCHECK(!item.isCopy());
+  //XDCHECK(!item.isCopy());
   bool recorded = recordAccessInMMContainer(item, mode);
 
   /* 

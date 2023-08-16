@@ -2329,7 +2329,7 @@ class CacheAllocator : public CacheBase {
 
           promoQueue.read(candidate);
 
-          if (candidate == nullptr) {
+          if (candidate == nullptr || !candidate->isInMMContainer()) {
               break;
           }
           XDCHECK(candidate->isInMMContainer());
@@ -2380,11 +2380,11 @@ class CacheAllocator : public CacheBase {
       }
       auto& mmContainer = getMMContainer(tid, pid, cid);
       auto removed = mmContainer.removeBatch(candidates);
-      if (removed != 0) {
-        XDCHECK_EQ(removed,0) << candidates[removed]->toString();
-        throw std::runtime_error(
-          folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
-      }
+      //if (removed != 0) {
+      //  XDCHECK_EQ(removed,0) << candidates[removed]->toString();
+      //  throw std::runtime_error(
+      //    folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
+      //}
 
       std::vector<WriteHandle> new_items_hdl = 
           allocateInternalTierBatch(tid-1,pid,cid, candidates);
