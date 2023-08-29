@@ -2305,12 +2305,17 @@ class CacheAllocator : public CacheBase {
   
   size_t promoteFromQueueBatch(unsigned int tid, unsigned int pid, unsigned int cid, 
                                  size_t batch) {
+    if (batch > 15000) {
+        batch = 15000;
+    }
     auto& promoQueue = getPromoQueue(tid,pid,cid);
     size_t promotions = 0;
     //while (promoQueue.size() > batch) {
     //while (true) {
       std::vector<Item*> candidates;
       candidates.reserve(batch);
+      std::vector<WriteHandle> handles;
+      handles.reserve(batch);
       while (candidates.size() < batch) {
           //attempt to mark moving
           Item *candidate = nullptr;
@@ -2329,10 +2334,17 @@ class CacheAllocator : public CacheBase {
 
           promoQueue.read(candidate);
 
-          if (candidate == nullptr || !candidate->isInMMContainer()) {
+          if (candidate == nullptr) {
               break;
           }
-          XDCHECK(candidate->isInMMContainer());
+          auto hdl = acquire(candidate);
+          auto ref = candidate->decRef();
+          XDCHECK_NE(ref,0);
+          if (!hdl->wasPromoted()) {
+            continue;
+          }
+          handles.push_back(std::move(hdl));
+          //XDCHECK(candidate->isInMMContainer());
           //if (!candidate->isInMMContainer()) {
           //    //auto ref = candidate->unmarkMoving();
           //    //auto ref = candidate->decRef();
@@ -2380,15 +2392,58 @@ class CacheAllocator : public CacheBase {
       }
       auto& mmContainer = getMMContainer(tid, pid, cid);
       auto removed = mmContainer.removeBatch(candidates);
-      //if (removed != 0) {
-      //  XDCHECK_EQ(removed,0) << candidates[removed]->toString();
-      //  throw std::runtime_error(
-      //    folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
-      //}
+      if (!removed.empty()) {
+        for (std::vector<int>::reverse_iterator it = removed.rbegin(); it != removed.rend(); ++it) {
+          int idx = *it;
+          XDCHECK(!candidates[idx]->isAccessible());
+          XDCHECK(!candidates[idx]->isInMMContainer());
+          candidates.erase(candidates.begin() + idx);
+          handles.erase(handles.begin() + idx);
+        }
+        //for (auto citer = candidates.begin(); citer != candidates.end();) {
+        //  bool erased = false;
+        //      int idx = *it - tot;
+        //      if (idx == (i-tot)) {
+        //        XDCHECK(!candidates[i]->isAccessible());
+        //        XDCHECK(!candidates[i]->isInMMContainer());
+        //        XDCHECK_EQ(candidates[i],*citer);
+        //        int s1 = candidates.size();
+        //        citer = candidates.erase(citer);
+        //        int s2 = candidates.size();
+        //        XDCHECK_EQ(s1,s2+1);
+        //        erased = true;
+        //        tot++;
+        //      } 
+        //  }
+        //  if (!erased) {
+        //    ++citer;
+        //    i++;
+        //  }
+        //}
+        //i = 0;
+        //for (auto citer = handles.begin(); citer != handles.end();) {
+        //  bool erased = false;
+        //  for (std::vector<int>::iterator it = removed.begin(); it != removed.end(); ++it) {
+        //      int idx = *it;
+        //      if (idx == i) {
+        //        (*citer).reset();
+        //        citer = handles.erase(citer);
+        //        erased = true;
+        //      } 
+        //  }
+        //  if (!erased) {
+        //    ++citer;
+        //  }
+        //  i++;
+        //}
+        //XDCHECK_EQ(removed,0) << candidates[removed]->toString();
+        //throw std::runtime_error(
+        //  folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
+      }
 
       std::vector<WriteHandle> new_items_hdl = 
           allocateInternalTierBatch(tid-1,pid,cid, candidates);
-      XDCHECK(!new_items_hdl.empty());
+      //XDCHECK(!new_items_hdl.empty());
       if (new_items_hdl.empty()) {
           //auto reinserted = mmContainer.addBatch(candidates);
           //if (reinserted != 0) {
@@ -2402,12 +2457,14 @@ class CacheAllocator : public CacheBase {
               //  throw std::runtime_error(
               //   folly::sformat("Was not able toreinsert to queue promoter, failed item {}", candidates[index]->toString()));
               //}
-              accessContainer_->remove(*candidates[index]);
+              //accessContainer_->remove(*candidates[index]);
               //auto ref = candidates[index]->unmarkMoving();
               //auto ref = candidates[index]->decRef();
-              auto ref = candidates[index]->getRefCount();
-              XDCHECK_EQ(0,ref) << candidates[index]->toString();
-              wakeUpWaiters(*candidates[index], {});
+              candidates[index]->unmarkPromoted();
+              //auto ref = candidates[index]->getRefCount();
+              //if (ref == 0) {
+             // XDCHECK_EQ(0,ref) << candidates[index]->toString();
+              //wakeUpWaiters(*candidates[index], {});
           }
           return promotions;
 
@@ -2416,6 +2473,9 @@ class CacheAllocator : public CacheBase {
       new_items.reserve(new_items_hdl.size());
       unsigned int validHandleCnt = 0;
       for (auto itr = new_items_hdl.begin(); itr != new_items_hdl.end();) {
+          XDCHECK_EQ(getTierId((*itr).get()),0);
+          XDCHECK_EQ((*itr)->getRefCount(),1);
+          XDCHECK(!(*itr)->isInMMContainer()) << (*itr)->toString();
           new_items.push_back((*itr).get());
           validHandleCnt++;
           ++itr;
@@ -2453,25 +2513,27 @@ class CacheAllocator : public CacheBase {
               XDCHECK(!candidates[index]->isInMMContainer());
               //XDCHECK_EQ(candidates[index]->getRefCount(),0);
           }
-          WriteHandle hdl{};
-          auto shard = getShardForKey(candidates[index]->getKey());
-          auto& promoMap = getPromoMapForShard(shard);
-          {
-            auto lock = getMoveLockForShard(shard);
-            //auto ret = promoMap.find(candidates[index]->getKey());
-            promoMap.eraseInto(candidates[index]->getKey(), 
-                    [&](auto &&key, auto &&value) { 
-                hdl = std::move(value); 
-            });
-          }
-          XDCHECK_EQ(hdl.get(),candidates[index]);
+          //WriteHandle hdl{};
+          //auto shard = getShardForKey(candidates[index]->getKey());
+          //auto& promoMap = getPromoMapForShard(shard);
+          //{
+          //  auto lock = getMoveLockForShard(shard);
+          //  //auto ret = promoMap.find(candidates[index]->getKey());
+          //  promoMap.eraseInto(candidates[index]->getKey(), 
+          //          [&](auto &&key, auto &&value) { 
+          //      hdl = std::move(value); 
+          //  });
+          //}
+          XDCHECK_EQ(handles[index].get(),candidates[index]);
+          candidates[index]->unmarkPromoted();
           //auto ref = hdl->decRef();
           //auto ref = candidates[index]->unmarkMoving();
           //auto ref = candidates[index]->decRef();
           //auto ref = candidates[index]->getRefCount();
           XDCHECK(!candidates[index]->isMarkedForEviction());
           XDCHECK(!candidates[index]->isMoving());
-          wakeUpWaiters(*candidates[index], std::move(new_items_hdl[index]));
+          //hdl.reset();
+          //wakeUpWaiters(*candidates[index], std::move(new_items_hdl[index]));
           //if (ref == 0) {
           //  const auto res =
           //      releaseBackToAllocator(*candidates[index], 
@@ -2482,26 +2544,28 @@ class CacheAllocator : public CacheBase {
           candidates[index]->unmarkCopy();
           new_items[index]->unmarkPromoted();
           XDCHECK(!candidates[index]->isAccessible());
+          XDCHECK(!new_items[index]->isAccessible());
           //case where we failed to replace in access
           //container due to another thread calling insertOrReplace
           //unmark moving and return null handle
           //auto ref = candidates[index]->unmarkMoving();
           //auto ref = candidates[index]->getRefCount();
           //auto ref = candidates[index]->decRef();
-          WriteHandle hdl{};
-          auto shard = getShardForKey(candidates[index]->getKey());
-          auto& promoMap = getPromoMapForShard(shard);
-          {
-            auto lock = getMoveLockForShard(shard);
-            //auto ret = promoMap.find(candidates[index]->getKey());
-            promoMap.eraseInto(candidates[index]->getKey(), 
-                    [&](auto &&key, auto &&value) { 
-                hdl = std::move(value); 
-            });
-          }
-          XDCHECK_EQ(hdl.get(),candidates[index]);
+          //WriteHandle hdl{};
+          //auto shard = getShardForKey(candidates[index]->getKey());
+          //auto& promoMap = getPromoMapForShard(shard);
+          //{
+          //  auto lock = getMoveLockForShard(shard);
+          //  //auto ret = promoMap.find(candidates[index]->getKey());
+          //  promoMap.eraseInto(candidates[index]->getKey(), 
+          //          [&](auto &&key, auto &&value) { 
+          //      hdl = std::move(value); 
+          //  });
+          //}
+          XDCHECK_EQ(handles[index].get(),candidates[index]);
+          candidates[index]->unmarkPromoted();
           //auto ref = hdl->decRef();
-          wakeUpWaiters(*candidates[index],{});
+          //wakeUpWaiters(*candidates[index],{});
           //if (ref == 0) {
           //  const auto res =
           //    releaseBackToAllocator(*candidates[index], RemoveContext::kNormal,
@@ -2684,12 +2748,12 @@ class CacheAllocator : public CacheBase {
         return promotions;
     }
     auto& mmContainer = getMMContainer(tid, pid, cid);
-    auto removed = mmContainer.removeBatch(candidates);
-    if (removed != 0) {
-      XDCHECK_EQ(removed,0) << candidates[removed]->toString();
-      throw std::runtime_error(
-        folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
-    }
+    //auto removed = mmContainer.removeBatch(candidates);
+    //if (removed != 0) {
+    //  XDCHECK_EQ(removed,0) << candidates[removed]->toString();
+    //  throw std::runtime_error(
+    //    folly::sformat("Was not able toremove all new items promoter, failed item {}", candidates[removed]->toString()));
+    //}
 
     for (Item *candidate : candidates) {
       auto promoted = tryPromoteToNextMemoryTier(*candidate, true);

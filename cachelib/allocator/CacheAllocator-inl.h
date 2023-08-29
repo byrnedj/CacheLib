@@ -522,6 +522,7 @@ CacheAllocator<CacheTrait>::allocateInternalTierBatch(TierId tid,
         handle.markNascent();
         (*stats_.fragmentationSize)[tid][pid][cid].add(
             util::getFragmentation(*this, *handle));
+        XDCHECK(!handle->isAccessible());
         handles.push_back(std::move(handle));
       } else {
         (*stats_.allocFailures)[tid][pid][cid].inc();
@@ -1345,9 +1346,11 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
     if (replaced) {
       TierId tid = getTierId(*replaced);
       replaced->unmarkPromoted();
-      if (handle->isInclusive()) {
+      if (handle->isInclusive() && tid == 0) {
           handle->markDirty();
           handle->setNextTierCopy(replaced->getNextTierCopy());
+          replaced->setNextTierCopy(0);
+      } else if (handle->isInclusive() && tid == 1) {
           replaced->setNextTierCopy(0);
       }
       if (replaced->isNvmClean() && !replaced->isNvmEvicted()) {
@@ -1570,9 +1573,12 @@ bool CacheAllocator<CacheTrait>::moveRegularItemWithSync(
   if (oldItem.isInclusive()) {
     newItemHdl->markInclusive();
     if (srcTid > dstTid) { //promotion
+      XDCHECK_EQ(srcTid,1);
+      XDCHECK_EQ(dstTid,0);
       newItemHdl->setNextTierCopy(&oldItem);
       oldItem.markCopy();
-      oldItem.setNextTierCopy(static_cast<void*>(newItemHdl.get()));
+      oldItem.setNextTierCopy(0);
+      //oldItem.setNextTierCopy(static_cast<void*>(newItemHdl.get()));
       XDCHECK_EQ(newItemHdl->getNextTierCopy(),&oldItem);
     } else if ( (srcTid < dstTid) ) { //evict to next tier
       newItemHdl->unmarkCopy();
@@ -1862,14 +1868,20 @@ void CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId ci
     }
 
     while (candidates.size() < batch && itr) {
-      ++searchTries;
-      (*stats_.evictionAttempts)[tid][pid][cid].inc();
 
       auto* toRecycle_ = itr.get();
       auto* candidate_ =
           toRecycle_->isChainedItem()
               ? &toRecycle_->asChainedItem().getParentItem(compressor_)
               : toRecycle_;
+      if (candidate_->wasPromoted()) {
+          //++itr;
+          //continue;
+          candidate_->unmarkPromoted();
+      }
+      candidate_->unmarkRecent();
+      ++searchTries;
+      (*stats_.evictionAttempts)[tid][pid][cid].inc();
 
       XDCHECK_EQ(getTierId(candidate_),tid);
       if ( (lastTier && candidate_->markForEviction()) ||
@@ -1916,8 +1928,8 @@ void CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId ci
     for (int i = 0; i < candidates.size(); i++) {
         if (candidates[i]->isInclusive()) {
           Item *nextTierItem = static_cast<Item*>(candidates[i]->getNextTierCopy());
-          //XDCHECK(nextTierItem) << candidates[i]->toString();
           if (nextTierItem) {
+              XDCHECK_EQ(1,getTierId(nextTierItem)) << candidates[i]->toString();
               nextAllocs.push_back(acquire(nextTierItem));
               validItems++;
           } else {
@@ -1932,7 +1944,8 @@ void CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId ci
     if (validItems < candidates.size()) {
       auto wbAllocs = allocateInternalTierBatch(tid+1,pid,cid,wbCandidates);
       if (wbAllocs.size() != wbCandidates.size()) {
-          throw std::invalid_argument("failed to alloc enough in next tier");
+          XDCHECK_EQ(wbAllocs.size(),wbCandidates.size());
+          throw std::invalid_argument(folly::sformat("failed to alloc enough in next tier - needed {} got {}",wbCandidates.size(),wbAllocs.size()));
       }
       int j = 0;
       for (int i = 0; i < candidates.size(); i++) {
@@ -2037,7 +2050,7 @@ void CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId ci
     for (int i = 0; i < candidates.size(); i++) {
       accessContainer_->remove(*candidates[i]);
       auto res = candidates[i]->unmarkForEviction();
-      XDCHECK_EQ(res,0u);
+      XDCHECK_EQ(res,0u) << candidates[i]->toString();
       //TODO NVM
       wakeUpWaiters(*candidates[i], {});
       if (candidates[i]->hasChainedItem()) {
@@ -2096,15 +2109,20 @@ CacheAllocator<CacheTrait>::findEviction(TierId tid, PoolId pid, ClassId cid) {
       while ((config_.evictionSearchTries == 0 ||
               config_.evictionSearchTries > searchTries) &&
              itr) {
-        ++searchTries;
-        (*stats_.evictionAttempts)[tid][pid][cid].inc();
 
         auto* toRecycle_ = itr.get();
         auto* candidate_ =
             toRecycle_->isChainedItem()
                 ? &toRecycle_->asChainedItem().getParentItem(compressor_)
                 : toRecycle_;
-
+        if (candidate_->wasPromoted()) {
+          //  ++itr;
+          //  continue;
+          candidate_->unmarkPromoted();
+        }
+        candidate_->unmarkRecent();
+        ++searchTries;
+        (*stats_.evictionAttempts)[tid][pid][cid].inc();
         if (lastTier) {
           // if it's last tier, the item will be evicted
           // need to create put token before marking it exclusive
@@ -2977,25 +2995,34 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           itemPtr->markRecent();
         } else if (!config_.useThreadPool && backgroundPromoter_.size() > 0 && 
                    config_.usePromotionQueue) {
-          auto shard = getShardForKey(itemPtr->getKey());
-          auto& promoMap = getPromoMapForShard(shard);
-          {
-            auto lock = getMoveLockForShard(shard);
-            auto ret = promoMap.find(itemPtr->getKey());
-            if (ret == promoMap.end()) {
-              auto &promoQueue = getPromoQueue(tid,pid,cid);
-              auto hdl = acquire(itemPtr);
-              if (hdl) {
-                bool added = promoQueue.write(itemPtr);
-                if (added) {
-                  promoMap.try_emplace(itemPtr->getKey(),std::move(hdl)); 
-                } else {
-                  auto hdl = acquire(itemPtr);
-                  wakeUpWaiters(*itemPtr,std::move(hdl));
-                }
-              }
-            }
+          //auto shard = getShardForKey(itemPtr->getKey());
+          //auto& promoMap = getPromoMapForShard(shard);
+          //{
+          //  auto lock = getMoveLockForShard(shard);
+          //  auto ret = promoMap.find(itemPtr->getKey());
+          //  if (ret == promoMap.end()) {
+          //    auto &promoQueue = getPromoQueue(tid,pid,cid);
+          //    auto hdl = acquire(itemPtr);
+          //    if (hdl) {
+          //      bool added = promoQueue.write(itemPtr);
+          //      if (added) {
+          //        promoMap.try_emplace(itemPtr->getKey(),std::move(hdl)); 
+          //      } else {
+          //        auto hdl = acquire(itemPtr);
+          //        wakeUpWaiters(*itemPtr,std::move(hdl));
+          //      }
+          //    }
+          //  }
+          //}
+          //if (itemPtr->isRecent() && itemPtr->markPromotedForQueue()) {
+          if (itemPtr->markPromotedForQueue()) {
+            auto &promoQueue = getPromoQueue(tid,pid,cid);
+            auto ret = itemPtr->incRef(true);
+            XDCHECK(ret == RefcountWithFlags::incResult::incOk);
+            bool added = promoQueue.write(itemPtr);
+            XDCHECK(added);
           }
+          //itemPtr->markRecent();
         }
       }
   } else if (tid == 0 && item.wasPromoted()) {

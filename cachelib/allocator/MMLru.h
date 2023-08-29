@@ -348,7 +348,7 @@ class MMLru {
     //          if a node was already in the contianer. On error state of node
     //          is unchanged.
     int addBatch(std::vector<T*>& nodes) noexcept;
-    int removeBatch(std::vector<T*>& nodes) noexcept;
+    std::vector<int> removeBatch(std::vector<T*>& nodes) noexcept;
 
     // removes the node from the lru and sets it previous and next to nullptr.
     //

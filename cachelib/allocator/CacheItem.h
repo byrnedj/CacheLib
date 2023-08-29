@@ -349,6 +349,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
   bool isRecent() const noexcept;
   void unmarkRecent() noexcept;
   void markPromoted() noexcept;
+  bool markPromotedForQueue() noexcept;
   bool wasPromoted() const noexcept;
   RefcountWithFlags::Value unmarkPromoted() noexcept;
 
