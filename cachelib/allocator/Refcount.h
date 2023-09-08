@@ -44,17 +44,17 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
    *
    * The layout is as follows.
    * |-- flags --|-- admin ref --|-- access ref--|
-   * - Flags:  11 bits
-   * - Admin Ref: 3 bits
+   * - Flags:  10 bits
+   * - Admin Ref: 4 bits
    * - Access Ref: 18 bits
    */
   using Value = uint32_t;
   static_assert(std::is_unsigned<Value>::value,
                 "Unsigned Integral type required");
 
-  static constexpr uint8_t kNumFlags = 11;
-  static constexpr uint8_t kNumAdminRefBits = 3;
-  static constexpr uint8_t kNumAccessRefBits = 18;
+  static constexpr uint8_t kNumFlags = 10;
+  static constexpr uint8_t kNumAdminRefBits = 5;
+  static constexpr uint8_t kNumAccessRefBits = 17;
   static_assert(kNumAccessRefBits <= NumBits<Value>::value, "Invalid type");
   static_assert(kNumAccessRefBits >= 1, "Need at least one bit for refcount");
   static_assert(
@@ -79,6 +79,8 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
 
     // exists in hash table
     kAccessible,
+    kCopy, //is next tier copy
+    kPromoted, //is next tier copy
 
     // this flag indicates the allocation is being evicted or moved elsewhere
     // (can be triggered by a resize, rebalance or normal eviction operation)
@@ -112,17 +114,14 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     // Item was evicted from NVM while it was in RAM.
     kNvmEvicted,
 
-    // A deprecated and noop flag that was used to mark whether the item is
-    // unevictable in the past.
-    kUnevictable_NOOP,
-
-    // Unused. This is just to indciate the maximum number of flags
-    kFlagMax,
+    kDirty,
+    kRecent,
+    kInclusive
   };
   static_assert(static_cast<uint8_t>(kMMFlag0) >
                     static_cast<uint8_t>(kExclusive),
                 "Flags and control bits cannot overlap in bit range.");
-  static_assert(kFlagMax <= NumBits<Value>::value, "Too many flags.");
+  static_assert(kInclusive <= NumBits<Value>::value, "Too many flags.");
 
   constexpr explicit RefcountWithFlags() = default;
 
@@ -363,6 +362,40 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
 
     return atomicUpdateValue(predicate, newValue);
   }
+  
+  bool markMovingIfRefCount(uint32_t count) {
+    Value linkedBitMask = getAdminRef<kLinked>();
+    Value exclusiveBitMask = getAdminRef<kExclusive>();
+    Value isChainedItemFlag = getFlag<kIsChainedItem>();
+
+    auto predicate = [linkedBitMask, exclusiveBitMask, isChainedItemFlag, count](const Value curValue) {
+      const bool unlinked = !(curValue & linkedBitMask);
+      const bool alreadyExclusive = curValue & exclusiveBitMask;
+      const bool isChained = curValue & isChainedItemFlag;
+
+      // chained item can have ref count == 1, this just means it's linked in the chain
+      if ((curValue & kAccessRefMask) != isChained ? count+1 : count) {
+        return false;
+      }
+      if (unlinked || alreadyExclusive) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    auto newValue = [exclusiveBitMask](const Value curValue) {
+      // Set exclusive flag and make the ref count non-zero (to distinguish
+      // from exclusive case). This extra ref will not be reported to the
+      // user
+      return (curValue + static_cast<Value>(1)) | exclusiveBitMask;
+    };
+
+    return atomicUpdateValue(predicate, newValue);
+  }
 
   Value unmarkMoving() noexcept {
     XDCHECK(isMoving());
@@ -421,6 +454,45 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       return false;
     }
     return ref & getAdminRef<kExclusive>();
+  }
+  
+  /**
+   * Keep track of whether the item was modified while in ram cache
+   */
+  bool isInclusive() const noexcept { return isFlagSet<kInclusive>(); }
+  void markInclusive() noexcept { return setFlag<kInclusive>(); }
+  bool isDirty() const noexcept { return isFlagSet<kDirty>(); }
+  void markDirty() noexcept { return setFlag<kDirty>(); }
+  bool isRecent() const noexcept { return isFlagSet<kRecent>(); }
+  void markRecent() noexcept { return setFlag<kRecent>(); }
+  void unmarkRecent() noexcept { return unSetFlag<kRecent>(); }
+  
+  /**
+   * State of item's inclusiveness for background workers
+   */
+  void markCopy() noexcept { 
+    Value bitMask = getAdminRef<kCopy>();
+    __atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+  }
+  bool isCopy() const noexcept { 
+    return getRaw() & getAdminRef<kCopy>();
+  }
+  Value unmarkCopy() noexcept {
+    //XDCHECK(isCopy());
+    Value bitMask = ~getAdminRef<kCopy>();
+    return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
+  }
+  void markPromoted() noexcept { 
+    Value bitMask = getAdminRef<kPromoted>();
+    __atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+  }
+  bool wasPromoted() const noexcept { 
+    return getRaw() & getAdminRef<kPromoted>();
+  }
+  Value unmarkPromoted() noexcept {
+    //XDCHECK(isPromoted());
+    Value bitMask = ~getAdminRef<kPromoted>();
+    return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
   }
 
   /**

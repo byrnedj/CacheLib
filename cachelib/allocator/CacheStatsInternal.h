@@ -234,6 +234,11 @@ struct Stats {
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> chainedItemEvictions{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> regularItemEvictions{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacks{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numInclWrites{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacksFailBadMove{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacksFailNoAlloc{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numPromotions{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numPromotionsHits{};
 
   using PerTierPoolClassRollingStats = std::array<
       std::array<std::array<util::RollingStats, MemoryAllocator::kMaxClasses>,

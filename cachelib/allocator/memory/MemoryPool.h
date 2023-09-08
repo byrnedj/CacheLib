@@ -149,6 +149,7 @@ class MemoryPool {
   void* allocate(uint32_t size);
   void* allocateByCid(ClassId cid);
   std::vector<void*> allocateByCidBatch(ClassId cid, uint64_t batch);
+  bool assignSlabs(ClassId cid, uint64_t n);
 
   // Allocate a slab with zeroed memory
   //
@@ -333,7 +334,7 @@ class MemoryPool {
 
   // create allocation classes corresponding to the pool's configuration.
   ACVector createAllocationClasses() const;
-  
+
   void* allocateForClass(AllocationClass& ac);
   std::vector<void*> allocateForClassBatch(AllocationClass& ac, uint64_t batch);
 

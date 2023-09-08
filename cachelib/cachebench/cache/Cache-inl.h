@@ -54,7 +54,8 @@ Cache<Allocator>::Cache(const CacheConfig& config,
   allocatorConfig_.enableBackgroundPromoter(
       config_.getBackgroundPromoterStrategy(),
       std::chrono::milliseconds(config_.backgroundPromoterIntervalMilSec),
-      config_.promoterThreads);
+      config_.promoterThreads,
+      config_.usePromotionQueue);
 
   if (config_.moveOnSlabRelease && movingSync != nullptr) {
     allocatorConfig_.enableMovingOnSlabRelease(
@@ -79,6 +80,33 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     allocatorConfig_.setDefaultAllocSizes(std::move(allocSizes));
   }
 
+  if (!config_.classInclusives.empty()) {
+    std::map<uint32_t,uint32_t> classInclusives;
+    uint32_t i = 0;
+    for (uint64_t s : config_.classInclusives) {
+      classInclusives[i] = s;
+      i++;
+    }
+    allocatorConfig_.setClassInclusives(std::move(classInclusives));
+  }
+  
+  if (!config_.tier0ClassAssignments.empty()) {
+    std::map<MemoryDescriptorType,uint32_t> classAssignments;
+    uint32_t cid = 0;
+    for (uint64_t s : config_.tier0ClassAssignments) {
+      auto md = MemoryDescriptorType(0,0,cid);
+      classAssignments[md] = s; 
+      cid++;
+    }
+    cid = 0;
+    for (uint64_t s : config_.tier1ClassAssignments) {
+      auto md = MemoryDescriptorType(1,0,cid);
+      classAssignments[md] = s; 
+      cid++;
+    }
+    allocatorConfig_.setClassAssignments(std::move(classAssignments));
+  }
+
   // Set hash table config
   allocatorConfig_.setAccessConfig(typename Allocator::AccessConfig{
       static_cast<uint32_t>(config_.htBucketPower),
@@ -99,6 +127,10 @@ Cache<Allocator>::Cache(const CacheConfig& config,
   }
 
   allocatorConfig_.setMemoryLocking(config_.lockMemory);
+  
+  if (config_.directAddInclusive) {
+    allocatorConfig_.directAddInclusive = config_.directAddInclusive;
+  }
 
   if (!config_.memoryTierConfigs.empty()) {
     allocatorConfig_.configureMemoryTiers(config_.memoryTierConfigs);
@@ -443,6 +475,12 @@ typename Cache<Allocator>::WriteHandle Cache<Allocator>::allocate(
     handle = cache_->allocate(pid, key, CacheValue::getSize(size), ttlSecs);
     if (handle) {
       CacheValue::initialize(handle->getMemory());
+      XDCHECK(!handle->isInclusive());
+      auto allocInfo = cache_->getAllocInfo(handle.get());
+      if (config_.classInclusives[allocInfo.classId] == 1) {
+         handle->markInclusive();
+      }
+      
     }
   } catch (const std::invalid_argument& e) {
     XLOGF(DBG, "Unable to allocate, reason: {}", e.what());
@@ -666,6 +704,11 @@ Stats Cache<Allocator>::getStats() const {
     }
     ret.numEvictions.push_back(aggregate.numEvictions());
     ret.numWritebacks.push_back(aggregate.numWritebacks());
+    ret.numInclWrites.push_back(aggregate.numInclWrites());
+    ret.numWritebacksFailBadMove.push_back(aggregate.numWritebacksFailBadMove());
+    ret.numWritebacksFailNoAlloc.push_back(aggregate.numWritebacksFailNoAlloc());
+    ret.numPromotions.push_back(aggregate.numPromotions());
+    ret.numPromotionsHits.push_back(aggregate.numPromotions());
     ret.numCacheHits.push_back(aggregate.numHits());
     ret.numItems.push_back(aggregate.numItems());
   }

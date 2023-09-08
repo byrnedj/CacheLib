@@ -408,6 +408,23 @@ bool ChainedHashTable::Container<T, HookPtr, LockT>::replaceIf(T& oldNode,
   return false;
 }
 
+//template <typename T,
+//          typename ChainedHashTable::Hook<T> T::*HookPtr,
+//          typename LockT>
+//template <typename F>
+//bool ChainedHashTable::Container<T, HookPtr, LockT>::setNextCopyIfAccessible(T& node,
+//                                                               T& nextNode) {
+//  const auto key = next.getKey();
+//  const auto bucket = ht_.getBucket(key);
+//  auto l = locks_.lockExclusive(bucket);
+//
+//  if (noode.isAccessible()) {
+//    oldNode.setNextTierCopy(nextNode);
+//    return true;
+//  }
+//  return false;
+//}
+
 template <typename T,
           typename ChainedHashTable::Hook<T> T::*HookPtr,
           typename LockT>

@@ -115,6 +115,9 @@ struct CacheConfig : public JSONConfig {
   size_t minAllocSize{64};
 
   std::vector<uint64_t> allocSizes{};
+  std::vector<uint64_t> tier0ClassAssignments{};
+  std::vector<uint64_t> tier1ClassAssignments{};
+  std::vector<uint64_t> classInclusives{};
 
   // These specify the number of pools and how keys will
   // be distributed among the pools
@@ -228,6 +231,11 @@ struct CacheConfig : public JSONConfig {
 
   // Lock memory in the RAM
   bool lockMemory{false};
+  
+  bool directAddInclusive{false};
+  
+  // make cache inclusive
+  bool useInclusive{false};
 
   // Memory tiers configs
   std::vector<MemoryTierCacheConfig> memoryTierConfigs{};
@@ -280,6 +288,8 @@ struct CacheConfig : public JSONConfig {
   uint64_t minPromotionBatch{5};
   
   uint64_t maxEvictionPromotionHotness{60};
+
+  bool usePromotionQueue{false};
 
   //
   // Options below are not to be populated with JSON

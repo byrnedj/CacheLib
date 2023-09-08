@@ -42,7 +42,8 @@ CacheItem<CacheTrait>::CacheItem(Key key,
                                  uint32_t size,
                                  uint32_t creationTime,
                                  uint32_t expiryTime)
-    : creationTime_(creationTime), expiryTime_(expiryTime), alloc_(key, size) {}
+    : creationTime_(creationTime), expiryTime_(expiryTime), alloc_(key, size),
+      compressedNext_(nullptr) {}
 
 template <typename CacheTrait>
 CacheItem<CacheTrait>::CacheItem(Key key, uint32_t size, uint32_t creationTime)
@@ -149,13 +150,16 @@ std::string CacheItem<CacheTrait>::toString() const {
         "item: "
         "memory={}:raw-ref={}:size={}:key={}:hex-key={}:"
         "isInMMContainer={}:isAccessible={}:isMarkedForEviction={}:"
-        "isMoving={}:references={}:ctime="
+        "isDirty={}:isCopy={}:isInclusive={}:wasPromoted={}:"
+        "isRecent={}:isMoving={}:references={}:ctime="
         "{}:"
         "expTime={}:updateTime={}:isNvmClean={}:isNvmEvicted={}:hasChainedItem="
         "{}",
         this, getRefCountAndFlagsRaw(), getSize(),
         folly::humanify(getKey().str()), folly::hexlify(getKey()),
-        isInMMContainer(), isAccessible(), isMarkedForEviction(), isMoving(),
+        isInMMContainer(), isAccessible(), isMarkedForEviction(),
+        isDirty(), isCopy(), isInclusive(), wasPromoted(),
+        isRecent(), isMoving(),
         getRefCount(), getCreationTime(), getExpiryTime(), getLastAccessTime(),
         isNvmClean(), isNvmEvicted(), hasChainedItem());
   }
@@ -180,6 +184,83 @@ template <typename CacheTrait>
 RefcountWithFlags::Value CacheItem<CacheTrait>::getRefCountAndFlagsRaw()
     const noexcept {
   return ref_.getRaw();
+}
+
+// Get the item in the next tier
+template <typename CacheTrait>
+void* CacheItem<CacheTrait>::getNextTierCopy() {
+  return compressedNext_;
+}
+
+// Set the item in the next tier
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::setNextTierCopy(void* nextCopy) {
+  compressedNext_ = nextCopy;
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isInclusive() const noexcept {
+  return ref_.isInclusive();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markInclusive() noexcept {
+  ref_.markInclusive();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isDirty() const noexcept {
+  return ref_.isDirty();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markDirty() noexcept {
+  ref_.markDirty();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markRecent() noexcept {
+  ref_.markRecent();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isRecent() const noexcept {
+  return ref_.isRecent();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::unmarkRecent() noexcept {
+  ref_.unmarkRecent();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markCopy() noexcept {
+  ref_.markCopy();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isCopy() const noexcept {
+  return ref_.isCopy();
+}
+
+template <typename CacheTrait>
+RefcountWithFlags::Value CacheItem<CacheTrait>::unmarkCopy() noexcept {
+  return ref_.unmarkCopy();
+}
+
+template <typename CacheTrait>
+void CacheItem<CacheTrait>::markPromoted() noexcept {
+  ref_.markPromoted();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::wasPromoted() const noexcept {
+  return ref_.wasPromoted();
+}
+
+template <typename CacheTrait>
+RefcountWithFlags::Value CacheItem<CacheTrait>::unmarkPromoted() noexcept {
+  return ref_.unmarkPromoted();
 }
 
 template <typename CacheTrait>
@@ -235,6 +316,11 @@ bool CacheItem<CacheTrait>::isMarkedForEviction() const noexcept {
 template <typename CacheTrait>
 bool CacheItem<CacheTrait>::markForEvictionWhenMoving() {
   return ref_.markForEvictionWhenMoving();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::markMovingIfRefCount(uint32_t count) {
+  return ref_.markMovingIfRefCount(count);
 }
 
 template <typename CacheTrait>

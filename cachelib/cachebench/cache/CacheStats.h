@@ -35,6 +35,11 @@ struct Stats {
 
   std::vector<uint64_t> numEvictions;
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numInclWrites;
+  std::vector<uint64_t> numWritebacksFailBadMove;
+  std::vector<uint64_t> numWritebacksFailNoAlloc;
+  std::vector<uint64_t> numPromotions;
+  std::vector<uint64_t> numPromotionsHits;
   std::vector<uint64_t> numCacheHits;
   std::vector<uint64_t> numItems;
 
@@ -152,11 +157,24 @@ struct Stats {
     for (TierId tid = 0; tid < nTiers; tid++) {
         out << folly::sformat("Tier {} Evictions: {:,}\n"
                               "Tier {} Writebacks: {:,}\n"
-                              "Tier {} Success: {:.2f}%",
+                              "Tier {} Success: {:.2f}%\n"
+                              "Tier {} Failed WB Bad Move: {:,}\n"
+                              "Tier {} Failed WB No Alloc: {:,}\n"
+                              "Tier {} Promotions: {:,}\n"
+                              "Tier {} Promotion Hits: {:,}\n"
+                              "Tier {} Promotion Hit Ratio: {:.2f}",
                               tid, numEvictions[tid],
                               tid, numWritebacks[tid],
-                              tid, invertPctFn(numEvictions[tid] - numWritebacks[tid], numEvictions[tid]))
+                              tid, invertPctFn(numEvictions[tid] - numWritebacks[tid], numEvictions[tid]),
+                              tid, numWritebacksFailBadMove[tid],
+                              tid, numWritebacksFailNoAlloc[tid], 
+                              tid, numPromotions[tid],
+                              tid, numPromotionsHits[tid],
+                              tid, pctFn(numPromotionsHits[tid],numCacheHits[tid]))
             << std::endl;
+        if (numInclWrites[tid] > 0) {
+            out << folly::sformat("Tier {} Inclusive Writes : {:,}", tid, numInclWrites[tid]) << std::endl;
+        }
     }
     
     auto foreachAC = [&](auto &map, auto cb) {
@@ -165,6 +183,7 @@ struct Stats {
         cb(tid, pid, cid, value);
       }
     };
+    
 
     for (auto entry : poolUsageFraction) {
         auto tid = entry.first;

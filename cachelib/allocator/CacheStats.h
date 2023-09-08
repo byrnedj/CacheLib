@@ -127,6 +127,12 @@ struct CacheStat {
 
   // number of items that are moved to next tier
   uint64_t numWritebacks{0};
+  uint64_t numInclWrites{0};
+  uint64_t numWritebacksFailBadMove{0};
+  uint64_t numWritebacksFailNoAlloc{0};
+  
+  uint64_t numPromotions{0};
+  uint64_t numPromotionsHits{0};
 
   // the stats from the mm container
   MMContainerStat containerStat;
@@ -205,6 +211,20 @@ struct PoolStats {
 
   // number of writebacks for this pool
   uint64_t numWritebacks() const noexcept;
+  // number of writebacks for this pool
+  uint64_t numInclWrites() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numWritebacksFailBadMove() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numWritebacksFailNoAlloc() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numPromotions() const noexcept;
+  
+  // number of writebacks for this pool
+  uint64_t numPromotionsHits() const noexcept;
 
   // number of all items in this pool
   uint64_t numItems() const noexcept;
@@ -326,6 +346,9 @@ struct BackgroundMoverStats {
 
   // average number of items moved per run
   double avgItemsMoved{0.0};
+  
+  // promotion queue size average number of items
+  double avgQueueSize{0.0};
 
   // number of times we actually traversed the mmContainer
   uint64_t numTraversals{0};
@@ -494,6 +517,12 @@ struct GlobalCacheStats {
 
   // number of writebacks across all the pools in the cache.
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numInclWrites;
+  std::vector<uint64_t> numWritebacksFailBadMove;
+  std::vector<uint64_t> numWritebacksFailNoAlloc;
+  
+  std::vector<uint64_t> numPromotions;
+  std::vector<uint64_t> numPromotionsHits;
 
   // number of hits per tier across all the pools in the cache.
   std::vector<uint64_t> numCacheHits;

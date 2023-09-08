@@ -76,6 +76,11 @@ void* MemoryAllocator::allocateByCid(PoolId id, ClassId cid) {
   return mp.allocateByCid(cid);
 }
 
+bool MemoryAllocator::assignSlabs(PoolId pid, ClassId cid, uint32_t n) {
+  auto& mp = memoryPoolManager_.getPoolById(pid);
+  return mp.assignSlabs(cid, n);
+}
+
 std::vector<void*> MemoryAllocator::allocateByCidBatch(PoolId id, ClassId cid, uint64_t batch) {
   auto& mp = memoryPoolManager_.getPoolById(id);
   return mp.allocateByCidBatch(cid, batch);

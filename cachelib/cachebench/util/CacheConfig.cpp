@@ -61,6 +61,9 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, maxAllocSize);
   JSONSetVal(configJson, minAllocSize);
   JSONSetVal(configJson, allocSizes);
+  JSONSetVal(configJson, classInclusives);
+  JSONSetVal(configJson, tier0ClassAssignments);
+  JSONSetVal(configJson, tier1ClassAssignments);
 
   JSONSetVal(configJson, numPools);
   JSONSetVal(configJson, poolSizes);
@@ -96,6 +99,9 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
 
   JSONSetVal(configJson, usePosixShm);
   JSONSetVal(configJson, lockMemory);
+  JSONSetVal(configJson, directAddInclusive);
+  JSONSetVal(configJson, useInclusive);
+
   if (configJson.count("memoryTiers")) {
     for (auto& it : configJson["memoryTiers"]) {
       memoryTierConfigs.push_back(
@@ -127,11 +133,12 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, minEvictionBatch);
   JSONSetVal(configJson, minPromotionBatch);
   JSONSetVal(configJson, maxEvictionPromotionHotness);
+  JSONSetVal(configJson, usePromotionQueue);
   
   // if you added new fields to the configuration, update the JSONSetVal
   // to make them available for the json configs and increment the size
   // below
-  checkCorrectSize<CacheConfig, 888>();
+  checkCorrectSize<CacheConfig, 968>();
 
   if (numPools != poolSizes.size()) {
     throw std::invalid_argument(folly::sformat(

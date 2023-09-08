@@ -25,6 +25,7 @@
 #include <folly/hash/Hash.h>
 #include <folly/container/F14Map.h>
 #include <gtest/gtest.h>
+#include <folly/MPMCQueue.h>
 
 #include <chrono>
 #include <functional>
@@ -1066,7 +1067,7 @@ class CacheAllocator : public CacheBase {
                       util::Throttler::Config reaperThrottleConfig);
   
   bool startNewBackgroundPromoter(std::chrono::milliseconds interval,
-                      std::shared_ptr<BackgroundMoverStrategy> strategy, size_t threads);
+                      std::shared_ptr<BackgroundMoverStrategy> strategy, size_t threads, bool useQueue);
   bool startNewBackgroundEvictor(std::chrono::milliseconds interval,
                       std::shared_ptr<BackgroundMoverStrategy> strategy, size_t threads);
 
@@ -1359,10 +1360,11 @@ class CacheAllocator : public CacheBase {
   static_assert((sizeof(typename MMType::template Hook<Item>) +
                  sizeof(typename AccessType::template Hook<Item>) +
                  sizeof(typename RefcountWithFlags::Value) + sizeof(uint32_t) +
+                 sizeof(void*) +
                  sizeof(uint32_t) + sizeof(KAllocation)) == sizeof(Item),
                 "vtable overhead");
   // Check for CompressedPtr single/multi tier support
-  static_assert(32 == sizeof(Item), "item overhead is 32 bytes");
+  static_assert(40 == sizeof(Item), "item overhead is 40 bytes");
 
   // make sure there is no overhead in ChainedItem on top of a regular Item
   static_assert(sizeof(Item) == sizeof(ChainedItem),
@@ -1459,7 +1461,19 @@ class CacheAllocator : public CacheBase {
       std::vector<std::array<std::array<MMContainerPtr, MemoryAllocator::kMaxClasses>,
                  MemoryPoolManager::kMaxPools>>;
 
+  using PromoQueuePtr = std::unique_ptr<folly::MPMCQueue<Item*>>;
+  using PromoQueue = folly::MPMCQueue<Item*>;
+  using PromoQueues =
+      std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
+                 MemoryPoolManager::kMaxPools>>;
+  //using PromoQueuePtr = std::unique_ptr<std::queue<Item*>>;
+  //using PromoQueue = std::queue<Item*>;
+  //using PromoQueues = 
+  //    std::vector<std::array<std::array<PromoQueuePtr, MemoryAllocator::kMaxClasses>,
+  //               MemoryPoolManager::kMaxPools>>;
+
   void createMMContainers(const PoolId pid, MMConfig config);
+  void createPromoQueues(const PoolId pid);
 
   TierId getTierId(const Item& item) const;
   TierId getTierId(const void* ptr) const;
@@ -1472,6 +1486,9 @@ class CacheAllocator : public CacheBase {
   MMContainer& getMMContainer(const Item& item) const noexcept;
 
   MMContainer& getMMContainer(TierId tid, PoolId pid, ClassId cid) const noexcept;
+  
+  PromoQueue& getPromoQueue(TierId tid, PoolId pid, ClassId cid) const noexcept;
+  uint64_t getQueueSize(TierId tid, PoolId pid, ClassId cid) const noexcept;
 
   // Get stats of the specified pid and cid.
   // If such mmcontainer is not valid (pool id or cid out of bound)
@@ -2325,6 +2342,23 @@ class CacheAllocator : public CacheBase {
   MoveMap& getMoveMapForShard(size_t shard) {
     return movesMap_[shard].movesMap_;
   }
+  
+  int printPromoQueueSize() {
+    size_t total = 0;
+    const auto pools = getPoolIds();
+    for (TierId tid = 0; tid < getNumTiers(); tid++) {
+      for (PoolId pid : pools) {
+        const auto& pool = allocator_[tid]->getPool(pid);
+        const auto& allocSizes = pool.getAllocSizes();
+        for (ClassId cid = 0; cid < static_cast<ClassId>(allocSizes.size()); ++cid) {
+            int size = promoQueues_[tid][pid][cid]->size();
+            XDCHECK_GE(size,-1);
+            total += size;
+        }
+      }
+    }
+    return total;
+  }
 
   MoveMap& getMoveMap(folly::StringPiece key) {
     return getMoveMapForShard(getShardForKey(key));
@@ -2391,6 +2425,7 @@ class CacheAllocator : public CacheBase {
   // the cache allocator.
   // we need mmcontainer per allocator pool/allocation class.
   MMContainers mmContainers_;
+  PromoQueues promoQueues_;
 
   // container that is used for accessing the allocations by their key.
   std::unique_ptr<AccessContainer> accessContainer_;

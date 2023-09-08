@@ -217,18 +217,20 @@ uint32_t MMLru::Container<T, HookPtr>::addBatch(std::vector<T*>& nodes) noexcept
   return lruMutex_->lock_combine([this, &nodes, currTime]() {
     uint32_t i = 0;
     for (auto node : nodes) {
-      if (node->isInMMContainer()) {
-        return i;
+      if (node) {
+        if (node->isInMMContainer()) {
+          return i;
+        }
+        if (config_.lruInsertionPointSpec == 0 || insertionPoint_ == nullptr) {
+          lru_.linkAtHead(*node);
+        } else {
+          lru_.insertBefore(*insertionPoint_, *node);
+        }
+        node->markInMMContainer();
+        setUpdateTime(*node, currTime);
+        unmarkAccessed(*node);
+        updateLruInsertionPoint();
       }
-      if (config_.lruInsertionPointSpec == 0 || insertionPoint_ == nullptr) {
-        lru_.linkAtHead(*node);
-      } else {
-        lru_.insertBefore(*insertionPoint_, *node);
-      }
-      node->markInMMContainer();
-      setUpdateTime(*node, currTime);
-      unmarkAccessed(*node);
-      updateLruInsertionPoint();
       i++;
     }
     return i;
