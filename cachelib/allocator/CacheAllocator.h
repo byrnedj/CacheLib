@@ -1141,6 +1141,10 @@ class CacheAllocator : public CacheBase {
     return allocator_[0]->getPoolName(poolId);
   }
 
+  bool usePromotionQueue() const {
+    return config_.usePromotionQueue;
+  }
+
   // get stats related to all kinds of slab release events.
   SlabReleaseStats getSlabReleaseStats() const noexcept override final;
 
@@ -1184,14 +1188,16 @@ class CacheAllocator : public CacheBase {
     return stats;
   }
 
-  ClassBgStatsType
+  std::map<MemoryDescriptorType,std::vector<uint64_t>>
   getBackgroundMoverClassStats(MoverDir direction) const {
-    ClassBgStatsType stats;
+    std::map<MemoryDescriptorType,std::vector<uint64_t>> stats;
     auto record = [&](auto &bg) {
       //gives a unique descriptor
       auto classStats = bg->getClassStats();
-      for (const auto& [key,value] : classStats) {
-          stats[key] = value;
+      for (const auto& map : classStats) {
+        for (const auto& [key,value] : map) {
+            stats[key].push_back(value);
+        }
       }
     };
 
@@ -1231,6 +1237,8 @@ class CacheAllocator : public CacheBase {
 
   // combined pool size for all memory tiers
   size_t getPoolSize(PoolId pid) const;
+  
+  uint64_t getQueueSize(TierId tid, PoolId pid, ClassId cid) const noexcept;
 
   // pool stats by pool id
   PoolStats getPoolStats(PoolId pid) const override final;
@@ -1488,7 +1496,6 @@ class CacheAllocator : public CacheBase {
   MMContainer& getMMContainer(TierId tid, PoolId pid, ClassId cid) const noexcept;
   
   PromoQueue& getPromoQueue(TierId tid, PoolId pid, ClassId cid) const noexcept;
-  uint64_t getQueueSize(TierId tid, PoolId pid, ClassId cid) const noexcept;
 
   // Get stats of the specified pid and cid.
   // If such mmcontainer is not valid (pool id or cid out of bound)
@@ -1886,6 +1893,13 @@ class CacheAllocator : public CacheBase {
                                        unsigned int batch,
                                        bool markMoving,
                                        bool fromBgThread);
+  
+  std::vector<Item*> getNextCandidatesPromotionQueue(TierId tid,
+                                       PoolId pid,
+                                       ClassId cid,
+                                       unsigned int batch,
+                                       bool markMoving,
+                                       bool fromBgThread);
 
   // 
   // Common function in case move among tiers fails during eviction
@@ -2103,8 +2117,14 @@ class CacheAllocator : public CacheBase {
   
   size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
     util::LatencyTracker tracker{stats().bgPromoteLatency_, batch};
-    auto candidates = getNextCandidatesPromotion(tid,pid,cid,batch,
+    std::vector<Item*> candidates;
+    if (config_.usePromotionQueue) {
+      candidates = getNextCandidatesPromotionQueue(tid,pid,cid,batch,
                                      !config_.useHandleForBgSync,true);
+    } else {
+      candidates = getNextCandidatesPromotion(tid,pid,cid,batch,
+                                     !config_.useHandleForBgSync,true);
+    }
     return candidates.size();
   }
 
@@ -2271,6 +2291,7 @@ class CacheAllocator : public CacheBase {
   unsigned getNumTiers() const {
     return config_.memoryTierConfigs.size();
   }
+  
 
   size_t memoryTierSize(TierId tid) const;
 

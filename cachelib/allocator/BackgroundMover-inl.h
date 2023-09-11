@@ -88,7 +88,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
     for (size_t i = 0; i < batches.size(); i++) {
       const auto [tid, pid, cid] = assignedMemory[i];
       const auto batch = batches[i];
-      if (!batch) {
+      if (!batch || batch < 2) {
         continue;
       }
 
@@ -96,6 +96,9 @@ void BackgroundMover<CacheT>::checkAndRun() {
       auto moved = moverFunc(cache_, tid, pid, cid, batch);
       moves += moved;
       moves_per_class_[assignedMemory[i]] += moved;
+      runs_per_class_[assignedMemory[i]]++;
+      queue_per_class_[assignedMemory[i]] += 
+            BackgroundMoverAPIWrapper<CacheT>::getQueueSize(cache_, tid, pid, cid);
     }
     auto end = util::getCurrentTimeNs();
     if (moves > 0) {
@@ -103,9 +106,8 @@ void BackgroundMover<CacheT>::checkAndRun() {
       numMovedItems.add(moves);
       numTraversals.inc();
     }
-
-    //we didn't move any objects done with this run
-    if (moves == 0 || shouldStopWork()) {
+    //we didn't move that many objects done with this run
+    if (moves == 0 || moves < (assignedMemory.size()/2) || shouldStopWork()) {
         break;
     }
   }
@@ -130,9 +132,13 @@ BackgroundMoverStats BackgroundMover<CacheT>::getStats() const noexcept {
 }
 
 template <typename CacheT>
-std::map<MemoryDescriptorType,uint64_t>
+std::vector<std::map<MemoryDescriptorType,uint64_t>>
 BackgroundMover<CacheT>::getClassStats() const noexcept {
-  return moves_per_class_;
+  std::vector<std::map<MemoryDescriptorType,uint64_t>> classStats;
+  classStats.push_back(moves_per_class_);
+  classStats.push_back(runs_per_class_);
+  classStats.push_back(queue_per_class_);
+  return classStats;
 }
 
 } // namespace cachelib

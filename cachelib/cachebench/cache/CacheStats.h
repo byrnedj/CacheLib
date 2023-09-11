@@ -125,8 +125,8 @@ struct Stats {
   
   using ClassBgStatsType = std::map<MemoryDescriptorType,uint64_t>;
 
-  ClassBgStatsType backgroundEvictionClasses;
-  ClassBgStatsType backgroundPromotionClasses;
+  std::map<MemoryDescriptorType, std::vector<uint64_t>> backgroundEvictionClasses;
+  std::map<MemoryDescriptorType, std::vector<uint64_t>> backgroundPromotionClasses;
 
   // errors from the nvm engine.
   std::unordered_map<std::string, double> nvmErrors;
@@ -177,8 +177,8 @@ struct Stats {
         }
     }
     
-    auto foreachAC = [&](auto &map, auto cb) {
-      for (const auto& [key, value] : map) {
+    auto foreachAC = [&](auto &classStats, auto cb) {
+      for (const auto& [key, value] : classStats) {
         auto [tid,pid,cid] = key;
         cb(tid, pid, cid, value);
       }
@@ -321,32 +321,41 @@ struct Stats {
       }
     }
 
-    uint64_t totalbgevicted = 0;
-    uint64_t totalpromoted = 0;
+    uint64_t totalevict = 0;
+    uint64_t totalpromote = 0;
     for (int i = 0; i < backgroundEvictorStats.size(); i++) {
-        totalbgevicted += backgroundEvictorStats[i].numMovedItems;
+        totalevict += backgroundEvictorStats[i].numMovedItems;
     }
     for (int i = 0; i < backgroundPromoStats.size(); i++) {
-        totalpromoted += backgroundPromoStats[i].numMovedItems;
+        totalpromote += backgroundPromoStats[i].numMovedItems;
     }
-    if (!backgroundEvictionClasses.empty() && totalbgevicted > 0 ) {
+    if (!backgroundEvictionClasses.empty() && totalevict > 0 ) {
       out << "== Class Background Eviction Counters Map ==" << std::endl;
-      foreachAC(backgroundEvictionClasses, [&](auto tid, auto pid, auto cid, auto evicted){
+      foreachAC(backgroundEvictionClasses, [&](auto tid, auto pid, auto cid, auto stats) {
+        uint64_t evicted = stats[0];
+        uint64_t runs = stats[1];
         if (evicted > 0) {
-          out << folly::sformat("tid{:2} pid{:2} cid{:4} evicted: {:4}",
-            tid, pid, cid, evicted) << std::endl;
+          out << folly::sformat("tid{:2} pid{:2} cid{:4} evicted: {:4}, runs: {:4}, avg: {:.2f}",
+            tid, pid, cid, evicted, runs, (double)evicted/(double)runs) << std::endl;
         }
       });
+      out << folly::sformat("Total background evictions: {:,}",totalevict) << std::endl;
     }
     
-    if (!backgroundPromotionClasses.empty() && totalpromoted) {
+    if (!backgroundPromotionClasses.empty() && totalpromote > 0) {
       out << "== Class Background Promotion Counters Map ==" << std::endl;
-      foreachAC(backgroundPromotionClasses, [&](auto tid, auto pid, auto cid, auto promoted){
+      foreachAC(backgroundPromotionClasses, [&](auto tid, auto pid, auto cid, auto stats){
+        uint64_t promoted = stats[0];
+        uint64_t runs = stats[1];
+        uint64_t queue_size = stats[2];
         if (promoted > 0) {
-          out << folly::sformat("tid{:2} pid{:2} cid{:4} promoted: {:4}",
-            tid, pid, cid, promoted) << std::endl;
+          out << folly::sformat("tid{:2} pid{:2} cid{:4} promoted: {:4}, runs {:4}, avg: {:.2f}, "
+                                "avg queue size: {:.2f}",
+            tid, pid, cid, promoted, runs, (double)promoted/(double)runs, 
+            (double)queue_size/(double)runs) << std::endl;
         }
       });
+      out << folly::sformat("Total promotions: {:,}",totalpromote) << std::endl;
     }
 
     if (reaperStats.numReapedItems > 0) {
@@ -489,11 +498,11 @@ struct Stats {
     if (numCacheEvictions > 0) {
       out << folly::sformat("Total evictions executed  : {:10,}", numCacheEvictions)
               << std::endl;
-      out << folly::sformat("Total background evictions: {:10,}", totalbgevicted)
+      out << folly::sformat("Total background evictions: {:10,}", totalevict)
               << std::endl;
     }
-    if (totalpromoted > 0) {
-      out << folly::sformat("Total promotions          : {:10,}", totalpromoted) << std::endl;
+    if (totalpromote > 0) {
+      out << folly::sformat("Total promotions          : {:10,}", totalpromote) << std::endl;
     }
   }
 

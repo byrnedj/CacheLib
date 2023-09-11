@@ -372,9 +372,10 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
       const bool unlinked = !(curValue & linkedBitMask);
       const bool alreadyExclusive = curValue & exclusiveBitMask;
       const bool isChained = curValue & isChainedItemFlag;
-
+      const unsigned int refCount = (curValue & kAccessRefMask);
+      const unsigned int expectedRefCount = isChained ? count+1 : count;
       // chained item can have ref count == 1, this just means it's linked in the chain
-      if ((curValue & kAccessRefMask) != isChained ? count+1 : count) {
+      if (refCount != expectedRefCount) {
         return false;
       }
       if (unlinked || alreadyExclusive) {

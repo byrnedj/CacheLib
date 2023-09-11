@@ -120,6 +120,10 @@ class CacheBase {
   // @param poolId    The pool id to query
   // @param tierId    The tier of the pool id
   virtual const MemoryPool& getPoolByTid(PoolId poolId, TierId tid) const = 0;
+  
+  virtual uint64_t getQueueSize(TierId tid, PoolId poolId, ClassId cid) const = 0;
+  
+  virtual bool usePromotionQueue() const = 0;
 
   // Get Pool specific stats (regular pools). This includes stats from the
   // Memory Pool and also the cache.

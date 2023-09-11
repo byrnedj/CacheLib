@@ -347,6 +347,7 @@ class MMLru {
     // @return  number of nodes added - it is up to user to verify all
     //          expected nodes have been added.
     uint32_t addBatch(std::vector<T*>& nodes) noexcept;
+    int removeBatch(std::vector<T*>& nodes) noexcept;
 
     // removes the node from the lru and sets it previous and next to nullptr.
     //

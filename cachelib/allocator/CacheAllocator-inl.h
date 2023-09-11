@@ -1310,7 +1310,7 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
                          handle->getSize(),
                          handle->getCreationTime(),
                          handle->getExpiryTime(),
-                         false);
+                         true);
             if (newItemHdl) {
               if (handle->isAccessible()) {
                 handle->setNextTierCopy(newItemHdl.getInternal());
@@ -1348,7 +1348,7 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
                        item.getSize(),
                        item.getCreationTime(),
                        item.getExpiryTime(),
-                       false);
+                       true);
           if (newItemHdl) {
             if (item.isAccessible()) {
               item.setNextTierCopy(newItemHdl.getInternal());
@@ -1577,6 +1577,9 @@ bool CacheAllocator<CacheTrait>::moveRegularItem(
   if (!replaced) {
     auto& newContainer = getMMContainer(*newItemHdl);
     newContainer.remove(*newItemHdl);
+    if (srcTid > dstTid) { //promotion failed
+      newItemHdl->unmarkPromoted();
+    }
     return false;
   }
   newItemHdl.unmarkNascent();
@@ -1709,6 +1712,143 @@ CacheAllocator<CacheTrait>::findEvictionBatch(TierId tid,
     XDCHECK_EQ(ret,ReleaseRes::kRecycled);
   }
   return toRecycles;
+}
+
+template <typename CacheTrait>
+std::vector<typename CacheAllocator<CacheTrait>::Item*>
+CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
+                                             PoolId pid,
+                                             ClassId cid,
+                                             unsigned int batch,
+                                             bool markMoving,
+                                             bool fromBgThread) {
+  std::vector<Item*> newAllocs;
+  std::vector<void*> blankAllocs;
+  std::vector<WriteHandle> newHandles;
+  std::vector<WriteHandle> candidateHandles;
+  std::vector<Item*> candidates;
+  std::vector<Item*> syncItems;
+  
+  auto& mmContainer = getMMContainer(tid, pid, cid);
+  auto& promoQueue = getPromoQueue(tid, pid, cid);
+
+  batch = promoQueue.size() < batch ? promoQueue.size() : batch;
+  if (batch < 3) return candidates;
+  // first try and get allocations in the next tier
+  blankAllocs = allocateInternalTierByCidBatch(tid-1,pid,cid,batch);
+  if (blankAllocs.empty()) {
+      return candidates;  
+  } else if (blankAllocs.size() != batch) {
+      for (int i = 0; i < blankAllocs.size(); i++) {
+        allocator_[tid-1]->free(blankAllocs[i]);
+      }
+      return candidates;  
+  }
+  XDCHECK_EQ(blankAllocs.size(),batch);
+  
+  while (candidates.size() < batch) {
+    Item *candidate = nullptr;
+    if (promoQueue.size() == 0) {
+      break;
+    }
+    promoQueue.read(candidate);
+    if (candidate == nullptr) {
+      continue;
+    }
+    if (!markMoving) {
+      auto hdl = acquire(candidate);
+      candidates.push_back(candidate);
+      candidateHandles.push_back(std::move(hdl));
+    } else {
+      XDCHECK(candidate->isMoving());
+      candidates.push_back(candidate);
+    }
+  }
+  if (candidates.size() == 0) {
+    for (int i = 0; i < blankAllocs.size(); i++) {
+      allocator_[tid-1]->free(blankAllocs[i]);
+    }
+    return candidates;
+  }
+  
+  if (candidates.size() < batch) {
+    unsigned int toErase = batch - candidates.size();
+    for (int i = 0; i < toErase; i++) {
+      allocator_[tid-1]->free(blankAllocs.back());
+      blankAllocs.pop_back();
+    }
+    if (candidates.size() == 0) {
+      return candidates;  
+    }
+  }
+  
+  auto removed = mmContainer.removeBatch(candidates);
+  if (removed != 0) {                                                      
+    XDCHECK_EQ(removed,0) << candidates[removed]->toString();              
+    throw std::runtime_error(                                              
+      folly::sformat("Was not able toremove all new items promoter, failed {}", candidates[removed]->toString()));                                  
+  }
+
+  //1. get and item handle from a new allocation
+  for (int i = 0; i < candidates.size(); i++) {
+    Item *candidate = candidates[i];
+    WriteHandle newItemHdl = acquire(new (blankAllocs[i]) 
+            Item(candidate->getKey(), candidate->getSize(),
+                 candidate->getCreationTime(), candidate->getExpiryTime()));
+    XDCHECK(newItemHdl);
+    if (newItemHdl) {
+      newItemHdl.markNascent();
+      (*stats_.fragmentationSize)[tid][pid][cid].add(
+          util::getFragmentation(*this, *newItemHdl));
+      newAllocs.push_back(newItemHdl.getInternal());
+      newHandles.push_back(std::move(newItemHdl));
+    } else {
+      XDCHECK(false);
+      newAllocs.push_back(0);
+      newHandles.push_back(WriteHandle{});
+    }
+  }
+  //2. add in batch to mmContainer
+  auto& newMMContainer = getMMContainer(tid-1, pid, cid);
+  uint32_t added = newMMContainer.addBatch(newAllocs);
+  XDCHECK_EQ(added,newAllocs.size());
+  if (added != newAllocs.size()) {
+    throw std::runtime_error(
+      folly::sformat("Was not able to add all new items, failed item {} and handle {}", 
+                      newAllocs[added]->toString(),newHandles[added]->toString()));
+  }
+  //3. copy item data - don't need to add in mmContainer
+  for (int i = 0; i < candidates.size(); i++) {
+    Item *candidate = candidates[i];
+    WriteHandle newHandle = std::move(newHandles[i]);
+    bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true) : false;
+    if (moved) {
+      (*stats_.numPromotions)[tid][pid][cid].inc();
+      XDCHECK(candidate->getKey() == newHandle->getKey());
+      if (markMoving) {
+        auto ref = candidate->unmarkMoving();
+        wakeUpWaiters(*candidate, std::move(newHandle));
+        if (fromBgThread && ref == 0) {
+          XDCHECK_EQ(ref,0) << candidate->toString();
+          const auto res =
+              releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+          XDCHECK(res == ReleaseRes::kReleased);
+        }
+      }
+    } else {
+      removeFromMMContainer(*newAllocs[i]);
+      typename NvmCacheT::PutToken token{};
+      auto ret = handleFailedMove(candidate,token,false,markMoving);
+      XDCHECK(ret);
+      if (fromBgThread && markMoving && candidate->getRefCountAndFlagsRaw() == 0) {
+        const auto res =
+            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+        XDCHECK(res == ReleaseRes::kReleased);
+      }
+
+    }
+  }
+  return candidates;
 }
 
 template <typename CacheTrait>

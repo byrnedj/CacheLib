@@ -43,6 +43,13 @@ struct BackgroundMoverAPIWrapper {
                                         size_t batch) {
     return cache.traverseAndPromoteItems(tid, pid, cid, batch);
   }
+
+  static size_t getQueueSize(C& cache,
+                                        unsigned int tid,
+                                        unsigned int pid,
+                                        unsigned int cid) {
+    return cache.getQueueSize(tid, pid, cid);
+  }
 };
 
 enum class MoverDir { Evict = 0, Promote };
@@ -66,13 +73,15 @@ class BackgroundMover : public PeriodicWorker {
   ~BackgroundMover() override;
 
   BackgroundMoverStats getStats() const noexcept;
-  ClassBgStatsType getClassStats() const noexcept;
+  std::vector<std::map<MemoryDescriptorType,uint64_t>> getClassStats() const noexcept;
 
   void setAssignedMemory(
       std::vector<MemoryDescriptorType>&& assignedMemory);
 
  private:
   ClassBgStatsType moves_per_class_;
+  std::map<MemoryDescriptorType,uint64_t> runs_per_class_;
+  std::map<MemoryDescriptorType,uint64_t> queue_per_class_;
 
   struct TraversalStats {
     // record a traversal and its time taken
