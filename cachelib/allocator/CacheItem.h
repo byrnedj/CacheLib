@@ -411,6 +411,7 @@ class CACHELIB_PACKED_ATTR CacheItem {
    */
   bool markMoving();
   bool markMovingIfRefCount(uint32_t count);
+  bool markRecentIfRefCount(uint32_t count);
   RefcountWithFlags::Value unmarkMoving() noexcept;
   bool isMoving() const noexcept;
   bool isOnlyMoving() const noexcept;

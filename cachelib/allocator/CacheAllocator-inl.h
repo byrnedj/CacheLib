@@ -1756,13 +1756,19 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
       continue;
     }
     if (!markMoving) {
-      auto hdl = acquire(candidate);
-      candidates.push_back(candidate);
-      candidateHandles.push_back(std::move(hdl));
+      if (candidate->isRecent()) {
+        candidate->unmarkRecent();
+        auto hdl = acquire(candidate);
+        if (hdl) {
+          candidates.push_back(candidate);
+          candidateHandles.push_back(std::move(hdl));
+        }
+      }
     } else {
       XDCHECK(candidate->isMoving());
       candidates.push_back(candidate);
     }
+    candidate = nullptr;
   }
   if (candidates.size() == 0) {
     for (int i = 0; i < blankAllocs.size(); i++) {
@@ -3124,9 +3130,11 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           }
         }
       } else {
-        added = promoQueue.write(itemPtr);
-        if (!added) {
-          throw std::runtime_error("failed inserting to promo queue"); 
+        if (itemPtr->markRecentIfRefCount(1)) {
+          added = promoQueue.write(itemPtr);
+          if (!added) {
+            throw std::runtime_error("failed inserting to promo queue"); 
+          }
         }
       }
     }

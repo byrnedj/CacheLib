@@ -324,6 +324,11 @@ bool CacheItem<CacheTrait>::markMovingIfRefCount(uint32_t count) {
 }
 
 template <typename CacheTrait>
+bool CacheItem<CacheTrait>::markRecentIfRefCount(uint32_t count) {
+  return ref_.markRecentIfRefCount(count);
+}
+
+template <typename CacheTrait>
 bool CacheItem<CacheTrait>::markMoving() {
   return ref_.markMoving();
 }

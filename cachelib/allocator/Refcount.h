@@ -363,6 +363,34 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     return atomicUpdateValue(predicate, newValue);
   }
   
+  bool markRecentIfRefCount(uint32_t count) {
+    Value isRecentFlag = getFlag<kRecent>();
+
+    auto predicate = [isRecentFlag, count](const Value curValue) {
+      const bool isRecent = curValue & isRecentFlag;
+      const unsigned int refCount = (curValue & kAccessRefMask);
+      // chained item can have ref count == 1, this just means it's linked in the chain
+      if (refCount != count) {
+        return false;
+      }
+      if (isRecent) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    constexpr Value bitMask = (static_cast<Value>(1) << kRecent);
+    auto newValue = [bitMask](const Value curValue) {
+      return (curValue) | bitMask;
+    };
+
+    return atomicUpdateValue(predicate, newValue);
+  }
+  
   bool markMovingIfRefCount(uint32_t count) {
     Value linkedBitMask = getAdminRef<kLinked>();
     Value exclusiveBitMask = getAdminRef<kExclusive>();
