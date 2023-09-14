@@ -1607,7 +1607,6 @@ CacheAllocator<CacheTrait>::findEvictionBatch(TierId tid,
                                              unsigned int batch) {
 
   auto [candidates, toRecycles] = getNextCandidates(tid,pid,cid,batch,true,false);
-  XDCHECK_EQ(candidates.size(),batch);
   for (int i = 0; i < candidates.size(); i++) {
     Item *candidate = candidates[i];
     Item *toRecycle = toRecycles[i];
@@ -1934,7 +1933,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   
   mmContainer.withEvictionIterator(iterateAndMark);
 
-  if (candidates.size() < batch) {
+  if (candidates.size() < batch && !lastTier) {
     unsigned int toErase = batch - candidates.size();
     for (int i = 0; i < toErase; i++) {
       allocator_[tid+1]->free(blankAllocs.back());
@@ -2011,6 +2010,11 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       Item *candidate = candidates[i];
       typename NvmCacheT::PutToken token = std::move(tokens[i]);
       auto ret = handleFailedMove(candidate,token,isExpireds[i],markMoving);
+      if (fromBgThread && markMoving) {
+        const auto res =
+            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+        XDCHECK(res == ReleaseRes::kReleased);
+      }
     }
   }
 
@@ -3141,7 +3145,8 @@ PoolId CacheAllocator<CacheTrait>::addPool(
   setResizeStrategy(pid, std::move(resizeStrategy));
 
   //for (size_t id = 0; id < backgroundEvictor_.size(); id++) {
-  //  uint32_t tid = id % getNumTiers();
+  //  //uint32_t tid = id % getNumTiers();
+  //  uint32_t tid = 0;
   //  backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(id, backgroundEvictor_.size(), tid ));
   //}
 
@@ -3164,7 +3169,7 @@ PoolId CacheAllocator<CacheTrait>::addPool(
   uint32_t id = 0;
   for (int i = 0; i < getNumTiers(); i++) {
     for (int j = 0; j < evictorsPerTier[i]; j++) {
-      backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(id, evictorsPerTier[i], i));
+      backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(j, evictorsPerTier[i], i));
       id++;
     }
   }
