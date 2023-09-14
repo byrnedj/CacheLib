@@ -245,8 +245,8 @@ bool MM2Q::Container<T, HookPtr>::addBatch(std::vector<T*>& nodes) noexcept {
 }
 
 template <typename T, MM2Q::Hook<T> T::*HookPtr>
-bool MM2Q::Container<T, HookPtr>::removeBatch(std::vector<T*>& nodes) noexcept {
-    return false;
+std::vector<int> MM2Q::Container<T, HookPtr>::removeBatch(std::vector<T*>& nodes) noexcept {
+    return std::vector<int>{};
 }
 
 template <typename T, MM2Q::Hook<T> T::*HookPtr>

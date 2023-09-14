@@ -219,8 +219,8 @@ bool MMTinyLFU::Container<T, HookPtr>::addBatch(std::vector<T*>& nodes) noexcept
 }
 
 template <typename T, MMTinyLFU::Hook<T> T::*HookPtr>
-bool MMTinyLFU::Container<T, HookPtr>::removeBatch(std::vector<T*>& nodes) noexcept {
-    return false;
+std::vector<int> MMTinyLFU::Container<T, HookPtr>::removeBatch(std::vector<T*>& nodes) noexcept {
+    return std::vector<int>{};
 }
 
 template <typename T, MMTinyLFU::Hook<T> T::*HookPtr>

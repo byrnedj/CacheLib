@@ -1324,6 +1324,7 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
             handle->setNextTierCopy(nextCopy);
             replaced->setNextTierCopy(0);
             replaced->unmarkPromoted();
+            replaced->unmarkRecent();
           }
       } else if (handle->isInclusive() && tid == 1) {
           handle->markDirty();
@@ -1482,11 +1483,13 @@ bool CacheAllocator<CacheTrait>::moveRegularItem(
     if (srcTid > dstTid) { //promotion
       newItemHdl->setNextTierCopy(&oldItem);
       oldItem.markCopy();
-      oldItem.setNextTierCopy(static_cast<void*>(newItemHdl.get()));
+      oldItem.setNextTierCopy(0);
       XDCHECK_EQ(newItemHdl->getNextTierCopy(),&oldItem);
     } else if ( (srcTid < dstTid) ) { //evict to next tier
-      XDCHECK(newItemHdl->isCopy());
-      XDCHECK_EQ(static_cast<void*>(newItemHdl.getInternal()),oldItem.getNextTierCopy());
+      if (oldItem.getNextTierCopy() != nullptr) {
+        XDCHECK(newItemHdl->isCopy());
+        XDCHECK_EQ(static_cast<void*>(newItemHdl.getInternal()),oldItem.getNextTierCopy());
+      }
       newItemHdl->unmarkCopy();
       oldItem.setNextTierCopy(0);
       oldItem.unmarkCopy();
@@ -1789,10 +1792,18 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
   }
   
   auto removed = mmContainer.removeBatch(candidates);
-  if (removed != 0) {                                                      
-    XDCHECK_EQ(removed,0) << candidates[removed]->toString();              
-    throw std::runtime_error(                                              
-      folly::sformat("Was not able toremove all new items promoter, failed {}", candidates[removed]->toString()));                                  
+  if (removed.size() != 0) {
+    //insert or replace was called so drop these items
+    for (std::vector<int>::reverse_iterator rit = removed.rbegin();
+          rit != removed.rend(); ++rit) {
+      int idx = *rit;
+      candidates.erase(candidates.begin() + idx);
+      candidateHandles.erase(candidateHandles.begin() + idx);
+      allocator_[tid-1]->free(blankAllocs.back());
+      blankAllocs.pop_back();
+    }
+    XDCHECK_EQ(candidates.size(),blankAllocs.size());
+    XDCHECK_EQ(candidates.size(),candidateHandles.size());
   }
 
   //1. get and item handle from a new allocation
