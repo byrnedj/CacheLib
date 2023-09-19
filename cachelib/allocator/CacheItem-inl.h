@@ -254,6 +254,11 @@ void CacheItem<CacheTrait>::markPromoted() noexcept {
 }
 
 template <typename CacheTrait>
+bool CacheItem<CacheTrait>::markPromotedForQueue() noexcept {
+  return ref_.markPromotedForQueue();
+}
+
+template <typename CacheTrait>
 bool CacheItem<CacheTrait>::wasPromoted() const noexcept {
   return ref_.wasPromoted();
 }

@@ -511,9 +511,40 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     Value bitMask = ~getAdminRef<kCopy>();
     return __atomic_and_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL) & kRefMask;
   }
-  void markPromoted() noexcept { 
+  void markPromoted() noexcept {
     Value bitMask = getAdminRef<kPromoted>();
     __atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+  }
+  bool markPromotedForQueue() noexcept { 
+    //Value bitMask = getAdminRef<kPromoted>();
+    //__atomic_or_fetch(&refCount_, bitMask, __ATOMIC_ACQ_REL);
+    
+    auto predicate = [](const Value curValue) {
+      Value conditionBitMask = getAdminRef<kLinked>();
+      const bool flagSet = curValue & conditionBitMask;
+      const bool alreadyPromoted = curValue & getAdminRef<kPromoted>();
+      const bool alreadyExclusive = curValue & getAdminRef<kExclusive>();
+      if ((curValue & kAccessRefMask) != 1) {
+        return false;
+      }
+      if (!flagSet || alreadyPromoted || alreadyExclusive) {
+        return false;
+      }
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      }
+
+      return true;
+    };
+
+    auto newValue = [](const Value curValue) {
+      // Set exclusive flag and make the ref count non-zero (to distinguish
+      // from exclusive case). This extra ref will not be reported to the
+      // user
+      return (curValue) | getAdminRef<kPromoted>();
+    };
+
+    return atomicUpdateValue(predicate, newValue);
   }
   bool wasPromoted() const noexcept { 
     return getRaw() & getAdminRef<kPromoted>();

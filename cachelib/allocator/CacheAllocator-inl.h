@@ -1299,38 +1299,39 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
       replaced->unmarkPromoted();
       if (handle->isInclusive() && tid == 0) {
           handle->markDirty();
-          Item *nextCopy = 
-            reinterpret_cast<Item*>(replaced->getNextTierCopy());
-          // this insertOrReplace call made it here before a new
-          // alloc could be made in the next tier
-          if (nextCopy == nullptr) {
-            const auto allocInfo = allocator_[tid]->getAllocInfo(static_cast<const void*>(handle.getInternal()));
-            auto newItemHdl = allocateInternalTier(tid+1, allocInfo.poolId,
-                         handle->getKey(),
-                         handle->getSize(),
-                         handle->getCreationTime(),
-                         handle->getExpiryTime(),
-                         true);
-            if (newItemHdl) {
-              if (handle->isAccessible()) {
-                handle->setNextTierCopy(newItemHdl.getInternal());
-                newItemHdl->markCopy();
-                newItemHdl->markInclusive();
-                std::memcpy(newItemHdl->getMemory(), handle->getMemory(), handle->getSize());
-                (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
-              }
-            }
-          } else {
-            handle->setNextTierCopy(nextCopy);
-            replaced->setNextTierCopy(0);
-            replaced->unmarkPromoted();
-            replaced->unmarkRecent();
-          }
-      } else if (handle->isInclusive() && tid == 1) {
-          handle->markDirty();
-          handle->setNextTierCopy(replaced.getInternal());
+          handle->setNextTierCopy(replaced->getNextTierCopy());
           replaced->setNextTierCopy(0);
-          replaced->markCopy();
+          //Item *nextCopy = 
+          //  reinterpret_cast<Item*>(replaced->getNextTierCopy());
+          //// this insertOrReplace call made it here before a new
+          //// alloc could be made in the next tier
+          //if (nextCopy == nullptr) {
+          //  const auto allocInfo = allocator_[tid]->getAllocInfo(static_cast<const void*>(handle.getInternal()));
+          //  auto newItemHdl = allocateInternalTier(tid+1, allocInfo.poolId,
+          //               handle->getKey(),
+          //               handle->getSize(),
+          //               handle->getCreationTime(),
+          //               handle->getExpiryTime(),
+          //               true);
+          //  if (newItemHdl) {
+          //    if (handle->isAccessible()) {
+          //      handle->setNextTierCopy(newItemHdl.getInternal());
+          //      newItemHdl->markCopy();
+          //      newItemHdl->markInclusive();
+          //      std::memcpy(newItemHdl->getMemory(), handle->getMemory(), handle->getSize());
+          //      (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
+          //    }
+          //  }
+          //} else {
+          //  handle->setNextTierCopy(nextCopy);
+          //  replaced->setNextTierCopy(0);
+          //  replaced->unmarkPromoted();
+          //  replaced->unmarkRecent();
+          //}
+      } else if (handle->isInclusive() && tid == 1) {
+          replaced->setNextTierCopy(0);
+          //handle->markDirty();
+          //handle->setNextTierCopy(replaced.getInternal());
       }
       if (replaced->isNvmClean() && !replaced->isNvmEvicted()) {
         // item is to be replaced and the destructor will be executed
@@ -1351,14 +1352,11 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
                        item.getExpiryTime(),
                        true);
           if (newItemHdl) {
-            if (item.isAccessible()) {
-              item.setNextTierCopy(newItemHdl.getInternal());
-              newItemHdl->markCopy();
-              newItemHdl->markInclusive();
-              std::memcpy(newItemHdl->getMemory(), item.getMemory(), item.getSize());
-              (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
-            }
-            //accessContainer_->setNextCopyIfAccessible(item,newItemHdl.getInternal());
+            item.setNextTierCopy(newItemHdl.getInternal());
+            newItemHdl->markCopy();
+            newItemHdl->markInclusive();
+            std::memcpy(newItemHdl->getMemory(), item.getMemory(), item.getSize());
+            (*stats_.numInclWrites)[tid+1][allocInfo.poolId][allocInfo.classId].inc();
           }
         }
         
@@ -1759,13 +1757,15 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
       continue;
     }
     if (!markMoving) {
-      if (candidate->isRecent()) {
-        candidate->unmarkRecent();
-        auto hdl = acquire(candidate);
-        if (hdl) {
-          candidates.push_back(candidate);
-          candidateHandles.push_back(std::move(hdl));
-        }
+      auto hdl = acquire(candidate);
+      auto ref = candidate->decRef();
+      XDCHECK_NE(ref,0);
+      if (!hdl->wasPromoted()) {
+        continue;
+      } else {
+        hdl->unmarkPromoted();
+        candidates.push_back(candidate);
+        candidateHandles.push_back(std::move(hdl));
       }
     } else {
       XDCHECK(candidate->isMoving());
@@ -3141,7 +3141,8 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
           }
         }
       } else {
-        if (itemPtr->markRecentIfRefCount(1)) {
+        if (itemPtr->markPromotedForQueue()) {
+          itemPtr->incRef();
           added = promoQueue.write(itemPtr);
           if (!added) {
             throw std::runtime_error("failed inserting to promo queue"); 
