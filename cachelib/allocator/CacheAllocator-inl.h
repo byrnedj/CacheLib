@@ -2240,7 +2240,9 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
         }
       } else {
         typename NvmCacheT::PutToken token = std::move(tokens[i]);
-        removeFromMMContainer(*newAllocs[i]);
+        if (newAllocs[i]) {
+          removeFromMMContainer(*newAllocs[i]);
+        }
         auto ret = handleFailedMove(candidate,token,isExpireds[i],markMoving);
         XDCHECK(ret);
         if (fromBgThread && markMoving) {
