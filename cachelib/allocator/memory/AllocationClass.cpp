@@ -748,6 +748,10 @@ uint32_t AllocationClass::getPerSlab() const {
   return getAllocsPerSlab();
 }
 
+uint32_t AllocationClass::getApproxFreeSlabs() const {
+  return freeSlabs_.size();
+}
+
 uint32_t AllocationClass::getApproxSlabs() const {
   return allocatedSlabs_.size();
 }

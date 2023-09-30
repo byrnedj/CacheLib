@@ -1676,6 +1676,11 @@ void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
       it.unmarkPromoted();
   }
   const auto ref = it.unmarkForEviction();
+  if (ref != 0u) {
+    throw std::runtime_error(
+      folly::sformat("item ref not zero in eviction: {}", 
+                      it.toString()));
+  }
   XDCHECK_EQ(0u, ref) << it.toString();
 }
 
@@ -1734,16 +1739,13 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
   auto& promoQueue = getPromoQueue(tid, pid, cid);
 
   batch = promoQueue.size() < batch ? promoQueue.size() : batch;
-  if (batch < 3) return candidates;
+  if (batch == 0) return candidates;
   // first try and get allocations in the next tier
   blankAllocs = allocateInternalTierByCidBatch(tid-1,pid,cid,batch);
   if (blankAllocs.empty()) {
-      return candidates;  
+    return candidates;  
   } else if (blankAllocs.size() != batch) {
-      for (int i = 0; i < blankAllocs.size(); i++) {
-        allocator_[tid-1]->free(blankAllocs[i]);
-      }
-      return candidates;  
+    batch = blankAllocs.size();
   }
   XDCHECK_EQ(blankAllocs.size(),batch);
   
@@ -1773,15 +1775,8 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
     }
     candidate = nullptr;
   }
-  if (candidates.size() == 0) {
-    for (int i = 0; i < blankAllocs.size(); i++) {
-      allocator_[tid-1]->free(blankAllocs[i]);
-    }
-    return candidates;
-  }
-  
   if (candidates.size() < batch) {
-    unsigned int toErase = batch - candidates.size();
+    unsigned int toErase  = batch - candidates.size();
     for (int i = 0; i < toErase; i++) {
       allocator_[tid-1]->free(blankAllocs.back());
       blankAllocs.pop_back();
@@ -2165,8 +2160,12 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   mmContainer.withEvictionIterator(iterateAndMark);
 
   if (candidates.size() < batch) {
-    if (!lastTier) {
+    if (!lastTier && !inclusive) {
       unsigned int toErase = batch - candidates.size();
+      if (blankAllocs.size() < toErase) {
+          throw std::runtime_error(
+             folly::sformat("Was not wrong blank allocs size {}, toerase {}", blankAllocs.size(),toErase));
+      }
       for (int i = 0; i < toErase; i++) {
         allocator_[tid+1]->free(blankAllocs.back());
         blankAllocs.pop_back();
@@ -2205,8 +2204,8 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
           (*stats_.numWritebacksFailNoAlloc)[tid][pid][cid].inc();
           //throw std::runtime_error(
           //   folly::sformat("Was not to get next copy, failed alloc {}", candidate->toString()));
-         newAllocs.push_back(0);
-         newHandles.push_back(WriteHandle{});
+          newAllocs.push_back(0);
+          newHandles.push_back(WriteHandle{});
         } else {
           newAllocs.push_back(nextCopy);
           newHandles.push_back(acquire(nextCopy));
@@ -3575,7 +3574,7 @@ void CacheAllocator<CacheTrait>::createPromoQueues(const PoolId pid) {
 
   for (unsigned int cid = 0; cid < pool.getNumClassId(); ++cid) {
     for (TierId tid = 0; tid < getNumTiers(); tid++) {
-      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(100000));
+      promoQueues_[tid][pid][cid].reset(new folly::MPMCQueue<Item*>(10000));
       //promoQueues_[tid][pid][cid].reset(new std::queue<Item*>());
     }
   }

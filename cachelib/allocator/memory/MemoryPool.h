@@ -137,6 +137,8 @@ class MemoryPool {
   // approx slabs assigned to a given class
   uint32_t getApproxSlabs(ClassId cid) const;
   
+  uint32_t getApproxFreeSlabs(ClassId cid) const;
+  
   uint32_t getApproxFreeSlabs() const;
   // items per slab for a class
   uint32_t getPerSlab(ClassId cid) const;

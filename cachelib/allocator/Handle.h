@@ -267,6 +267,11 @@ struct ReadHandleImpl {
         return;
       }
       baton_.wait();
+      //bool ready = baton_.try_wait_for(std::chrono::seconds(1));
+      //if (!ready) {
+      //  XDCHECK(ready);
+      //  throw std::runtime_error("timeout on handle wait");
+      //}
       XDCHECK(isReady());
     }
 

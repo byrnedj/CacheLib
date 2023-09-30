@@ -628,6 +628,11 @@ uint32_t MemoryPool::getApproxSlabs(ClassId cid) const {
   return ac.getApproxSlabs();
 }
 
+uint32_t MemoryPool::getApproxFreeSlabs(ClassId cid) const {
+  const auto& ac = getAllocationClassFor(cid);
+  return ac.getApproxFreeSlabs();
+}
+
 uint32_t MemoryPool::getPerSlab(ClassId cid) const {
   const auto& ac = getAllocationClassFor(cid);
   return ac.getPerSlab();

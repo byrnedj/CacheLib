@@ -101,6 +101,8 @@ class AllocationClass {
   double getApproxUsage() const;
   // get approx slabs in this class
   uint32_t getApproxSlabs() const;
+  // get approx free slabs in this class
+  uint32_t getApproxFreeSlabs() const;
   // get items per slabs in this class
   uint32_t getPerSlab() const;
 

@@ -88,7 +88,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
     for (size_t i = 0; i < batches.size(); i++) {
       const auto [tid, pid, cid] = assignedMemory[i];
       const auto batch = batches[i];
-      if (!batch || batch < 2) {
+      if (batch == 0) {
         continue;
       }
 
