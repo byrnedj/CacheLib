@@ -56,6 +56,8 @@ endif()
 
 target_link_libraries(cachelib_navy PUBLIC
   cachelib_common
+  dmlhl
+  dl
   )
 
 install(TARGETS cachelib_navy

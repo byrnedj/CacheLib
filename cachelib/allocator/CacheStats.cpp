@@ -28,6 +28,10 @@ void Stats::init() {
   fragmentationSize = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   allocFailures = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   chainedItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  evictDmlBatchSubmits = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  evictDmlBatchFails = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  promoteDmlBatchSubmits = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  promoteDmlBatchFails = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   regularItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacks = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   auto initToZero = [](auto& a) {
@@ -45,6 +49,10 @@ void Stats::init() {
   initToZero(*allocFailures);
   initToZero(*fragmentationSize);
   initToZero(*chainedItemEvictions);
+  initToZero(*evictDmlBatchSubmits);
+  initToZero(*evictDmlBatchFails);
+  initToZero(*promoteDmlBatchSubmits);
+  initToZero(*promoteDmlBatchFails);
   initToZero(*regularItemEvictions);
   initToZero(*numWritebacks);
 
@@ -56,7 +64,7 @@ struct SizeVerify {};
 
 void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 #ifndef SKIP_SIZE_VERIFY
-  SizeVerify<sizeof(Stats)> a = SizeVerify<16640>{};
+  SizeVerify<sizeof(Stats)> a = SizeVerify<17376>{};
   std::ignore = a;
 #endif
   ret.numCacheGets = numCacheGets.get();
@@ -106,7 +114,11 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 
   ret.allocateLatencyNs = this->allocateLatency_.estimate();
   ret.bgEvictLatencyNs = this->bgEvictLatency_.estimate();
+  ret.evictDmlLargeItemWaitLatencyNs = this->evictDmlLargeItemWaitLatency_.estimate();
+  ret.evictDmlSmallItemWaitLatencyNs = this->evictDmlSmallItemWaitLatency_.estimate();
   ret.bgPromoteLatencyNs = this->bgPromoteLatency_.estimate();
+  ret.promoteDmlLargeItemWaitLatencyNs = this->promoteDmlLargeItemWaitLatency_.estimate();
+  ret.promoteDmlSmallItemWaitLatencyNs = this->promoteDmlSmallItemWaitLatency_.estimate();
   ret.moveChainedLatencyNs = this->moveChainedLatency_.estimate();
   ret.moveRegularLatencyNs = this->moveRegularLatency_.estimate();
   ret.nvmLookupLatencyNs = this->nvmLookupLatency_.estimate();
@@ -152,6 +164,10 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
   ret.evictionAttempts = accum(*evictionAttempts);
   ret.allocFailures = accum(*allocFailures);
   auto chainedEvictions = accum(*chainedItemEvictions);
+  ret.evictDmlBatchSubmits = accum(*evictDmlBatchSubmits);
+  ret.evictDmlBatchFails = accum(*evictDmlBatchFails);
+  ret.promoteDmlBatchSubmits = accum(*promoteDmlBatchSubmits);
+  ret.promoteDmlBatchFails = accum(*promoteDmlBatchFails);
   auto regularEvictions = accum(*regularItemEvictions);
   for (TierId tid = 0; tid < chainedEvictions.size(); tid++) {
     ret.numEvictions.push_back(chainedEvictions[tid] + regularEvictions[tid]);
@@ -226,6 +242,10 @@ PoolStats& PoolStats::operator+=(const PoolStats& other) {
       d.numHits += s.numHits;
       d.numWritebacks += s.numWritebacks;
       d.chainedItemEvictions += s.chainedItemEvictions;
+      d.evictDmlBatchSubmits += s.evictDmlBatchSubmits;
+      d.evictDmlBatchFails += s.evictDmlBatchFails;
+      d.promoteDmlBatchSubmits += s.promoteDmlBatchSubmits;
+      d.promoteDmlBatchFails += s.promoteDmlBatchFails;
       d.regularItemEvictions += s.regularItemEvictions;
     }
 
