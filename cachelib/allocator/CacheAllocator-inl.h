@@ -136,7 +136,18 @@ PrivateSegmentOpts CacheAllocator<CacheTrait>::createPrivateSegmentOpts(TierId t
 }
 
 template <typename CacheTrait>
-size_t CacheAllocator<CacheTrait>::memoryTierSize(TierId tid) const {
+size_t CacheAllocator<CacheTrait>::memoryTierSize(TierId tid) {
+  if (config_.preAssignSlabs) {
+    auto assignments = config_.getClassAssignments(tid,0);
+    uint32_t sum = 0;
+    for (auto entry : assignments) {
+        ClassId cid = entry.first;
+        uint32_t slabs = entry.second;
+        sum += slabs;
+    }
+    sum = sum + 1; //for slab indexing
+    return sum * 1024 * 1024;
+  }
   auto& memoryTierConfigs = config_.memoryTierConfigs;
   auto partitions = std::accumulate(memoryTierConfigs.begin(), memoryTierConfigs.end(), 0UL,
   [](const size_t i, const MemoryTierCacheConfig& config){

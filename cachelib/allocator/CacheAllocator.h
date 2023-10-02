@@ -2293,7 +2293,7 @@ class CacheAllocator : public CacheBase {
   }
   
 
-  size_t memoryTierSize(TierId tid) const;
+  size_t memoryTierSize(TierId tid);
 
   bool tryGetHandleWithWaitContextForMovingItem(Item& item, WriteHandle& handle);
 

@@ -304,7 +304,7 @@ Slab* SlabAllocator::computeSlabMemoryStart(void* memoryStart,
   // compute the number of slabs we can have.
   const auto numHeaderSlabs = numSlabsForHeaders(memorySize);
   if (numSlabs(memorySize) <= numHeaderSlabs) {
-    throw std::invalid_argument("not enough memory for slabs");
+    throw std::invalid_argument(folly::sformat("not enough memory for slabs, got {}, but need {} and {} for headers",numSlabs(memorySize),numSlabs(memorySize),numHeaderSlabs));
   }
 
   if (memoryStart == nullptr ||
