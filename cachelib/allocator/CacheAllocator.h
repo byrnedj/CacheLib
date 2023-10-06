@@ -1693,24 +1693,43 @@ class CacheAllocator : public CacheBase {
   //              not exist.
   FOLLY_ALWAYS_INLINE WriteHandle findFastImpl(Key key, AccessMode mode);
 
-  // Evicts a regular item to a far memory tier.
+  // Evicts a batch of regular item from near to far memory tier.
   //
-  // @param  tid           the id of the tier to look for evictions inside
-  // @param  pid           the id of the pool to look for evictions inside
+  // @param  tid           the id of the tier  to look for evictions inside
+  // @param  pid           the id of the pool  to look for evictions inside
   // @param  cid           the id of the class to look for evictions inside
-  // @param evictionData   Reference to the vector of items being moved
-  // @param newItemHdls    Reference to the vector of new item handles being moved into
-  // @param skipAddInMMContainer
-  //                       So we can tell if we should add in mmContainer or wait
+  // @param  evictionData  reference to the vector of items being moved
+  // @param  newItemHdls   reference to the vector of new item handles being moved into
+  // @param  skipAddInMMContainer
+  //                       so we can tell if we should add in mmContainer or wait
   //                       to do in batch
-  // @param fromBgThread   Use memmove instead of memcopy (for DTO testing)
-  // @param moved          Save the status of move for each item
+  // @param  fromBgThread  use memmove instead of memcopy (for DTO testing)
+  // @param  moved         save the status of move for each item
   void evictRegularItems(TierId tid, PoolId pid, ClassId cid,
                          std::vector<EvictionData>& evictionData,
                          std::vector<WriteHandle>& newItemHdls,
                          bool skipAddInMMContainer,
                          bool fromBgThread,
                          std::vector<bool>& moved);
+
+  // Promote a batch of regular items from far to near memory tier.
+  //
+  // @param  tid           the id of the tier  to look for promotions inside
+  // @param  pid           the id of the pool  to look for promotions inside
+  // @param  cid           the id of the class to look for promotions inside
+  // @param  candidates    reference to the vector of items being promoted
+  // @param  newItemHdls   reference to the vector of new item handles being moved into
+  // @param  skipAddInMMContainer
+  //                       so we can tell if we should add in mmContainer or wait
+  //                       to do in batch
+  // @param  fromBgThread  use memmove instead of memcopy (for DTO testing)
+  // @param  moved         save the status of move for each item
+  void promoteRegularItems(TierId tid, PoolId pid, ClassId cid,
+                           std::vector<Item*>& candidates,
+                           std::vector<WriteHandle>& newItemHdls,
+                           bool skipAddInMMContainer,
+                           bool fromBgThread,
+                           std::vector<bool>& moved);
 
   // Moves a regular item to a different memory tier.
   //
@@ -1726,12 +1745,12 @@ class CacheAllocator : public CacheBase {
                        bool skipAddInMMContainer,
                        bool fromBgThread);
 
-  // Performs book keeping after a regular item is moved to a different memory tier.
+  // Update in the access container after a regular item is moved to a different memory tier.
   //
   // @param oldItem     Reference to the item being moved
   // @param newItemHdl  Reference to the handle of the new item being moved into
   // @return true       If the containers were updated successfully.
-  bool moveRegularItemBookKeeper(Item& oldItem, WriteHandle& newItemHdl);
+  bool completeAccessContainerUpdate(Item& oldItem, WriteHandle& newItemHdl);
 
   // Moves a chained item to a different memory tier.
   //

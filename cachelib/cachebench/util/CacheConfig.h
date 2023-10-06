@@ -81,6 +81,8 @@ struct CacheConfig : public JSONConfig {
   uint64_t largeItemMinSize{8192};
   double largeItemBatchEvictDsaUsageFraction{0.8};
   double smallItemBatchEvictDsaUsageFraction{0.7};
+  double largeItemBatchPromoteDsaUsageFraction{0.8};
+  double smallItemBatchPromoteDsaUsageFraction{0.7};
   uint64_t rebalanceMinSlabs{1};
   double rebalanceDiffRatio{0.25};
   bool moveOnSlabRelease{false};

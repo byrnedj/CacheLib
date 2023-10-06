@@ -156,7 +156,7 @@ struct Stats {
     for (TierId tid = 0; tid < nTiers; tid++) {
         out << folly::sformat(
                    "Tier {} Evict Attempts: {:,}\n"
-                   "Tier {} Success: {:.2f}%",
+                   "Tier {} Eviction Success: {:.2f}%",
                    tid, evictAttempts[tid],
                    tid, invertPctFn(evictAttempts[tid] - numEvictions[tid], evictAttempts[tid]))
             << std::endl;

@@ -1582,6 +1582,7 @@ void CacheAllocator<CacheTrait>::evictRegularItems(TierId tid, PoolId pid, Class
           evictionData[i].candidate->toString()));
     }
   }
+
   if (dmlBatchSize) {
     handler = dml::submit<dml::hardware>(dml::batch, sequence);
     if (!handler.valid()) {
@@ -1613,6 +1614,7 @@ void CacheAllocator<CacheTrait>::evictRegularItems(TierId tid, PoolId pid, Class
     util::LatencyTracker smallItemWait{stats().evictDmlSmallItemWaitLatency_, smallBatch};
     result = handler.get();
   }
+
   if (result.status != dml::status_code::ok) {
     /* Re-try using CPU memmove */
     for (auto i = 0U; i < dmlBatchSize; i++) {
@@ -1625,7 +1627,92 @@ void CacheAllocator<CacheTrait>::evictRegularItems(TierId tid, PoolId pid, Class
 
   /* Complete book keeping for items moved successfully via DSA based batch move */
   for (auto i = 0U; i < dmlBatchSize; i++) {
-    moved[i] = moveRegularItemBookKeeper(*evictionData[i].candidate, newItemHdls[i]);
+    moved[i] = completeAccessContainerUpdate(*evictionData[i].candidate, newItemHdls[i]);
+  }
+}
+
+template <typename CacheTrait>
+void CacheAllocator<CacheTrait>::promoteRegularItems(TierId tid, PoolId pid, ClassId cid,
+                                                     std::vector<Item*>& candidates,
+                                                     std::vector<WriteHandle>& newItemHdls,
+                                                     bool skipAddInMMContainer,
+                                                     bool fromBgThread,
+                                                     std::vector<bool>& moved) {
+  /* Split batch for DSA-based move */
+  const auto& pool = allocator_[tid]->getPool(pid);
+  const auto& allocSizes = pool.getAllocSizes();
+  auto isLarge = allocSizes[cid] >= config_.largeItemMinSize;
+  auto dmlBatchRatio = isLarge ? config_.largeItemBatchPromoteDsaUsageFraction :
+                                 config_.smallItemBatchPromoteDsaUsageFraction;
+  size_t dmlBatchSize =
+      (config_.dsaEnabled && candidates.size() >= config_.minBatchSizeForDsaUsage) ?
+                    static_cast<size_t>(candidates.size() * dmlBatchRatio) : 0;
+  auto sequence = dml::sequence<allocator_t>(dmlBatchSize);
+  batch_handler_t handler{};
+
+  /* Move a calculated portion of the batch using DSA (if enabled) */
+  for (auto i = 0U; i < dmlBatchSize; i++) {
+    XDCHECK(!candidates[i]->isExpired());
+    XDCHECK_EQ(newItemHdls[i]->getSize(), candidates[i]->getSize());
+    if (candidates[i]->isNvmClean()) {
+      newItemHdls[i]->markNvmClean();
+    }
+    dml::const_data_view srcView = dml::make_view(
+        reinterpret_cast<uint8_t*>(candidates[i]->getMemory()), candidates[i]->getSize());
+    dml::data_view dstView = dml::make_view(
+        reinterpret_cast<uint8_t*>(newItemHdls[i]->getMemory()), newItemHdls[i]->getSize());
+    if (sequence.add(dml::mem_copy, srcView, dstView) != dml::status_code::ok) {
+      throw std::runtime_error(folly::sformat(
+          "failed to add dml::mem_copy operation to the sequence for item: {}",
+          candidates[i]->toString()));
+    }
+  }
+
+  if (dmlBatchSize) {
+    handler = dml::submit<dml::hardware>(dml::batch, sequence);
+    if (!handler.valid()) {
+      auto status = handler.get();
+      XDCHECK(handler.valid()) << dmlErrStr(status);
+      throw std::runtime_error(folly::sformat(
+          "Failed dml sequence hw submission: {}", dmlErrStr(status)));
+    }
+    (*stats_.promoteDmlBatchSubmits)[tid][pid][cid].inc();
+  }
+
+  /* Move the remaining batch using CPU memmove */
+  for (auto i = dmlBatchSize; i < candidates.size(); i++) {
+    moved[i] = moveRegularItem(*candidates[i], newItemHdls[i],
+                               skipAddInMMContainer, fromBgThread);
+  }
+
+  /* If DSA batch move not in use */
+  if (!dmlBatchSize) {
+    return;
+  }
+
+  /* Complete the DSA based batch move */
+  dml::batch_result result{};
+  {
+    size_t largeBatch = isLarge ? dmlBatchSize : 0;
+    size_t smallBatch = dmlBatchSize - largeBatch;
+    util::LatencyTracker largeItemWait{stats().promoteDmlLargeItemWaitLatency_, largeBatch};
+    util::LatencyTracker smallItemWait{stats().promoteDmlSmallItemWaitLatency_, smallBatch};
+    result = handler.get();
+  }
+
+  if (result.status != dml::status_code::ok) {
+    /* Re-try using CPU memmove */
+    for (auto i = 0U; i < dmlBatchSize; i++) {
+      moved[i] = moveRegularItem(*candidates[i], newItemHdls[i],
+                                 skipAddInMMContainer, fromBgThread);
+    }
+    (*stats_.promoteDmlBatchFails)[tid][pid][cid].inc();
+    return;
+  }
+
+  /* Complete book keeping for items moved successfully via DSA based batch move */
+  for (auto i = 0U; i < dmlBatchSize; i++) {
+    moved[i] = completeAccessContainerUpdate(*candidates[i], newItemHdls[i]);
   }
 }
 
@@ -1693,11 +1780,11 @@ bool CacheAllocator<CacheTrait>::moveRegularItem(Item& oldItem,
     XDCHECK(!oldItem.hasChainedItem());
     XDCHECK(newItemHdl->hasChainedItem());
   }
-  return moveRegularItemBookKeeper(oldItem, newItemHdl);
+  return completeAccessContainerUpdate(oldItem, newItemHdl);
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::moveRegularItemBookKeeper(
+bool CacheAllocator<CacheTrait>::completeAccessContainerUpdate(
                                 Item& oldItem, WriteHandle& newItemHdl) {
   auto predicate = [&](const Item& item){
     // we rely on moving flag being set (it should block all readers)
@@ -1921,7 +2008,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
       candidateHandles.push_back(std::move(candidateHandle_));
     }
   };
-  
+
   mmContainer.withPromotionIterator(iterateAndMark);
 
   if (candidates.size() < batch) {
@@ -1934,7 +2021,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
       return candidates;  
     }
   }
-  
+
   //1. get and item handle from a new allocation
   for (int i = 0; i < candidates.size(); i++) {
     Item *candidate = candidates[i];
@@ -1954,6 +2041,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
          folly::sformat("Was not to acquire new alloc, failed alloc {}", blankAllocs[i]));
     }
   }
+
   //2. add in batch to mmContainer
   auto& newMMContainer = getMMContainer(tid-1, pid, cid);
   uint32_t added = newMMContainer.addBatch(newAllocs.begin(), newAllocs.end());
@@ -1963,12 +2051,15 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
       folly::sformat("Was not able to add all new items, failed item {} and handle {}", 
                       newAllocs[added]->toString(),newHandles[added]->toString()));
   }
+
   //3. copy item data - don't need to add in mmContainer
+  std::vector<bool> moved(candidates.size());
+  promoteRegularItems(tid, pid, cid, candidates, newHandles, true, true, moved);
+
   for (int i = 0; i < candidates.size(); i++) {
     Item *candidate = candidates[i];
     WriteHandle newHandle = std::move(newHandles[i]);
-    bool moved = moveRegularItem(*candidate,newHandle, true, true);
-    if (moved) {
+    if (moved[i]) {
       XDCHECK(candidate->getKey() == newHandle->getKey());
       if (markMoving) {
         auto ref = candidate->unmarkMoving();
@@ -1980,7 +2071,6 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
       }
     } else {
       typename NvmCacheT::PutToken token{};
-      
       removeFromMMContainer(*newAllocs[i]);
       auto ret = handleFailedMove(candidate,token,false,markMoving);
       XDCHECK(ret);
@@ -1989,7 +2079,6 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
             releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
         XDCHECK(res == ReleaseRes::kReleased);
       }
-
     }
   }
   return candidates;

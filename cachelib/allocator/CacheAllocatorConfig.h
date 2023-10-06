@@ -284,8 +284,10 @@ class CacheAllocatorConfig {
   CacheAllocatorConfig& enableDSA(bool useDsa,
                                   uint64_t minBatchSize,
                                   uint64_t largeItemSizeMin,
-                                  double largeItemBatchFrac,
-                                  double smallItemBatchFrac);
+                                  double largeItemBatchEvictFrac,
+                                  double smallItemBatchEvictFrac,
+                                  double largeItemBatchPromoFrac,
+                                  double smallItemBatchPromoFrac);
 
   // This enables an optimization for Pool rebalancing and resizing.
   // The rough idea is to ensure only the least useful items are evicted when
@@ -517,11 +519,17 @@ class CacheAllocatorConfig {
   // Min item size (in Bytes) to get classified as Large
   uint64_t largeItemMinSize{8192};
 
-  // Large items - 80:20 split
+  // Large items eviction - 80:20 split
   double largeItemBatchEvictDsaUsageFraction{0.8};
 
-  // Small items - 70:30 split
+  // Small items eviction - 70:30 split
   double smallItemBatchEvictDsaUsageFraction{0.7};
+
+  // Large items promotion - 80:20 split
+  double largeItemBatchPromoteDsaUsageFraction{0.8};
+
+  // Small items promotion - 70:30 split
+  double smallItemBatchPromoteDsaUsageFraction{0.7};
 
   // step size for compact cache size optimization: how many percents of the
   // victim to move
@@ -1047,13 +1055,18 @@ template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableDSA(bool useDsa,
                                                             uint64_t minBatchSize,
                                                             uint64_t largeItemSizeMin,
-                                                            double largeItemBatchFrac,
-                                                            double smallItemBatchFrac) {
+                                                            double largeItemBatchEvictFrac,
+                                                            double smallItemBatchEvictFrac,
+                                                            double largeItemBatchPromoFrac,
+                                                            double smallItemBatchPromoFrac) {
   dsaEnabled = useDsa;
   minBatchSizeForDsaUsage = minBatchSize;
   largeItemMinSize = largeItemSizeMin;
-  largeItemBatchEvictDsaUsageFraction = largeItemBatchFrac;
-  smallItemBatchEvictDsaUsageFraction = smallItemBatchFrac;
+  largeItemBatchEvictDsaUsageFraction   = largeItemBatchEvictFrac;
+  smallItemBatchEvictDsaUsageFraction   = smallItemBatchEvictFrac;
+  largeItemBatchPromoteDsaUsageFraction = largeItemBatchPromoFrac;
+  smallItemBatchPromoteDsaUsageFraction = smallItemBatchPromoFrac;
+
   return *this;
 }
 

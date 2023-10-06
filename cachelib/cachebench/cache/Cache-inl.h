@@ -50,7 +50,9 @@ Cache<Allocator>::Cache(const CacheConfig& config,
                              config_.minBatchSizeForDsaUsage,
                              config_.largeItemMinSize,
                              config_.largeItemBatchEvictDsaUsageFraction,
-                             config_.smallItemBatchEvictDsaUsageFraction);
+                             config_.smallItemBatchEvictDsaUsageFraction,
+                             config_.largeItemBatchPromoteDsaUsageFraction,
+                             config_.smallItemBatchPromoteDsaUsageFraction);
   allocatorConfig_.enableBackgroundEvictor(
       config_.getBackgroundEvictorStrategy(),
       std::chrono::milliseconds(config_.backgroundEvictorIntervalMilSec),
