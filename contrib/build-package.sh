@@ -61,6 +61,7 @@ NAME: the dependency to build supported values are:
   googlelog, googleflags, googletest,
   fmt, sparsemap,
   folly, fizz, wangle, mvfst, fbthrift,
+  DTO,
   cachelib
 
   "
@@ -245,6 +246,15 @@ case "$1" in
     SRCDIR=cachelib/external/$NAME
     update_submodules=yes
     cmake_custom_params="-DBUILD_SHARED_LIBS=ON"
+    ;;
+
+  DTO)
+    NAME=DTO
+    REPO=https://github.com/byrnedj/dto
+    REPODIR=cachelib/external/$NAME
+    SRCDIR=$REPODIR
+    external_git_clone=yes
+    external_git_branch=cmake
     ;;
 
   cachelib)
