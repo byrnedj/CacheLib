@@ -146,7 +146,7 @@ size_t CacheAllocator<CacheTrait>::memoryTierSize(TierId tid) {
         sum += slabs;
     }
     sum = sum + 1; //for slab indexing
-    return sum * 1024 * 1024;
+    return sum * Slab::kSize;
   }
   auto& memoryTierConfigs = config_.memoryTierConfigs;
   auto partitions = std::accumulate(memoryTierConfigs.begin(), memoryTierConfigs.end(), 0UL,
@@ -2057,7 +2057,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   bool lastTier = tid+1 >= getNumTiers();
   unsigned int maxSearchTries = std::max(config_.evictionSearchTries,
                                             batch*4);
-  if (!lastTier && !inclusive) {
+  if (!lastTier) { // && !inclusive) {
     blankAllocs = allocateInternalTierByCidBatch(tid+1,pid,cid,batch);
     if (blankAllocs.empty()) {
       return {candidates,toRecycles};  
@@ -2171,7 +2171,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   mmContainer.withEvictionIterator(iterateAndMark);
 
   if (candidates.size() < batch) {
-    if (!lastTier && !inclusive) {
+    if (!lastTier) { // && !inclusive) {
       unsigned int toErase = batch - candidates.size();
       if (blankAllocs.size() < toErase) {
           throw std::runtime_error(
@@ -2187,6 +2187,8 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
     }
   }
   
+  std::vector<int> allocd(batch, 0);
+  
   if (!lastTier) {
     //1. get and item handle from a new allocation
     for (int i = 0; i < candidates.size(); i++) {
@@ -2197,6 +2199,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
                      candidate->getCreationTime(), candidate->getExpiryTime()));
         XDCHECK(newItemHdl);
         if (newItemHdl) {
+          allocd[i] = 1;
           newItemHdl.markNascent();
           (*stats_.fragmentationSize)[tid][pid][cid].add(
               util::getFragmentation(*this, *newItemHdl));
@@ -2212,17 +2215,42 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       } else {
         Item* nextCopy = reinterpret_cast<Item*>(candidate->getNextTierCopy());
         if (nextCopy == nullptr) {
-          (*stats_.numWritebacksFailNoAlloc)[tid][pid][cid].inc();
+          WriteHandle newItemHdl = acquire(new (blankAllocs[i]) 
+                  Item(candidate->getKey(), candidate->getSize(),
+                       candidate->getCreationTime(), candidate->getExpiryTime()));
+          XDCHECK(newItemHdl);
+          if (newItemHdl) {
+            allocd[i] = 1;
+            newItemHdl.markNascent();
+            (*stats_.fragmentationSize)[tid][pid][cid].add(
+                util::getFragmentation(*this, *newItemHdl));
+            newAllocs.push_back(newItemHdl.getInternal());
+            newHandles.push_back(std::move(newItemHdl));
+          } else {
+            (*stats_.numWritebacksFailNoAlloc)[tid][pid][cid].inc();
+            //newAllocs.push_back(0);
+            //newHandles.push_back(WriteHandle{});
+            //failed to get item handle
+            throw std::runtime_error(
+               folly::sformat("Was not to acquire new alloc, failed alloc {}", blankAllocs[i]));
+          }
           //throw std::runtime_error(
           //   folly::sformat("Was not to get next copy, failed alloc {}", candidate->toString()));
-          newAllocs.push_back(0);
-          newHandles.push_back(WriteHandle{});
+          //newAllocs.push_back(0);
+          //newHandles.push_back(WriteHandle{});
         } else {
           newAllocs.push_back(nextCopy);
           newHandles.push_back(acquire(nextCopy));
         }
       }
     }
+
+    for (int i = 0; i < batch; i++) {
+      if (allocd[i] == 0) {
+        allocator_[tid+1]->free(blankAllocs[i]);
+      }
+    }
+
     //2. add in batch to mmContainer
     auto& newMMContainer = getMMContainer(tid+1, pid, cid);
     uint32_t added = newMMContainer.addBatch(newAllocs);

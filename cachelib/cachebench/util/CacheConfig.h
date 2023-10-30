@@ -325,6 +325,10 @@ struct CacheConfig : public JSONConfig {
 
   CacheConfig() {}
 
+
+  std::vector<uint64_t> getAllocSizes() {
+      return allocSizes;
+  }
   std::shared_ptr<RebalanceStrategy> getRebalanceStrategy() const;
   std::shared_ptr<BackgroundMoverStrategy> getBackgroundEvictorStrategy() const;
   std::shared_ptr<BackgroundMoverStrategy> getBackgroundPromoterStrategy() const;

@@ -268,6 +268,8 @@ struct StressorConfig : public JSONConfig {
   uint64_t timestampFactor{1000};
 
   bool useCombinedLockForIterators{false};
+  
+  std::vector<uint64_t> allocSizes{};
 
   // admission policy for cache.
   std::shared_ptr<StressorAdmPolicy> admPolicy{};
@@ -277,6 +279,10 @@ struct StressorConfig : public JSONConfig {
 
   // return true if the workload configuration uses chained items.
   bool usesChainedItems() const;
+
+  void setAllocSizes(std::vector<uint64_t> allocSizes_) {
+    allocSizes = allocSizes_;
+  }
 };
 
 // user defined function to configure parts of cache config outside of the

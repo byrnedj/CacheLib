@@ -98,10 +98,15 @@ class KVReplayGenerator : public ReplayGeneratorBase {
       stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
     }
 
+    //std::condition_variable cv;
     genWorker_ = std::thread([this] {
       folly::setThreadName("cb_replay_gen");
       genRequests();
     });
+
+    genWorker_.join();
+    //XLOGF(INFO, "== wait Baton: {}",(void*)&cv);
+    //cv.wait();
 
     XLOGF(INFO,
           "Started KVReplayGenerator (amp factor {}, # of stressor threads {})",
@@ -147,8 +152,8 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   // full (producer) or empty (consumer).
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
-  static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 10000;
+  static constexpr uint64_t checkIntervalUs_ = 10;
+  static constexpr size_t kMaxRequests = 50000000;
 
   using ReqQueue = folly::ProducerConsumerQueue<std::unique_ptr<ReqWrapper>>;
 
@@ -200,6 +205,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   std::atomic<uint64_t> parseError = 0;
   std::atomic<uint64_t> parseSuccess = 0;
 
+  //void genRequests(folly::fibers::Baton& baton);
   void genRequests();
 
   void setEOF() { eof.store(true, std::memory_order_relaxed); }
@@ -306,11 +312,13 @@ inline std::unique_ptr<ReqWrapper> KVReplayGenerator::getReqInternal() {
 }
 
 inline void KVReplayGenerator::genRequests() {
+  //XLOGF(INFO, "== gen Baton: {}",(void*)&baton);
   while (!shouldShutdown()) {
     std::unique_ptr<ReqWrapper> reqWrapper;
     try {
       reqWrapper = getReqInternal();
     } catch (const EndOfTrace& e) {
+      //baton.post();    
       break;
     }
 
@@ -336,18 +344,21 @@ inline void KVReplayGenerator::genRequests() {
       }
 
       auto shardId = getShard(req->req_.key);
+      //auto shardId = getShardBySize(req->key_.size() + req->sizes_[0]);
       auto& stressorCtx = getStressorCtx(shardId);
       auto& reqQ = *stressorCtx.reqQueue_;
 
       while (!reqQ.write(std::move(req)) && !stressorCtx.isFinished() &&
              !shouldShutdown()) {
+        //baton.post();    
         // ProducerConsumerQueue does not support blocking, so use sleep
-        std::this_thread::sleep_for(
-            std::chrono::microseconds{checkIntervalUs_});
+        //std::this_thread::sleep_for(
+        //    std::chrono::microseconds{checkIntervalUs_});
       }
     }
   }
 
+  //baton.post();    
   setEOF();
 }
 
@@ -357,6 +368,7 @@ const Request& KVReplayGenerator::getReq(uint8_t,
   std::unique_ptr<ReqWrapper> reqWrapper;
 
   auto& stressorCtx = getStressorCtx();
+  //auto& reqQ = *stressorCtx.reqQueue_[stressorCtx.id_];
   auto& reqQ = *stressorCtx.reqQueue_;
   auto& resubmitQueue = stressorCtx.resubmitQueue_;
 
@@ -365,7 +377,7 @@ const Request& KVReplayGenerator::getReq(uint8_t,
       throw cachelib::cachebench::EndOfTrace("Test stopped or EOF reached");
     }
     // ProducerConsumerQueue does not support blocking, so use sleep
-    std::this_thread::sleep_for(std::chrono::microseconds{checkIntervalUs_});
+    //std::this_thread::sleep_for(std::chrono::microseconds{checkIntervalUs_});
   }
 
   if (!reqWrapper) {

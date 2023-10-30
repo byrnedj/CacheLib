@@ -304,6 +304,7 @@ struct Stats {
                 out << folly::sformat("{:20} {:8} in ns: {:>10.2f}\n", cat, pct, val);
               };
 
+              fmtLatency("p10", latency.p10);
               fmtLatency("p50", latency.p50);
               fmtLatency("p90", latency.p90);
               fmtLatency("p99", latency.p99);

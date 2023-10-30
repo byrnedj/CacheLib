@@ -302,6 +302,16 @@ class ReplayGeneratorBase : public GeneratorBase {
       return folly::Random::rand32(numShards_);
     }
   }
+  
+  // Return the shard for the key.
+  uint32_t getShardBySize(uint32_t size) {
+    for (uint32_t i = 1; i < config_.allocSizes.size(); i++) {
+      if (size+64 > config_.allocSizes[i]) {
+          return i-1;
+      }
+    }
+    return 0;
+  }
 };
 
 } // namespace cachebench
