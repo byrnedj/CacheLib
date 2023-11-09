@@ -103,6 +103,8 @@ class KVReplayGenerator : public ReplayGeneratorBase {
       genRequests();
     });
 
+    genWorker_.join();
+
     XLOGF(INFO,
           "Started KVReplayGenerator (amp factor {}, # of stressor threads {})",
           ampFactor_, numShards_);
@@ -148,7 +150,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 10000;
+  static constexpr size_t kMaxRequests = 1000000000;
 
   using ReqQueue = folly::ProducerConsumerQueue<std::unique_ptr<ReqWrapper>>;
 
