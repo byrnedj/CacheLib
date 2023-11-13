@@ -27,6 +27,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <dml/dml.hpp>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -1692,6 +1693,44 @@ class CacheAllocator : public CacheBase {
   //              not exist.
   FOLLY_ALWAYS_INLINE WriteHandle findFastImpl(Key key, AccessMode mode);
 
+  // Evicts a batch of regular item from near to far memory tier.
+  //
+  // @param  tid           the id of the tier  to look for evictions inside
+  // @param  pid           the id of the pool  to look for evictions inside
+  // @param  cid           the id of the class to look for evictions inside
+  // @param  evictionData  reference to the vector of items being moved
+  // @param  newItemHdls   reference to the vector of new item handles being moved into
+  // @param  skipAddInMMContainer
+  //                       so we can tell if we should add in mmContainer or wait
+  //                       to do in batch
+  // @param  fromBgThread  use memmove instead of memcopy (for DTO testing)
+  // @param  moved         save the status of move for each item
+  void evictRegularItems(TierId tid, PoolId pid, ClassId cid,
+                         std::vector<EvictionData>& evictionData,
+                         std::vector<WriteHandle>& newItemHdls,
+                         bool skipAddInMMContainer,
+                         bool fromBgThread,
+                         std::vector<bool>& moved);
+
+  // Promote a batch of regular items from far to near memory tier.
+  //
+  // @param  tid           the id of the tier  to look for promotions inside
+  // @param  pid           the id of the pool  to look for promotions inside
+  // @param  cid           the id of the class to look for promotions inside
+  // @param  candidates    reference to the vector of items being promoted
+  // @param  newItemHdls   reference to the vector of new item handles being moved into
+  // @param  skipAddInMMContainer
+  //                       so we can tell if we should add in mmContainer or wait
+  //                       to do in batch
+  // @param  fromBgThread  use memmove instead of memcopy (for DTO testing)
+  // @param  moved         save the status of move for each item
+  void promoteRegularItems(TierId tid, PoolId pid, ClassId cid,
+                           std::vector<Item*>& candidates,
+                           std::vector<WriteHandle>& newItemHdls,
+                           bool skipAddInMMContainer,
+                           bool fromBgThread,
+                           std::vector<bool>& moved);
+
   // Moves a regular item to a different memory tier.
   //
   // @param oldItem     Reference to the item being moved
@@ -1701,7 +1740,17 @@ class CacheAllocator : public CacheBase {
   // @param fromBgThread use memmove instead of memcopy (for DTO testing)
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
-  bool moveRegularItem(Item& oldItem, WriteHandle& newItemHdl, bool skipAddInMMContainer, bool fromBgThread);
+  bool moveRegularItem(Item& oldItem,
+                       WriteHandle& newItemHdl,
+                       bool skipAddInMMContainer,
+                       bool fromBgThread);
+
+  // Update in the access container after a regular item is moved to a different memory tier.
+  //
+  // @param oldItem     Reference to the item being moved
+  // @param newItemHdl  Reference to the handle of the new item being moved into
+  // @return true       If the containers were updated successfully.
+  bool completeAccessContainerUpdate(Item& oldItem, WriteHandle& newItemHdl);
 
   // Moves a chained item to a different memory tier.
   //
@@ -2099,7 +2148,10 @@ class CacheAllocator : public CacheBase {
 
   // exposed for the background evictor to iterate through the memory and evict
   // in batch. This should improve insertion path for tiered memory config
-  size_t traverseAndEvictItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
+  size_t traverseAndEvictItems(unsigned int tid,
+                               unsigned int pid,
+                               unsigned int cid,
+                               size_t batch) {
     util::LatencyTracker tracker{stats().bgEvictLatency_, batch};
     auto& mmContainer = getMMContainer(tid, pid, cid);
     uint32_t currItems = mmContainer.size();
@@ -2109,14 +2161,16 @@ class CacheAllocator : public CacheBase {
           return 0;
         }
     }
-    auto evictionData = getNextCandidates(tid,pid,cid,batch,
-                                     !config_.useHandleForBgSync,true);
+    auto evictionData = getNextCandidates(tid, pid, cid, batch, !config_.useHandleForBgSync, true);
     size_t evictions = evictionData.size();
     (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
     return evictions;
   }
   
-  size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
+  size_t traverseAndPromoteItems(unsigned int tid,
+                                 unsigned int pid,
+                                 unsigned int cid,
+                                 size_t batch) {
     util::LatencyTracker tracker{stats().bgPromoteLatency_, batch};
     auto candidates = getNextCandidatesPromotion(tid,pid,cid,batch,
                                      !config_.useHandleForBgSync,true);
