@@ -362,6 +362,7 @@ class CacheAllocator : public CacheBase {
   using MMSerializationTypeContainer =
       typename MMType::SerializationTypeContainer;
   using AccessSerializationType = typename AccessType::SerializationType;
+  using AllocatorsSerializationType = serialization::MemoryAllocatorCollection;
 
   using ShmManager = facebook::cachelib::ShmManager;
 
@@ -2168,7 +2169,7 @@ class CacheAllocator : public CacheBase {
   PrivateSegmentOpts createPrivateSegmentOpts(TierId tid);
   std::unique_ptr<MemoryAllocator> createPrivateAllocator(TierId tid);
   std::unique_ptr<MemoryAllocator> createNewMemoryAllocator(TierId tid);
-  std::unique_ptr<MemoryAllocator> restoreMemoryAllocator(TierId tid);
+  std::unique_ptr<MemoryAllocator> restoreMemoryAllocator(TierId tid, const serialization::MemoryAllocatorObject& sAllocator);
   std::unique_ptr<CCacheManager> restoreCCacheManager(TierId tid);
 
   PoolIds filterCompactCachePools(const PoolIds& poolIds) const;
