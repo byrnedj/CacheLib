@@ -2140,6 +2140,10 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       Item* toRecycleParent_ = chainedItem_
               ? &toRecycle_->asChainedItem().getParentItem(compressor_)
               : nullptr;
+      if (toRecycle_->isExpired()) {
+          ++itr;
+          continue;
+      }
       // in order to safely check if the expected parent (toRecycleParent_) matches
       // the current parent on the chained item, we need to take the chained
       // item lock so we are sure that nobody else will be editing the chain
