@@ -888,12 +888,13 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
   if (dataSize < 1)
     return;
 
-  auto ptr = reinterpret_cast<char*>(getMemory(handle));
-  std::strncpy(ptr, str.c_str(), dataSize);
+  auto ptr = reinterpret_cast<void*>(getMemory(handle));
+  std::memcpy(ptr, str.c_str(), dataSize);
 
+  auto ptr2 = reinterpret_cast<char*>(getMemory(handle));
   // Make sure the copied string ends with null char
   if (str.size() + 1 > dataSize) {
-    ptr[dataSize - 1] = '\0';
+    ptr2[dataSize - 1] = '\0';
   }
 }
 
