@@ -85,6 +85,19 @@ class TraceFileStream {
     return infile_;
   }
 
+  // The number of requests (not including ampFactor) to skip
+  // in the trace. This is so that after warming up the cache
+  // with a certain number of requests, we can easily reattach
+  // and resume execution with different cache configurations.
+  void fastFowardTrace(uint64_t fastFowardCount) {
+    uint64_t count = 0;
+    while (count < fastFowardCount) {
+      std::string line;
+      this->getline(line); // can throw
+      count++;
+    }
+  }
+
   bool setNextLine(const std::string& line) {
     nextLineFields_.clear();
     folly::split(",", line, nextLineFields_);
@@ -263,6 +276,7 @@ class ReplayGeneratorBase : public GeneratorBase {
       : config_(config),
         repeatTraceReplay_{config_.repeatTraceReplay},
         ampFactor_(config.replayGeneratorConfig.ampFactor),
+        fastFowardCount_(config.replayGeneratorConfig.fastFowardCount),
         timestampFactor_(config.timestampFactor),
         numShards_(config.numThreads),
         mode_(config_.replayGeneratorConfig.getSerializationMode()) {
@@ -280,6 +294,7 @@ class ReplayGeneratorBase : public GeneratorBase {
   const StressorConfig config_;
   const bool repeatTraceReplay_;
   const size_t ampFactor_;
+  const uint64_t fastFowardCount_;
 
   // The constant to be divided from the timestamp value
   // to turn the timestamp into seconds.

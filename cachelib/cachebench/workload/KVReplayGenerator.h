@@ -100,14 +100,15 @@ class KVReplayGenerator : public ReplayGeneratorBase {
 
     genWorker_ = std::thread([this] {
       folly::setThreadName("cb_replay_gen");
+      traceStream_.fastFowardTrace(fastFowardCount_);
       genRequests();
     });
 
     genWorker_.join();
 
     XLOGF(INFO,
-          "Started KVReplayGenerator (amp factor {}, # of stressor threads {})",
-          ampFactor_, numShards_);
+          "Started KVReplayGenerator (amp factor {}, # of stressor threads {}, fast foward {})",
+          ampFactor_, numShards_, fastFowardCount_);
   }
 
   virtual ~KVReplayGenerator() {
