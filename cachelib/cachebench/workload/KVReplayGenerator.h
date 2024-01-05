@@ -22,6 +22,7 @@
 #include <folly/lang/Aligned.h>
 #include <folly/logging/xlog.h>
 #include <folly/system/ThreadName.h>
+#include <folly/synchronization/Latch.h>
 
 #include "cachelib/cachebench/cache/Cache.h"
 #include "cachelib/cachebench/util/Exceptions.h"
@@ -98,13 +99,14 @@ class KVReplayGenerator : public ReplayGeneratorBase {
       stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
     }
 
-    genWorker_ = std::thread([this] {
+    folly::Latch latch(1);
+    genWorker_ = std::thread([this, &latch] {
       folly::setThreadName("cb_replay_gen");
       traceStream_.fastFowardTrace(fastFowardCount_);
-      genRequests();
+      genRequests(latch);
     });
 
-    genWorker_.join();
+    latch.wait();
 
     XLOGF(INFO,
           "Started KVReplayGenerator (amp factor {}, # of stressor threads {}, fast foward {})",
@@ -151,7 +153,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 1000000000;
+  static constexpr size_t kMaxRequests = 10000000;
 
   using ReqQueue = folly::ProducerConsumerQueue<std::unique_ptr<ReqWrapper>>;
 
@@ -203,7 +205,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   std::atomic<uint64_t> parseError = 0;
   std::atomic<uint64_t> parseSuccess = 0;
 
-  void genRequests();
+  void genRequests(folly::Latch& latch);
 
   void setEOF() { eof.store(true, std::memory_order_relaxed); }
   bool isEOF() { return eof.load(std::memory_order_relaxed); }
@@ -308,12 +310,18 @@ inline std::unique_ptr<ReqWrapper> KVReplayGenerator::getReqInternal() {
   return reqWrapper;
 }
 
-inline void KVReplayGenerator::genRequests() {
+inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
+  bool init = true;
+  uint64_t nreqs = 0;
+  auto begin = util::getCurrentTimeSec();
   while (!shouldShutdown()) {
     std::unique_ptr<ReqWrapper> reqWrapper;
     try {
       reqWrapper = getReqInternal();
     } catch (const EndOfTrace& e) {
+      if (init) {
+	latch.count_down();
+      }
       break;
     }
 
@@ -345,8 +353,20 @@ inline void KVReplayGenerator::genRequests() {
       while (!reqQ.write(std::move(req)) && !stressorCtx.isFinished() &&
              !shouldShutdown()) {
         // ProducerConsumerQueue does not support blocking, so use sleep
+	if (init) {
+	  latch.count_down();
+	  init = false;
+	}
         std::this_thread::sleep_for(
             std::chrono::microseconds{checkIntervalUs_});
+      }
+      nreqs++;
+      if (nreqs > 20000000 && init) {
+        auto end = util::getCurrentTimeSec();
+	double reqsPerSec = nreqs / (double)(end - begin);
+        XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);
+	latch.count_down();
+	init = false;
       }
     }
   }
