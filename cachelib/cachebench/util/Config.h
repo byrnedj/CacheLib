@@ -130,7 +130,7 @@ struct ReplayGeneratorConfig : public JSONConfig {
   // in the trace. This is so that after warming up the cache
   // with a certain number of requests, we can easily reattach
   // and resume execution with different cache configurations.
-  uint64_t fastFowardCount{0};
+  uint64_t fastForwardCount{0};
 
   // The time interval threshold when replaySerializationMode is relaxed.
   uint64_t relaxedSerialIntervalMs{500};

@@ -46,7 +46,7 @@ class PieceWiseReplayGenerator : public ReplayGeneratorBase {
     }
 
     traceGenThread_ = std::thread([this]() {
-        traceStream_.fastFowardTrace(fastFowardCount_);
+        traceStream_.fastForwardTrace(fastForwardCount_);
         getReqFromTrace();
     });
   }

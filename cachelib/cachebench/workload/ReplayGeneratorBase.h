@@ -89,9 +89,9 @@ class TraceFileStream {
   // in the trace. This is so that after warming up the cache
   // with a certain number of requests, we can easily reattach
   // and resume execution with different cache configurations.
-  void fastFowardTrace(uint64_t fastFowardCount) {
+  void fastForwardTrace(uint64_t fastForwardCount) {
     uint64_t count = 0;
-    while (count < fastFowardCount) {
+    while (count < fastForwardCount) {
       std::string line;
       this->getline(line); // can throw
       count++;
@@ -276,7 +276,7 @@ class ReplayGeneratorBase : public GeneratorBase {
       : config_(config),
         repeatTraceReplay_{config_.repeatTraceReplay},
         ampFactor_(config.replayGeneratorConfig.ampFactor),
-        fastFowardCount_(config.replayGeneratorConfig.fastFowardCount),
+        fastForwardCount_(config.replayGeneratorConfig.fastForwardCount),
         timestampFactor_(config.timestampFactor),
         numShards_(config.numThreads),
         mode_(config_.replayGeneratorConfig.getSerializationMode()) {
@@ -294,7 +294,7 @@ class ReplayGeneratorBase : public GeneratorBase {
   const StressorConfig config_;
   const bool repeatTraceReplay_;
   const size_t ampFactor_;
-  const uint64_t fastFowardCount_;
+  const uint64_t fastForwardCount_;
 
   // The constant to be divided from the timestamp value
   // to turn the timestamp into seconds.
