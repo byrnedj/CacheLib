@@ -942,12 +942,10 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
   auto dptr = reinterpret_cast<void*>(getMemory(handle));
   auto sptr = reinterpret_cast<const void*>(str.c_str());
   nt_move(dptr,sptr,dataSize);
-  //std::strncpy(ptr, str.c_str(), dataSize);
-
   // Make sure the copied string ends with null char
-  //if (str.size() + 1 > dataSize) {
-  //  dptr[dataSize - 1] = '\0';
-  //}
+  if (str.size() + 1 > dataSize) {
+    dptr[dataSize - 1] = '\0';
+  }
 }
 
 #define CACHE_LINE_SIZE 64

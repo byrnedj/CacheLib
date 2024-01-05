@@ -22,6 +22,7 @@
 #include <folly/lang/Aligned.h>
 #include <folly/logging/xlog.h>
 #include <folly/system/ThreadName.h>
+#include <folly/synchronization/Latch.h>
 
 #include "cachelib/cachebench/cache/Cache.h"
 #include "cachelib/cachebench/util/Exceptions.h"
@@ -155,15 +156,13 @@ class KVReplayGenerator : public ReplayGeneratorBase {
         }
         XLOGF(INFO,"======================");
     }
-    //std::condition_variable cv;
-    genWorker_ = std::thread([this] {
+    
+    folly::Latch latch(1);
+    genWorker_ = std::thread([this, &latch] {
       folly::setThreadName("cb_replay_gen");
-      genRequests();
+      genRequests(latch);
     });
-
-    genWorker_.join();
-    //XLOGF(INFO, "== wait Baton: {}",(void*)&cv);
-    //cv.wait();
+    latch.wait();
 
     XLOGF(INFO,
           "Started KVReplayGenerator (amp factor {}, # of stressor threads {})",
@@ -263,8 +262,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   std::atomic<uint64_t> parseError = 0;
   std::atomic<uint64_t> parseSuccess = 0;
 
-  //void genRequests(folly::fibers::Baton& baton);
-  void genRequests();
+  void genRequests(folly::Latch& latch);
 
   void setEOF() { eof.store(true, std::memory_order_relaxed); }
   bool isEOF() { return eof.load(std::memory_order_relaxed); }
@@ -370,19 +368,24 @@ inline std::unique_ptr<ReqWrapper> KVReplayGenerator::getReqInternal() {
   return reqWrapper;
 }
 
-inline void KVReplayGenerator::genRequests() {
+inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
   uint32_t nclasses = config_.allocSizes.size();
   uint32_t max = config_.allocSizes[nclasses-1];
   XLOGF(INFO, "nclasses: {}, nshards: {}, max item size: {}",nclasses,numShards_,max);
   uint64_t waits = 0;
   uint64_t treqs = 0;
+  bool init = true;
+  uint64_t nreqs = 0;
+  auto begin = util::getCurrentTimeSec();
   while (!shouldShutdown()) {
     std::unique_ptr<ReqWrapper> reqWrapper;
     try {
       reqWrapper = getReqInternal();
       treqs++;
     } catch (const EndOfTrace& e) {
-      //baton.post();    
+      if (init) {
+	latch.count_down();
+      }
       break;
     }
 
@@ -439,11 +442,22 @@ inline void KVReplayGenerator::genRequests() {
               XLOGF(INFO,"======= sum {} =========", sum);
           }
           waits++;
-          //baton.post();    
           // ProducerConsumerQueue does not support blocking, so use sleep
-          //std::this_thread::sleep_for(
-          //    std::chrono::microseconds{checkIntervalUs_});
+	  if (init) {
+	    latch.count_down();
+	    init = false;
+	  }
+          std::this_thread::sleep_for(
+              std::chrono::microseconds{checkIntervalUs_});
         }
+      }
+      nreqs++;
+      if (nreqs > 20000000 && init) {
+        auto end = util::getCurrentTimeSec();
+	double reqsPerSec = nreqs / (double)(end - begin);
+        XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);
+	latch.count_down();
+	init = false;
       }
     }
   }
