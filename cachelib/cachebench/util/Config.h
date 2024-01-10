@@ -131,6 +131,9 @@ struct ReplayGeneratorConfig : public JSONConfig {
   // with a certain number of requests, we can easily reattach
   // and resume execution with different cache configurations.
   uint64_t fastForwardCount{0};
+  
+  // The number of requests to pre load into the request queues
+  uint64_t preLoadReqs{0};
 
   // The time interval threshold when replaySerializationMode is relaxed.
   uint64_t relaxedSerialIntervalMs{500};

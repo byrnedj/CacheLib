@@ -153,7 +153,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 10000000;
+  static constexpr size_t kMaxRequests = 100000000;
 
   using ReqQueue = folly::ProducerConsumerQueue<std::unique_ptr<ReqWrapper>>;
 
@@ -361,7 +361,7 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
             std::chrono::microseconds{checkIntervalUs_});
       }
       nreqs++;
-      if (nreqs > 20000000 && init) {
+      if (nreqs > preLoadReqs_ && init) {
         auto end = util::getCurrentTimeSec();
 	double reqsPerSec = nreqs / (double)(end - begin);
         XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);

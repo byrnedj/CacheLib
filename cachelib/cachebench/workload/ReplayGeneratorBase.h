@@ -277,6 +277,7 @@ class ReplayGeneratorBase : public GeneratorBase {
         repeatTraceReplay_{config_.repeatTraceReplay},
         ampFactor_(config.replayGeneratorConfig.ampFactor),
         fastForwardCount_(config.replayGeneratorConfig.fastForwardCount),
+        preLoadReqs_(config.replayGeneratorConfig.preLoadReqs),
         timestampFactor_(config.timestampFactor),
         numShards_(config.numThreads),
         mode_(config_.replayGeneratorConfig.getSerializationMode()) {
@@ -295,6 +296,7 @@ class ReplayGeneratorBase : public GeneratorBase {
   const bool repeatTraceReplay_;
   const size_t ampFactor_;
   const uint64_t fastForwardCount_;
+  const uint64_t preLoadReqs_;
 
   // The constant to be divided from the timestamp value
   // to turn the timestamp into seconds.
