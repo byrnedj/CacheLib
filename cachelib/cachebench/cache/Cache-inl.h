@@ -943,8 +943,9 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
   auto sptr = reinterpret_cast<const void*>(str.c_str());
   nt_move(dptr,sptr,dataSize);
   // Make sure the copied string ends with null char
+  char *ptr2 = reinterpret_cast<char*>(dptr);
   if (str.size() + 1 > dataSize) {
-    dptr[dataSize - 1] = '\0';
+    ptr2[dataSize - 1] = '\0';
   }
 }
 

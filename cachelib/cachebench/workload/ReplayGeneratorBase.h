@@ -295,6 +295,7 @@ class ReplayGeneratorBase : public GeneratorBase {
       : config_(config),
         repeatTraceReplay_{config_.repeatTraceReplay},
         ampFactor_(config.replayGeneratorConfig.ampFactor),
+        preLoadReqs_(config.replayGeneratorConfig.preLoadReqs),
         timestampFactor_(config.timestampFactor),
         numShards_(config.numThreads),
         mode_(config_.replayGeneratorConfig.getSerializationMode()) {
@@ -313,6 +314,7 @@ class ReplayGeneratorBase : public GeneratorBase {
   const bool repeatTraceReplay_;
   const size_t ampFactor_;
   std::array<StressorId,100> shardToStressor;
+  const uint64_t preLoadReqs_;
 
   // The constant to be divided from the timestamp value
   // to turn the timestamp into seconds.

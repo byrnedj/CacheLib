@@ -452,7 +452,7 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
         }
       }
       nreqs++;
-      if (nreqs > 20000000 && init) {
+      if (nreqs > preLoadReqs_ && init) {
         auto end = util::getCurrentTimeSec();
 	double reqsPerSec = nreqs / (double)(end - begin);
         XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);

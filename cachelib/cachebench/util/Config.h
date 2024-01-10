@@ -126,6 +126,9 @@ struct ReplayGeneratorConfig : public JSONConfig {
 
   uint32_t ampFactor{1};
 
+  // The number of requests to pre load into the request queues
+  uint64_t preLoadReqs{0};
+
   // The time interval threshold when replaySerializationMode is relaxed.
   uint64_t relaxedSerialIntervalMs{500};
 
