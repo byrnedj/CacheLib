@@ -112,7 +112,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
       size_t nreqs = traceStream_.getN() * ampFactor_;
       totalReqs_ = nreqs;
       size_t binReqSize = sizeof(BinaryRequest);
-      size_t totalSize = sizeof(size_t) + nreqs*binReqSize + nreqs*256; //256 for max key size
+      size_t totalSize = sizeof(size_t) + nreqs*binReqSize + nreqs*80; //80 since avg key size = 63
       size_t totalSizeP = totalSize + (4096 - totalSize % 4096); //page align
       ftruncate(fd, totalSizeP);
       void *memory = mmap(nullptr,totalSizeP,PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
@@ -389,7 +389,6 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
         if (keySize > 10) {
           // trunkcate the key
           size_t newSize = std::max<size_t>(keySize - 4, 10u);
-          keySize = newSize;
           req->key_.resize(newSize, '0');
         }
         req->key_.append(folly::sformat("{:04d}", keySuffix));
@@ -411,7 +410,7 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
         auto binReq = BinaryRequest(keySize,req->sizes_[0],req->repeats_,op,
                                     req->req_.ttlSecs, keyOffset);
         std::memcpy(outputStreamReqs_ + nreqs, &binReq, sizeof(binReq));
-        std::strncpy(outputStreamKeys_ + keyOffset, req->key_.c_str(), keySize);
+        std::memcpy(outputStreamKeys_ + keyOffset, req->key_.c_str(), keySize);
         nreqs++;
         if ((nreqs % 10000000) == 0) {
           XLOGF(INFO, "Parsed: {} reqs", nreqs);

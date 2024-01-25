@@ -65,8 +65,8 @@ struct BinaryRequest {
   uint8_t op_;
   uint16_t repeats_;
   uint16_t ttl_;
-  size_t keyOffset_;
-  size_t valueSize_;
+  uint64_t keyOffset_;
+  uint32_t valueSize_;
 
   BinaryRequest() = default;
 

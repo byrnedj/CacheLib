@@ -265,7 +265,7 @@ const Request& BinaryKVReplayGenerator::getReq(uint8_t,
   }
   auto r = getRequestPtr();
   r->update(key,
-           const_cast<size_t*>(&req->valueSize_),
+           const_cast<size_t*>(reinterpret_cast<size_t*>(&req->valueSize_)),
            op,
            req->ttl_,
            reinterpret_cast<uint64_t>(req));
