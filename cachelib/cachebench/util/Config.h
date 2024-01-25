@@ -126,6 +126,9 @@ struct ReplayGeneratorConfig : public JSONConfig {
 
   uint32_t ampFactor{1};
 
+  // the path of the binary file to make
+  std::string binaryFileName{};
+
   // The number of requests (not including ampFactor) to skip
   // in the trace. This is so that after warming up the cache
   // with a certain number of requests, we can easily reattach

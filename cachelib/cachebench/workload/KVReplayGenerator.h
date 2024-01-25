@@ -98,13 +98,54 @@ class KVReplayGenerator : public ReplayGeneratorBase {
     for (uint32_t i = 0; i < numShards_; ++i) {
       stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
     }
-
+    if (!binaryFileName_.empty()) {
+      makeBinaryFile_ = true;
+    }
     folly::Latch latch(1);
-    genWorker_ = std::thread([this, &latch] {
-      folly::setThreadName("cb_replay_gen");
+    if (makeBinaryFile_) {
+      XLOGF(INFO,
+            "Started generating binary file from KVReplayGenerator"
+            "(amp factor {}, # of stressor threads {}, fast foward {})",
+            ampFactor_, numShards_, fastForwardCount_);
+      int fd = open(binaryFileName_.c_str(),O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+      // first get the number of requests
+      size_t nreqs = traceStream_.getN() * ampFactor_;
+      totalReqs_ = nreqs;
+      size_t binReqSize = sizeof(BinaryRequest);
+      size_t totalSize = sizeof(size_t) + nreqs*binReqSize + nreqs*256; //256 for max key size
+      size_t totalSizeP = totalSize + (4096 - totalSize % 4096); //page align
+      ftruncate(fd, totalSizeP);
+      void *memory = mmap(nullptr,totalSizeP,PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+      void *copy = memory;
+      // the first entry is the total number of requests in the file, so we can
+      // calculate the key offset
+      size_t* first = reinterpret_cast<size_t*>(memory);
+      std::memcpy(first,&nreqs,sizeof(size_t));
+      first++;
+      memory = reinterpret_cast<void*>(first);
+      outputStreamReqs_ = reinterpret_cast<BinaryRequest*>(memory);
+      outputStreamKeys_ = reinterpret_cast<char*>(memory);
+      outputStreamKeys_ += nreqs*binReqSize;
+      folly::setThreadName("cb_binary_gen");
       traceStream_.fastForwardTrace(fastForwardCount_);
       genRequests(latch);
-    });
+      int res = msync(copy,totalSizeP,MS_SYNC);
+      if (res != 0) {
+          XLOGF(INFO,"msync error {}",res);
+      }
+      res = munmap(copy,totalSizeP);
+      if (res != 0) {
+          XLOGF(INFO,"unmap error {}",res);
+      }
+      close(fd);
+      exit(0);
+    } else {
+      genWorker_ = std::thread([this, &latch] {
+        folly::setThreadName("cb_replay_gen");
+        traceStream_.fastForwardTrace(fastForwardCount_);
+        genRequests(latch);
+      });
+    }
 
     latch.wait();
 
@@ -195,6 +236,10 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   std::vector<std::unique_ptr<StressorCtx>> stressorCtxs_;
 
   TraceFileStream traceStream_;
+  BinaryRequest* outputStreamReqs_;
+  char* outputStreamKeys_;
+  size_t totalReqs_;
+  bool makeBinaryFile_{false};
 
   std::thread genWorker_;
 
@@ -313,6 +358,8 @@ inline std::unique_ptr<ReqWrapper> KVReplayGenerator::getReqInternal() {
 inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
   bool init = true;
   uint64_t nreqs = 0;
+  size_t keyOffset = 0;
+  size_t keyAddr;
   auto begin = util::getCurrentTimeSec();
   while (!shouldShutdown()) {
     std::unique_ptr<ReqWrapper> reqWrapper;
@@ -334,34 +381,60 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
         req = std::make_unique<ReqWrapper>(*reqWrapper);
       }
 
+      size_t keySize = req->key_.size();
       if (ampFactor_ > 1) {
         // Replace the last 4 bytes with thread Id of 4 decimal chars. In doing
         // so, keep at least 10B from the key for uniqueness; 10B is the max
         // number of decimal digits for uint32_t which is used to encode the key
-        if (req->key_.size() > 10) {
+        if (keySize > 10) {
           // trunkcate the key
-          size_t newSize = std::max<size_t>(req->key_.size() - 4, 10u);
+          size_t newSize = std::max<size_t>(keySize - 4, 10u);
+          keySize = newSize;
           req->key_.resize(newSize, '0');
         }
         req->key_.append(folly::sformat("{:04d}", keySuffix));
       }
 
-      auto shardId = getShard(req->req_.key);
-      auto& stressorCtx = getStressorCtx(shardId);
-      auto& reqQ = *stressorCtx.reqQueue_;
+      if (makeBinaryFile_) {
+        uint8_t op = 0;
+        switch (req->req_.getOp()) {
+            case OpType::kGet:
+                op = 1;
+                break;
+            case OpType::kSet:
+                op = 2;
+                break;
+            case OpType::kDel:
+                op = 3;
+                break;
+        }
+        auto binReq = BinaryRequest(keySize,req->sizes_[0],req->repeats_,op,
+                                    req->req_.ttlSecs, keyOffset);
+        std::memcpy(outputStreamReqs_ + nreqs, &binReq, sizeof(binReq));
+        std::strncpy(outputStreamKeys_ + keyOffset, req->key_.c_str(), keySize);
+        nreqs++;
+        if ((nreqs % 10000000) == 0) {
+          XLOGF(INFO, "Parsed: {} reqs", nreqs);
+        }
+        keyOffset += keySize;
+      } else {
+        auto shardId = getShard(req->req_.key);
+        auto& stressorCtx = getStressorCtx(shardId);
+        auto& reqQ = *stressorCtx.reqQueue_;
 
-      while (!reqQ.write(std::move(req)) && !stressorCtx.isFinished() &&
-             !shouldShutdown()) {
-        // ProducerConsumerQueue does not support blocking, so use sleep
-	if (init) {
-	  latch.count_down();
-	  init = false;
-	}
-        std::this_thread::sleep_for(
-            std::chrono::microseconds{checkIntervalUs_});
+        while (!reqQ.write(std::move(req)) && !stressorCtx.isFinished() &&
+               !shouldShutdown()) {
+          // ProducerConsumerQueue does not support blocking, so use sleep
+          if (init) {
+            latch.count_down();
+            init = false;
+          }
+          std::this_thread::sleep_for(
+              std::chrono::microseconds{checkIntervalUs_});
+        }
       }
-      nreqs++;
-      if (nreqs > preLoadReqs_ && init) {
+
+      if (nreqs >= preLoadReqs_ && init) {
         auto end = util::getCurrentTimeSec();
 	double reqsPerSec = nreqs / (double)(end - begin);
         XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);
