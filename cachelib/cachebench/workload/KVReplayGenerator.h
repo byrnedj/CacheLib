@@ -34,6 +34,8 @@ namespace facebook {
 namespace cachelib {
 namespace cachebench {
 
+#define BIN_REQ_INT 100000000
+
 struct ReqWrapper {
   ReqWrapper() = default;
 
@@ -359,8 +361,10 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
   bool init = true;
   uint64_t nreqs = 0;
   size_t keyOffset = 0;
+  size_t lastKeyOffset = 0;
   size_t keyAddr;
   auto begin = util::getCurrentTimeSec();
+  auto binReqStart = util::getCurrentTimeSec();
   while (!shouldShutdown()) {
     std::unique_ptr<ReqWrapper> reqWrapper;
     try {
@@ -396,6 +400,7 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
 
       if (makeBinaryFile_) {
         uint8_t op = 0;
+
         switch (req->req_.getOp()) {
             case OpType::kGet:
                 op = 1;
@@ -411,10 +416,30 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
                                     req->req_.ttlSecs, keyOffset);
         std::memcpy(outputStreamReqs_ + nreqs, &binReq, sizeof(binReq));
         std::memcpy(outputStreamKeys_ + keyOffset, req->key_.c_str(), keySize);
-        nreqs++;
-        if ((nreqs % 10000000) == 0) {
-          XLOGF(INFO, "Parsed: {} reqs", nreqs);
+        if ((nreqs % BIN_REQ_INT) == 0 && nreqs > 0) {
+          auto end = util::getCurrentTimeSec();
+          double reqsPerSec = BIN_REQ_INT / (double)(end - binReqStart);
+
+          uint64_t reqStart = reinterpret_cast<uint64_t>(outputStreamReqs_ + (nreqs - BIN_REQ_INT));
+          reqStart = reqStart + (4096 - reqStart % 4096);
+          uint64_t reqEnd = reinterpret_cast<uint64_t>(outputStreamReqs_ + nreqs);
+          reqEnd = reqEnd + (4096 - reqEnd % 4096);
+          int rres = madvise( reinterpret_cast<void*>(reqStart), reqEnd - reqStart, MADV_DONTNEED);
+          XDCHECK_EQ(rres,0);
+
+          uint64_t keyStart = reinterpret_cast<uint64_t>(outputStreamKeys_ + lastKeyOffset);
+          keyStart = keyStart + (4096 - keyStart % 4096);
+          uint64_t keyEnd = reinterpret_cast<uint64_t>(outputStreamKeys_ + keyOffset);
+          keyEnd = keyEnd + (4096 - keyEnd % 4096);
+
+          int kres = madvise( reinterpret_cast<void*>(keyStart), keyEnd - keyStart, MADV_DONTNEED);
+          XDCHECK_EQ(kres,0);
+
+          XLOGF(INFO, "Parsed: {} reqs ({:.2f} reqs/sec)",  nreqs, reqsPerSec );
+          lastKeyOffset = keyOffset;
+          binReqStart = util::getCurrentTimeSec();
         }
+        nreqs++;
         keyOffset += keySize;
       } else {
         auto shardId = getShard(req->req_.key);
