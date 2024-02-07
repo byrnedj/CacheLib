@@ -95,7 +95,7 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 500000000; //just stores pointers to mmap'd data
+  static constexpr size_t kMaxRequests = 20000000; //just stores pointers to mmap'd data
 
   using ReqQueue = folly::ProducerConsumerQueue<BinaryRequest*>;
 

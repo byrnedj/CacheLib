@@ -196,7 +196,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 100000000;
+  static constexpr size_t kMaxRequests = 20000000;
 
   using ReqQueue = folly::ProducerConsumerQueue<std::unique_ptr<ReqWrapper>>;
 

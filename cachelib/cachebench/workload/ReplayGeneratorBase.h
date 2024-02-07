@@ -37,6 +37,8 @@
 #include "cachelib/cachebench/util/Exceptions.h"
 #include "cachelib/cachebench/workload/GeneratorBase.h"
 
+#define PG_RELEASE 100000000
+
 namespace facebook {
 namespace cachelib {
 namespace cachebench {
@@ -311,6 +313,7 @@ class BinaryFileStream {
     binaryKeyData_ = reinterpret_cast<char*>(binaryData);
     binaryKeyData_ += nreqs_*sizeof(BinaryRequest);
     offset_ = 0;
+    lastKeyOffset_ = 0;
   }
  
   char* getKeyOffset() {
@@ -318,6 +321,31 @@ class BinaryFileStream {
   }
 
   BinaryRequest* getNextPtr() {
+    if ((offset_ % PG_RELEASE == 0) && offset_ > 0) {
+      uint64_t reqStart = reinterpret_cast<uint64_t>(binaryReqData_ + (offset_ - PG_RELEASE));
+      reqStart = reqStart + (4096 - reqStart % 4096);
+      uint64_t reqEnd = reinterpret_cast<uint64_t>(binaryReqData_ + offset_);
+      reqEnd = reqEnd + (4096 - reqEnd % 4096);
+      //int rres = 0;
+      int rres = madvise( reinterpret_cast<void*>(reqStart), reqEnd - reqStart, MADV_DONTNEED);
+      XDCHECK_EQ(rres,0);
+      if (rres != 0) {
+	XLOGF(INFO,"Failed to release old reqs, last {} curr {}",offset_-PG_RELEASE, offset_);
+      }
+      
+      uint64_t keyStart = reinterpret_cast<uint64_t>(binaryKeyData_ + lastKeyOffset_);
+      keyStart = keyStart + (4096 - keyStart % 4096);
+      uint64_t keyEnd = reinterpret_cast<uint64_t>(binaryKeyData_ + currKeyOffset_);
+      keyEnd = keyEnd + (4096 - keyEnd % 4096);
+      //int kres = 0;
+      int kres = madvise( reinterpret_cast<void*>(keyStart), keyEnd - keyStart, MADV_DONTNEED);
+      XDCHECK_EQ(kres,0);
+      if (kres != 0) {
+	XLOGF(INFO,"Failed to release old keys, last {} curr {}",lastKeyOffset_, currKeyOffset_);
+      }
+      lastKeyOffset_ = currKeyOffset_;
+
+    }
     if (offset_ >= nreqs_) {
       if (!repeatTraceReplay_) {
         throw cachelib::cachebench::EndOfTrace("");
@@ -326,6 +354,7 @@ class BinaryFileStream {
       }
     }
     BinaryRequest* binReq = binaryReqData_ + offset_;
+    currKeyOffset_ = binReq->keyOffset_;
     offset_++;
     XDCHECK_LT(binReq->op_,12);
     return binReq;
@@ -344,6 +373,8 @@ class BinaryFileStream {
     size_t offset_;
     size_t fileSize_;
     uint64_t nreqs_;
+    size_t lastKeyOffset_;
+    size_t currKeyOffset_;
     int fd_;
 };
 
