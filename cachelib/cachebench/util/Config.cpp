@@ -197,6 +197,7 @@ DistributionConfig::DistributionConfig(const folly::dynamic& jsonConfig,
 
 ReplayGeneratorConfig::ReplayGeneratorConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, ampFactor);
+  JSONSetVal(configJson, ampSizeFactor);
   JSONSetVal(configJson, binaryFileName);
   JSONSetVal(configJson, fastForwardCount);
   JSONSetVal(configJson, preLoadReqs);

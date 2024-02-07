@@ -125,6 +125,7 @@ struct ReplayGeneratorConfig : public JSONConfig {
   std::string replaySerializationMode{"strict"};
 
   uint32_t ampFactor{1};
+  uint32_t ampSizeFactor{1};
 
   // the path of the binary file to make
   std::string binaryFileName{};

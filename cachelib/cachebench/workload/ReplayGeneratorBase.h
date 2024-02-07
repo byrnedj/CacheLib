@@ -354,6 +354,7 @@ class ReplayGeneratorBase : public GeneratorBase {
       : config_(config),
         repeatTraceReplay_{config_.repeatTraceReplay},
         ampFactor_(config.replayGeneratorConfig.ampFactor),
+        ampSizeFactor_(config.replayGeneratorConfig.ampSizeFactor),
         binaryFileName_(config.replayGeneratorConfig.binaryFileName),
         fastForwardCount_(config.replayGeneratorConfig.fastForwardCount),
         preLoadReqs_(config.replayGeneratorConfig.preLoadReqs),
@@ -374,6 +375,7 @@ class ReplayGeneratorBase : public GeneratorBase {
   const StressorConfig config_;
   const bool repeatTraceReplay_;
   const size_t ampFactor_;
+  const size_t ampSizeFactor_;
   const uint64_t fastForwardCount_;
   const uint64_t preLoadReqs_;
   const std::string binaryFileName_;

@@ -107,8 +107,8 @@ class KVReplayGenerator : public ReplayGeneratorBase {
     if (makeBinaryFile_) {
       XLOGF(INFO,
             "Started generating binary file from KVReplayGenerator"
-            "(amp factor {}, # of stressor threads {}, fast foward {})",
-            ampFactor_, numShards_, fastForwardCount_);
+            "(amp factor {}, size factor {}, # of stressor threads {}, fast foward {})",
+            ampFactor_, ampSizeFactor_, numShards_, fastForwardCount_);
       int fd = open(binaryFileName_.c_str(),O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
       // first get the number of requests
       size_t nreqs = traceStream_.getN() * ampFactor_;
@@ -412,7 +412,11 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
                 op = 3;
                 break;
         }
-        auto binReq = BinaryRequest(keySize,req->sizes_[0],req->repeats_,op,
+	auto valueSize = req->sizes_[0]*ampSizeFactor_;
+	if (valueSize > 4000000) {
+	  valueSize = 4000000;
+	}	
+        auto binReq = BinaryRequest(keySize,valueSize,req->repeats_,op,
                                     req->req_.ttlSecs, keyOffset);
         std::memcpy(outputStreamReqs_ + nreqs, &binReq, sizeof(binReq));
         std::memcpy(outputStreamKeys_ + keyOffset, req->key_.c_str(), keySize);
@@ -456,6 +460,7 @@ inline void KVReplayGenerator::genRequests(folly::Latch& latch) {
           std::this_thread::sleep_for(
               std::chrono::microseconds{checkIntervalUs_});
         }
+        nreqs++;
       }
 
       if (nreqs >= preLoadReqs_ && init) {
