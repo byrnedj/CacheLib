@@ -306,14 +306,17 @@ class BinaryFileStream {
 	XLOGF(INFO, "Error reading file size {}",infileName_);
     }
     fileSize_ = fileStat.st_size;
-    size_t* binaryData = reinterpret_cast<size_t*>(mmap(nullptr, fileSize_, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd_, 0));
+    size_t *binaryData = reinterpret_cast<size_t*>(mmap(nullptr, fileSize_, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd_, 0));
+    pgBinaryData_ = reinterpret_cast<void*>(binaryData);
     nreqs_ = binaryData[0];
     binaryData++;
     binaryReqData_ = reinterpret_cast<BinaryRequest*>(binaryData);
     binaryKeyData_ = reinterpret_cast<char*>(binaryData);
     binaryKeyData_ += nreqs_*sizeof(BinaryRequest);
+    pgBinaryKeyData_ = reinterpret_cast<void*>(binaryKeyData_) +  (4096 - reinterpret_cast<uint64_t>(binaryKeyData_) % 4096);
     offset_ = 0;
     lastKeyOffset_ = 0;
+    relcount_ = 1;
   }
  
   char* getKeyOffset() {
@@ -321,29 +324,37 @@ class BinaryFileStream {
   }
 
   BinaryRequest* getNextPtr() {
-    if ((offset_ % PG_RELEASE == 0) && offset_ > 0) {
-      uint64_t reqStart = reinterpret_cast<uint64_t>(binaryReqData_ + (offset_ - PG_RELEASE));
-      reqStart = reqStart + (4096 - reqStart % 4096);
-      uint64_t reqEnd = reinterpret_cast<uint64_t>(binaryReqData_ + offset_);
-      reqEnd = reqEnd + (4096 - reqEnd % 4096);
+    //here we are at PG_REQUESTS*2 (200M) we can release the first 100M requests
+    if ((offset_ % PG_RELEASE == 0) && offset_ > PG_RELEASE*2) {
+      //uint64_t reqStart = reinterpret_cast<uint64_t>(binaryReqData_ + (offset_ - PG_RELEASE));
+      //reqStart = reqStart + (4096 - reqStart % 4096);
+      //uint64_t reqEnd = reinterpret_cast<uint64_t>(binaryReqData_ + PG_RELEASE*relcount);
+      //reqEnd = reqEnd + (4096 - reqEnd % 4096);
       //int rres = 0;
-      int rres = madvise( reinterpret_cast<void*>(reqStart), reqEnd - reqStart, MADV_DONTNEED);
+      //int rres = madvise( reinterpret_cast<void*>(reqStart), reqEnd - reqStart, MADV_DONTNEED);
+      uint64_t keyBytes = binaryReqData_[PG_RELEASE*relcount_].keyOffset_;
+      int rres = madvise( reinterpret_cast<void*>(pgBinaryData_), (PG_RELEASE*relcount_) * sizeof(BinaryRequest) + sizeof(size_t), MADV_DONTNEED);
       XDCHECK_EQ(rres,0);
       if (rres != 0) {
-	XLOGF(INFO,"Failed to release old reqs, last {} curr {}",offset_-PG_RELEASE, offset_);
+	XLOGF(INFO,"Failed to release old reqs, nrel {} curr {}, res {}",PG_RELEASE*relcount_, offset_,strerror(errno));
+      } else {
+	XLOGF(INFO,"release old reqs, nrel {} curr {}",PG_RELEASE*relcount_, offset_);
       }
       
-      uint64_t keyStart = reinterpret_cast<uint64_t>(binaryKeyData_ + lastKeyOffset_);
-      keyStart = keyStart + (4096 - keyStart % 4096);
-      uint64_t keyEnd = reinterpret_cast<uint64_t>(binaryKeyData_ + currKeyOffset_);
-      keyEnd = keyEnd + (4096 - keyEnd % 4096);
+      
+      //uint64_t keyStart = reinterpret_cast<uint64_t>(binaryKeyData_ + lastKeyOffset_);
+      //keyStart = keyStart + (4096 - keyStart % 4096);
+      //uint64_t keyEnd = reinterpret_cast<uint64_t>(binaryKeyData_ + currKeyOffset_);
+      //keyEnd = keyEnd + (4096 - keyEnd % 4096);
       //int kres = 0;
-      int kres = madvise( reinterpret_cast<void*>(keyStart), keyEnd - keyStart, MADV_DONTNEED);
+      int kres = madvise( reinterpret_cast<void*>(pgBinaryKeyData_), keyBytes, MADV_DONTNEED);
       XDCHECK_EQ(kres,0);
       if (kres != 0) {
-	XLOGF(INFO,"Failed to release old keys, last {} curr {}",lastKeyOffset_, currKeyOffset_);
+	XLOGF(INFO,"Failed to release old keys, curr {}",keyBytes);
+      } else {
+	XLOGF(INFO,"release old keys, curr {}",keyBytes);
       }
-      lastKeyOffset_ = currKeyOffset_;
+      relcount_++;
 
     }
     if (offset_ >= nreqs_) {
@@ -370,7 +381,10 @@ class BinaryFileStream {
     std::string infileName_;
     BinaryRequest *binaryReqData_;
     char *binaryKeyData_;
+    void *pgBinaryKeyData_;
+    void *pgBinaryData_;
     size_t offset_;
+    size_t relcount_;
     size_t fileSize_;
     uint64_t nreqs_;
     size_t lastKeyOffset_;
