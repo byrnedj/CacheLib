@@ -32,6 +32,8 @@ namespace cachebench {
 // stressor thread and aggregated once the stress test finishes.
 struct ThroughputStats {
   uint64_t set{0}; // number of set operations
+  uint64_t setBytes{0};
+  uint64_t getBytes{0};
   uint64_t setFailure{0};
   uint64_t get{0};
   uint64_t getMiss{0};

@@ -1693,7 +1693,9 @@ class CacheAllocator : public CacheBase {
   // @param fromBgThread use memmove instead of memcopy (for DTO testing)
   // @return true  If the move was completed, and the containers were updated
   //               successfully.
-  bool moveRegularItem(Item& oldItem, WriteHandle& newItemHdl, bool skipAddInMMContainer, bool fromBgThread);
+  bool moveRegularItem(Item& oldItem, WriteHandle& newItemHdl, bool skipAddInMMContainer, bool fromBgThread, int allocd);
+
+  void nt_move(void *__restrict dst, const void * __restrict src, size_t n); 
 
   // Moves a chained item to a different memory tier.
   //

@@ -309,6 +309,7 @@ class Cache {
   // returns true if touching value is enabled.
   bool touchValueEnabled() const { return touchValue_; }
 
+  void nt_move(void *__restrict dst, const void * __restrict src, size_t n); 
   // return true if the key was previously detected to be inconsistent. This
   // is useful only when consistency checking is enabled by calling
   // enableConsistencyCheck()

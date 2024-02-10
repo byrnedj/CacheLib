@@ -68,7 +68,8 @@ class BackgroundMover : public PeriodicWorker {
   //                            (promoted vs. evicted and how much)
   BackgroundMover(Cache& cache,
                   std::shared_ptr<BackgroundMoverStrategy> strategy,
-                  MoverDir direction_);
+                  MoverDir direction,
+                  uint32_t id);
 
   ~BackgroundMover() override;
 
@@ -110,6 +111,7 @@ class BackgroundMover : public PeriodicWorker {
   Cache& cache_;
   std::shared_ptr<BackgroundMoverStrategy> strategy_;
   MoverDir direction_;
+  uint32_t id_;
 
   std::function<size_t(
       Cache&, unsigned int, unsigned int, unsigned int, size_t)>

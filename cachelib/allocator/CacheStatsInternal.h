@@ -229,11 +229,15 @@ struct Stats {
   std::unique_ptr<PerTierPerPoolClassTLCounters> cacheHits{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> allocAttempts{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> evictionAttempts{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> onlineEvictions{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> allocFailures{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> fragmentationSize{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> chainedItemEvictions{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> regularItemEvictions{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacks{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacksIncl{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacksExcl{};
+  std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebackBytes{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> numInclWrites{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacksFailBadMove{};
   std::unique_ptr<PerTierPerPoolClassAtomicCounters> numWritebacksFailNoAlloc{};

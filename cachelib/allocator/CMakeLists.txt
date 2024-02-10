@@ -73,6 +73,9 @@ else()
   target_compile_definitions(cachelib_allocator PRIVATE SKIP_SIZE_VERIFY)
 endif()
 
+if (BUILD_MEMCACHED)
+  target_compile_definitions(cachelib_allocator PRIVATE MEMCACHED)
+endif()
 
 install(TARGETS cachelib_allocator
         EXPORT cachelib-exports

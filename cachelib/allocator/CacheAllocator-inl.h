@@ -138,6 +138,7 @@ PrivateSegmentOpts CacheAllocator<CacheTrait>::createPrivateSegmentOpts(TierId t
 template <typename CacheTrait>
 size_t CacheAllocator<CacheTrait>::memoryTierSize(TierId tid) {
   if (config_.preAssignSlabs) {
+
     auto assignments = config_.getClassAssignments(tid,0);
     uint32_t sum = 0;
     for (auto entry : assignments) {
@@ -313,7 +314,7 @@ void CacheAllocator<CacheTrait>::initWorkers() {
   }
 
   if (config_.itemsReaperEnabled() && !reaper_) {
-    startNewReaper(config_.reaperInterval, config_.reaperConfig);
+    //startNewReaper(config_.reaperInterval, config_.reaperConfig);
   }
 
   if (config_.poolOptimizerEnabled() && !poolOptimizer_) {
@@ -429,7 +430,7 @@ size_t CacheAllocator<CacheTrait>::backgroundWorkerId(TierId tid, PoolId pid, Cl
   XDCHECK(numWorkers);
 
   // TODO: came up with some better sharding (use some hashing)
-  return (tid + pid + cid) % numWorkers;
+  return (cid + pid + tid) % numWorkers;
 }
 
 template <typename CacheTrait>
@@ -511,6 +512,9 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
     handle = acquire(new (memory) Item(key, size, creationTime, expiryTime));
     if (handle) {
       handle.markNascent();
+      if (config_.isClassInclusive(cid)) {
+        handle->markInclusive();
+      }
       (*stats_.fragmentationSize)[tid][pid][cid].add(
           util::getFragmentation(*this, *handle));
     }
@@ -1469,9 +1473,49 @@ size_t CacheAllocator<CacheTrait>::wakeUpWaitersLocked(folly::StringPiece key,
   return 0;
 }
 
+#define CACHE_LINE_SIZE 64
+#define NT_THRESHOLD (2 * CACHE_LINE_SIZE)
+template <typename CacheTrait>
+void CacheAllocator<CacheTrait>::nt_move(void *__restrict dst, const void * __restrict src, size_t n) { 
+    if (n < NT_THRESHOLD) {
+        std::memcpy(dst, src, n);
+        return;
+    }
+
+    size_t n_unaligned = CACHE_LINE_SIZE - (uintptr_t)dst % CACHE_LINE_SIZE;
+
+    if (n_unaligned > n)
+        n_unaligned = n;
+
+    std::memcpy(dst, src, n_unaligned);
+    dst += n_unaligned;
+    src += n_unaligned;
+    n -= n_unaligned;
+
+    size_t num_lines = n / CACHE_LINE_SIZE;
+
+    size_t i;
+    for (i = 0; i < num_lines; i++) {
+        size_t j;
+        for (j = 0; j < CACHE_LINE_SIZE / sizeof(__m128i); j++) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src);
+            /* non-temporal store */
+            _mm_stream_si128((__m128i *)dst, blk);
+            src += sizeof(__m128i);
+            dst += sizeof(__m128i);
+        }
+        n -= CACHE_LINE_SIZE;
+    }
+
+    if (num_lines > 0)
+        _mm_sfence();
+
+    std::memcpy(dst, src, n);
+}
+
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::moveRegularItem(
-    Item& oldItem, WriteHandle& newItemHdl, bool skipAddInMMContainer, bool fromBgThread) {
+    Item& oldItem, WriteHandle& newItemHdl, bool skipAddInMMContainer, bool fromBgThread, int allocd) {
   XDCHECK(!oldItem.isExpired());
   // TODO: should we introduce new latency tracker. E.g. evictRegularLatency_
   // ??? util::LatencyTracker tracker{stats_.evictRegularLatency_};
@@ -1531,20 +1575,38 @@ bool CacheAllocator<CacheTrait>::moveRegularItem(
     // statement if the old item has been removed or replaced, in which case it
     // should be fine for it to be left in an inconsistent state.
     config_.moveCb(oldItem, *newItemHdl, nullptr);
-  } else if ( (srcTid < dstTid &&
-          (oldItem.isInclusive() && oldItem.isDirty() ) || (!oldItem.isInclusive())) ||
-              (srcTid >= dstTid ) ) {
+  } else if ( 
+             ( (srcTid < dstTid) &&
+               (oldItem.isInclusive() && (oldItem.isDirty()  || allocd) ) ||
+               (!oldItem.isInclusive()) ) || 
+             (srcTid >= dstTid ) ) {
+    uint32_t oldSize = oldItem.getSize();
     if (srcTid < dstTid) {
       const auto allocInfo = allocator_[srcTid]->getAllocInfo(oldItem.getMemory());
       (*stats_.numWritebacks)[srcTid][allocInfo.poolId][allocInfo.classId].inc();
+      (*stats_.numWritebackBytes)[srcTid][allocInfo.poolId][allocInfo.classId].add(oldSize);
+      if (oldItem.isInclusive() && (oldItem.isDirty() || allocd)) {
+          nt_move(newItemHdl->getMemory(),oldItem.getMemory(),oldSize);
+          //if (allocd) {
+          //   (*stats_.numWritebacksExcl)[srcTid][allocInfo.poolId][allocInfo.classId].inc();
+          //} else {
+          (*stats_.numWritebacksIncl)[srcTid][allocInfo.poolId][allocInfo.classId].inc();
+          //}
+      } else if (!oldItem.isInclusive()) {
+          nt_move(newItemHdl->getMemory(),oldItem.getMemory(),oldSize);
+          (*stats_.numWritebacksExcl)[srcTid][allocInfo.poolId][allocInfo.classId].inc();
+      }
+    } else if (srcTid >= dstTid) {
+      nt_move(newItemHdl->getMemory(),oldItem.getMemory(),oldSize);
     }
-    if (fromBgThread) {
-      std::memmove(newItemHdl->getMemory(), oldItem.getMemory(),
-                oldItem.getSize());
-    } else {
-      std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
-                oldItem.getSize());
-    }
+    //if (fromBgThread) {
+    //  //std::memmove(newItemHdl->getMemory(), oldItem.getMemory(),
+    //  //          oldSize);
+    //  nt_move(newItemHdl->getMemory(),oldItem.getMemory(),oldSize);
+    //} else {
+    //  std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
+    //            oldSize);
+    //}
   }
 
   if (!skipAddInMMContainer) {
@@ -1671,9 +1733,9 @@ CacheAllocator<CacheTrait>::createPutToken(Item& item) {
 
 template <typename CacheTrait>
 void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
-  XDCHECK(it.isMarkedForEviction());
-  XDCHECK_EQ(0u, it.getRefCount());
-  accessContainer_->remove(it);
+  if (it.isAccessible()) {
+    accessContainer_->remove(it);
+  }
   if (!it.isInMMContainer()) {
     removeFromMMContainer(it);
   }
@@ -1686,13 +1748,19 @@ void CacheAllocator<CacheTrait>::unlinkItemForEviction(Item& it) {
   if (it.wasPromoted()) {
       it.unmarkPromoted();
   }
-  const auto ref = it.unmarkForEviction();
-  if (ref != 0u) {
-    throw std::runtime_error(
-      folly::sformat("item ref not zero in eviction: {}", 
-                      it.toString()));
+  if (it.isMarkedForEviction()) {
+    XDCHECK(it.isMarkedForEviction());
+    XDCHECK_EQ(0u, it.getRefCount());
+    const auto ref = it.unmarkForEviction();
+    if (ref != 0u) {
+      int *p = 0;
+      *p = 1;
+      throw std::runtime_error(
+        folly::sformat("item ref not zero in eviction: {}", 
+                        it.toString()));
+    }
+    XDCHECK_EQ(0u, ref) << it.toString();
   }
-  XDCHECK_EQ(0u, ref) << it.toString();
 }
 
 template <typename CacheTrait>
@@ -1844,7 +1912,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
   for (int i = 0; i < candidates.size(); i++) {
     Item *candidate = candidates[i];
     WriteHandle newHandle = std::move(newHandles[i]);
-    bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true) : false;
+    bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true, 0) : false;
     if (moved) {
       (*stats_.numPromotions)[tid][pid][cid].inc();
       XDCHECK(candidate->getKey() == newHandle->getKey());
@@ -2001,7 +2069,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
   for (int i = 0; i < candidates.size(); i++) {
     Item *candidate = candidates[i];
     WriteHandle newHandle = std::move(newHandles[i]);
-    bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true) : false;
+    bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true, 0) : false;
     if (moved) {
       XDCHECK(candidate->getKey() == newHandle->getKey());
       if (markMoving) {
@@ -2264,7 +2332,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
     for (int i = 0; i < candidates.size(); i++) {
       Item *candidate = candidates[i];
       WriteHandle newHandle = std::move(newHandles[i]);
-      bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true) : false;
+      bool moved = newHandle ? moveRegularItem(*candidate,newHandle, true, true, allocd[i]) : false;
       if (moved) {
         XDCHECK(candidate->getKey() == newHandle->getKey());
         if (markMoving) {
@@ -2498,7 +2566,8 @@ CacheAllocator<CacheTrait>::getNextCandidate(TierId tid,
     XDCHECK(!candidate->isAccessible());
     XDCHECK(candidate->getKey() == evictedToNext->getKey());
 
-    (*stats_.numWritebacks)[tid][pid][cid].inc();
+    //(*stats_.numWritebacks)[tid][pid][cid].inc();
+    //(*stats_.numWritebackBytes)[tid][pid][cid].add(candidate->getSize());
     if (chainedItem) {
       XDCHECK(toRecycleParent->isMoving());
       XDCHECK_EQ(evictedToNext->getRefCount(),2u);
@@ -2525,6 +2594,7 @@ CacheAllocator<CacheTrait>::getNextCandidate(TierId tid,
           // parent back to allocator
       }
     } else {
+      (*stats_.onlineEvictions)[tid][pid][cid].inc();
       wakeUpWaiters(*candidate, std::move(evictedToNext));
     }
   }
@@ -2633,7 +2703,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
   while (++nextTier < getNumTiers()) { // try to evict down to the next memory tiers
     // always evict item from the nextTier to make room for new item
     bool evict = true;
-
+    int allocd = 0;
     // allocateInternal might trigger another eviction
     WriteHandle newItemHdl{};
     Item* parentItem;
@@ -2663,9 +2733,18 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
         if (nextCopy != nullptr) {
           newItemHdl = acquire(nextCopy);
         } else {
+          allocd = 1;
           const auto allocInfo =
             allocator_[tid]->getAllocInfo(static_cast<const void*>(&item));
-          (*stats_.numWritebacksFailNoAlloc)[tid][pid][allocInfo.classId].inc();
+          newItemHdl = allocateInternalTier(tid+1, allocInfo.poolId,
+                       item.getKey(),
+                       item.getSize(),
+                       item.getCreationTime(),
+                       item.getExpiryTime(),
+                       true);
+          if (!newItemHdl) {
+            (*stats_.numWritebacksFailNoAlloc)[tid][pid][allocInfo.classId].inc();
+          }
           //throw std::runtime_error(
           //   folly::sformat("Was not to get next copy, failed alloc {}", item.toString()));
         }
@@ -2678,7 +2757,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
           ? moveChainedItem(item.asChainedItem(),
                             newItemHdl, *parentItem)
           : moveRegularItem(item, newItemHdl, 
-                  /* skipAddInMMContainer */ false, /* fromBgThread*/ false);
+                  /* skipAddInMMContainer */ false, /* fromBgThread*/ false, allocd);
       if (!moveSuccess) {
         XDCHECK(!newItemHdl->isInMMContainer());
         return WriteHandle{};
@@ -3482,15 +3561,29 @@ PoolId CacheAllocator<CacheTrait>::addPool(
   PoolId pid = 0;
   size_t totalCacheSize = 0;
 
+  XLOGF(INFO,"CacheItem is {} bytes", sizeof(Item));
   for (TierId tid = 0; tid < getNumTiers(); tid++) {
     totalCacheSize += allocator_[tid]->getMemorySize();
     XLOGF(INFO,"assignd {} to tid {}", allocator_[tid]->getMemorySize(), tid);
   }
 
   for (TierId tid = 0; tid < getNumTiers(); tid++) {
-    auto tierSizeRatio =
-        static_cast<double>(allocator_[tid]->getMemorySize()) / totalCacheSize;
-    size_t tierPoolSize = static_cast<size_t>(tierSizeRatio * size);
+    size_t tierPoolSize = 0;
+    if (config_.preAssignSlabs) {
+      auto assignments = config_.getClassAssignments(tid,pid);
+      uint32_t sum = 0;
+      for (auto entry : assignments) {
+          ClassId cid = entry.first;
+          uint32_t slabs = entry.second;
+          sum += slabs;
+      }
+      tierPoolSize = sum * Slab::kSize;
+      XDCHECK_EQ(tierPoolSize,allocator_[tid]->getMemorySize());
+    } else {
+      auto tierSizeRatio =
+          static_cast<double>(allocator_[tid]->getMemorySize()) / totalCacheSize;
+      tierPoolSize = static_cast<size_t>(tierSizeRatio * size);
+    }
     
     // TODO: what if we manage to add pool only in one tier?
     // we should probably remove that on failure
@@ -3498,9 +3591,17 @@ PoolId CacheAllocator<CacheTrait>::addPool(
         name, tierPoolSize, allocSizes, ensureProvisionable);
     if (config_.preAssignSlabs) {
       auto assignments = config_.getClassAssignments(tid,pid);
+      bool takeOne = false;
+      //if ((tierPoolSize / 1000000) > 10000) {
+      //  takeOne = true;
+      //}
       for (auto entry : assignments) {
           ClassId cid = entry.first;
           uint32_t slabs = entry.second;
+          if (takeOne && slabs < 3) {
+            slabs -= 1;
+            takeOne = false;
+          }
           bool ret = allocator_[tid]->assignSlabs(pid,cid,slabs);
           if (!ret) {
             XDCHECK(ret) << folly::sformat(
@@ -3545,17 +3646,42 @@ PoolId CacheAllocator<CacheTrait>::addPool(
     }
   }
   uint32_t id = 0;
-  for (int i = 0; i < getNumTiers(); i++) {
-    for (int j = 0; j < evictorsPerTier[i]; j++) {
-      backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(j, evictorsPerTier[i], i));
-      id++;
+  size_t actualThreads = 0;
+  auto assignments = config_.getClassAssignments(0,0);
+  std::vector<std::vector<MemoryDescriptorType>> memoryMapE;
+  std::vector<std::vector<MemoryDescriptorType>> memoryMapP;
+  for (auto entry : assignments) {
+      ClassId cid = entry.first;
+      uint32_t slabs = entry.second;
+      if (slabs > 2) {
+          actualThreads++;
+          MemoryDescriptorType md0(0,0,cid);
+          MemoryDescriptorType md1(1,0,cid);
+          std::vector<MemoryDescriptorType> mems;
+          std::vector<MemoryDescriptorType> memsP;
+          mems.push_back(md0);
+          mems.push_back(md1);
+          memsP.push_back(md1);
+          memoryMapE.push_back(mems);
+          memoryMapP.push_back(memsP);
+      }
+  }
+  if (backgroundEvictor_.size() > 0) {
+    for (int i = 0; i < actualThreads; i++) {
+      backgroundEvictor_[i]->setAssignedMemory(std::move(memoryMapE[i]));
+      backgroundPromoter_[i]->setAssignedMemory(std::move(memoryMapP[i]));
     }
   }
+  //  for (int j = 0; j < evictorsPerTier[i]; j++) {
+  //    backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(j, evictorsPerTier[i], i));
+  //    id++;
+  //  }
+  //}
 
-  if (backgroundPromoter_.size()) {
-    for (size_t id = 0; id < backgroundPromoter_.size(); id++)
-      backgroundPromoter_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(id, backgroundPromoter_.size(), 1));
-  }
+  //if (backgroundPromoter_.size()) {
+  //  for (size_t id = 0; id < backgroundPromoter_.size(); id++)
+  //    backgroundPromoter_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(id, backgroundPromoter_.size(), 1));
+  //}
 
   return pid;
 }
@@ -3757,7 +3883,7 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
     for (const ClassId cid : classIds) {
       uint64_t allocAttempts = 0, evictionAttempts = 0, allocFailures = 0,
                fragmentationSize = 0, classHits = 0, chainedItemEvictions = 0,
-               regularItemEvictions = 0, numWritebacks = 0, numWritebacksFailBadMove = 0, numWritebacksFailNoAlloc = 0, numPromotions = 0, numPromotionsHits = 0, numInclWrites = 0;
+               regularItemEvictions = 0, numWritebacks = 0, numWritebacksIncl = 0, numWritebacksExcl = 0, numWritebacksFailBadMove = 0, numWritebacksFailNoAlloc = 0, numPromotions = 0, numPromotionsHits = 0, numInclWrites = 0, numWritebackBytes = 0;
       MMContainerStat mmContainerStats;
       for (TierId tid = 0; tid < getNumTiers(); tid++) {
         allocAttempts += (*stats_.allocAttempts)[tid][poolId][cid].get();
@@ -3768,6 +3894,9 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
         chainedItemEvictions += (*stats_.chainedItemEvictions)[tid][poolId][cid].get();
         regularItemEvictions += (*stats_.regularItemEvictions)[tid][poolId][cid].get();
         numWritebacks += (*stats_.numWritebacks)[tid][poolId][cid].get();
+        numWritebacksIncl += (*stats_.numWritebacksIncl)[tid][poolId][cid].get();
+        numWritebacksExcl += (*stats_.numWritebacksExcl)[tid][poolId][cid].get();
+        numWritebackBytes += (*stats_.numWritebackBytes)[tid][poolId][cid].get();
         numInclWrites += (*stats_.numInclWrites)[tid][poolId][cid].get();
         numWritebacksFailBadMove += (*stats_.numWritebacksFailBadMove)[tid][poolId][cid].get();
         numWritebacksFailNoAlloc += (*stats_.numWritebacksFailNoAlloc)[tid][poolId][cid].get();
@@ -3788,6 +3917,9 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(PoolId poolId) const {
             chainedItemEvictions,
             regularItemEvictions,
             numWritebacks,
+            numWritebacksIncl,
+            numWritebacksExcl,
+            numWritebackBytes,
             numInclWrites,
             numWritebacksFailBadMove,
             numWritebacksFailNoAlloc,
@@ -3847,6 +3979,9 @@ PoolStats CacheAllocator<CacheTrait>::getPoolStats(TierId tid, PoolId poolId) co
             (*stats_.chainedItemEvictions)[tid][poolId][cid].get(),
             (*stats_.regularItemEvictions)[tid][poolId][cid].get(),
             (*stats_.numWritebacks)[tid][poolId][cid].get(),
+            (*stats_.numWritebacksIncl)[tid][poolId][cid].get(),
+            (*stats_.numWritebacksExcl)[tid][poolId][cid].get(),
+            (*stats_.numWritebackBytes)[tid][poolId][cid].get(),
             (*stats_.numInclWrites)[tid][poolId][cid].get(),
             (*stats_.numWritebacksFailBadMove)[tid][poolId][cid].get(),
             (*stats_.numWritebacksFailNoAlloc)[tid][poolId][cid].get(),
@@ -3881,8 +4016,15 @@ ACStats CacheAllocator<CacheTrait>::getACStats(TierId tid,
   auto stats = ac.getStats();
   stats.allocLatencyNs = (*stats_.classAllocLatency)[tid][poolId][classId];
   stats.evictionAttempts = (*stats_.evictionAttempts)[tid][poolId][classId].get();
+  stats.onlineEvictions = (*stats_.onlineEvictions)[tid][poolId][classId].get();
   stats.evictions = (*stats_.regularItemEvictions)[tid][poolId][classId].get() + 
                     (*stats_.chainedItemEvictions)[tid][poolId][classId].get();
+  stats.hits = (*stats_.cacheHits)[tid][poolId][classId].get();
+  stats.writebacks = (*stats_.numWritebacks)[tid][poolId][classId].get();
+  stats.writebackBytes = (*stats_.numWritebackBytes)[tid][poolId][classId].get();
+  stats.inclWritebacks = (*stats_.numWritebacksIncl)[tid][poolId][classId].get();
+  stats.exclWritebacks = (*stats_.numWritebacksExcl)[tid][poolId][classId].get();
+  stats.items = getMMContainerStat(tid,poolId,classId).size;
   return stats;
 }
 
@@ -4265,7 +4407,7 @@ bool CacheAllocator<CacheTrait>::tryMovingForSlabRelease(
    bool ret = oldItem.isChainedItem()
               ? moveChainedItem(oldItem.asChainedItem(), newItemHdl,
                                 oldItem.asChainedItem().getParentItem(compressor_))
-              : moveRegularItem(oldItem, newItemHdl, false, false);
+              : moveRegularItem(oldItem, newItemHdl, false, false, 0);
    removeFromMMContainer(oldItem);
    return ret;
 }
@@ -5165,6 +5307,23 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
     std::chrono::milliseconds interval,
     std::shared_ptr<BackgroundMoverStrategy> strategy,
     size_t threads) {
+  size_t actualThreads = 0;
+  auto assignments = config_.getClassAssignments(0,0);
+  std::vector<std::vector<MemoryDescriptorType>> memoryMap;
+  for (auto entry : assignments) {
+      ClassId cid = entry.first;
+      uint32_t slabs = entry.second;
+      if (slabs > 2) {
+          actualThreads++;
+          MemoryDescriptorType md0(0,0,cid);
+          MemoryDescriptorType md1(1,0,cid);
+          std::vector<MemoryDescriptorType> mems;
+          mems.push_back(md0);
+          mems.push_back(md1);
+          memoryMap.push_back(mems);
+      }
+  }
+
   XDCHECK(threads > 0);
   backgroundEvictor_.resize(threads);
   bool result = true;
@@ -5187,11 +5346,12 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
   }
 
   for (size_t i = 0; i < threads; i++) {
-    auto ret = startNewWorker("BackgroundEvictor" + std::to_string(i), backgroundEvictor_[i], interval, *this, strategy, MoverDir::Evict);
+    auto ret = startNewWorker("BackgroundEvictor" + std::to_string(i), backgroundEvictor_[i], interval, *this, strategy, MoverDir::Evict, i);
     result = result && ret;
     if (result) {
       uint32_t tid = i % getNumTiers();
-      backgroundEvictor_[i]->setAssignedMemory(getAssignedMemoryToBgWorker(i, evictorsPerTier[tid], tid));
+      //backgroundEvictor_[i]->setAssignedMemory(getAssignedMemoryToBgWorker(i, evictorsPerTier[tid], tid));
+      //backgroundEvictor_[i]->setAssignedMemory(std::move(memoryMap[i]));
     }
   }
   return result;
@@ -5203,17 +5363,33 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundPromoter(
     std::shared_ptr<BackgroundMoverStrategy> strategy,
     size_t threads,
     bool useQueue) {
+  size_t actualThreads = 0;
+  auto assignments = config_.getClassAssignments(0,0);
+  std::vector<std::vector<MemoryDescriptorType>> memoryMap;
+  for (auto entry : assignments) {
+      ClassId cid = entry.first;
+      uint32_t slabs = entry.second;
+      if (slabs > 2) {
+          actualThreads++;
+          MemoryDescriptorType md1(1,0,cid);
+          std::vector<MemoryDescriptorType> mems;
+          mems.push_back(md1);
+          memoryMap.push_back(mems);
+      }
+  }
+  threads = actualThreads;
   XDCHECK(threads > 0);
   XDCHECK(getNumTiers() > 1);
   backgroundPromoter_.resize(threads);
   bool result = true;
 
   for (size_t i = 0; i < threads; i++) {
-    auto ret = startNewWorker("BackgroundPromoter" + std::to_string(i), backgroundPromoter_[i], interval, *this, strategy, MoverDir::Promote);
+    auto ret = startNewWorker("BackgroundPromoter" + std::to_string(i), backgroundPromoter_[i], interval, *this, strategy, MoverDir::Promote, i);
     result = result && ret;
 
     if (result) {
-      backgroundPromoter_[i]->setAssignedMemory(getAssignedMemoryToBgWorker(i, backgroundPromoter_.size(), 1));
+      //backgroundPromoter_[i]->setAssignedMemory(getAssignedMemoryToBgWorker(i, backgroundPromoter_.size(), 1));
+      //backgroundPromoter_[i]->setAssignedMemory(std::move(memoryMap[i]));
     }
   }
   return result;

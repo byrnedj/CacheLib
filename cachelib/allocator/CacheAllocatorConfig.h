@@ -70,7 +70,7 @@ class CacheAllocatorConfig {
   // Set default allocation sizes for a cache pool
   CacheAllocatorConfig& setDefaultAllocSizes(std::set<uint32_t> allocSizes);
   
-  CacheAllocatorConfig& setClassInclusives(std::map<uint32_t, uint32_t> classInclusives);
+  CacheAllocatorConfig& setClassInclusives(std::vector<uint32_t> classInclusives);
   CacheAllocatorConfig& setClassAssignments(std::map<MemoryDescriptorType,uint32_t> classAssignments);
 
   // Set default allocation sizes based on arguments
@@ -450,7 +450,7 @@ class CacheAllocatorConfig {
 
   bool preAssignSlabs{false};
   std::map<MemoryDescriptorType,uint32_t> classAssignments;
-  std::map<uint32_t,uint32_t> classInclusives;
+  std::vector<uint32_t> classInclusives;
 
   // whether to detach allocator memory upon a core dump
   bool disableFullCoredump{true};
@@ -751,8 +751,12 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setDefaultAllocSizes(
 
 template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setClassInclusives(
-    std::map<uint32_t,uint32_t> inclusives) {
-  classInclusives = std::move(inclusives);
+    std::vector<uint32_t> inclusives) {
+  classInclusives.reserve(inclusives.size());
+  for (int i = 0; i < inclusives.size(); i++) {
+    classInclusives.push_back(inclusives[i]);
+    XLOGF(INFO,"class {} design: {}",i,classInclusives[i]);
+  }
   return *this;
 }
 

@@ -378,6 +378,7 @@ class CacheStressor : public Stressor {
             }
           } else {
             result = OpResultType::kGetHit;
+            stats.getBytes += it->getSize();
           }
 
           break;
@@ -397,11 +398,13 @@ class CacheStressor : public Stressor {
           auto it = cache_->findToWrite(*key);
           if (!it) {
             ++stats.getMiss;
-
             ++stats.set;
-            it = cache_->allocate(pid, *key, *(req.sizeBegin), req.ttlSecs);
+            const auto size = *(req.sizeBegin);
+            stats.setBytes += size;
+            it = cache_->allocate(pid, *key, size, req.ttlSecs);
             if (!it) {
               ++stats.setFailure;
+              stats.setBytes -= size;
               break;
             }
             populateItem(it);
@@ -492,9 +495,11 @@ class CacheStressor : public Stressor {
     }
 
     ++stats.set;
+    stats.setBytes += size;
     auto it = cache_->allocate(pid, *key, size, ttlSecs);
     if (it == nullptr) {
       ++stats.setFailure;
+      stats.setBytes -= size;
       return OpResultType::kSetFailure;
     } else {
       populateItem(it, itemValue);

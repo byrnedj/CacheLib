@@ -65,14 +65,14 @@ void ProgressTracker::work() {
   // additionally log into the stats file
   if (statsFile_.is_open()) {
     statsFile_ << thStr << std::endl;
+    auto elapsedTimeNs = stressor_.getTestDurationNs();
     statsFile_ << "== Allocator Stats ==" << std::endl;
-    currCacheStats.render(statsFile_);
+    currCacheStats.render(statsFile_, elapsedTimeNs);
 
     statsFile_ << "== Hit Ratio Stats Since Last ==" << std::endl;
     currCacheStats.render(prevStats_, statsFile_);
 
     statsFile_ << "== Throughput Stats ==" << std::endl;
-    auto elapsedTimeNs = stressor_.getTestDurationNs();
     throughputStats.render(elapsedTimeNs, statsFile_);
 
     stressor_.renderWorkloadGeneratorStats(elapsedTimeNs, statsFile_);

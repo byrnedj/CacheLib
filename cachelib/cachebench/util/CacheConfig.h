@@ -117,7 +117,8 @@ struct CacheConfig : public JSONConfig {
   std::vector<uint64_t> allocSizes{};
   std::vector<uint64_t> tier0ClassAssignments{};
   std::vector<uint64_t> tier1ClassAssignments{};
-  std::vector<uint64_t> classInclusives{};
+  std::vector<uint32_t> classInclusives{};
+  size_t slabSize{4*1024*1024};
 
   // These specify the number of pools and how keys will
   // be distributed among the pools
@@ -328,6 +329,9 @@ struct CacheConfig : public JSONConfig {
 
   std::vector<uint64_t> getAllocSizes() {
       return allocSizes;
+  }
+  std::vector<uint64_t> getAssignments() {
+      return tier0ClassAssignments;
   }
   std::shared_ptr<RebalanceStrategy> getRebalanceStrategy() const;
   std::shared_ptr<BackgroundMoverStrategy> getBackgroundEvictorStrategy() const;

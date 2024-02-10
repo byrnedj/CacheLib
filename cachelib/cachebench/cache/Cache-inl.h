@@ -81,30 +81,49 @@ Cache<Allocator>::Cache(const CacheConfig& config,
   }
 
   if (!config_.classInclusives.empty()) {
-    std::map<uint32_t,uint32_t> classInclusives;
-    uint32_t i = 0;
-    for (uint64_t s : config_.classInclusives) {
-      classInclusives[i] = s;
-      i++;
-    }
-    allocatorConfig_.setClassInclusives(std::move(classInclusives));
+    allocatorConfig_.setClassInclusives(config_.classInclusives);
   }
   
+  bool useAssignmentsForSize = false;
+  uint32_t t1AssignSize = 0;
+  uint32_t t2AssignSize = 0;
   if (!config_.tier0ClassAssignments.empty()) {
+    useAssignmentsForSize = true;
     std::map<MemoryDescriptorType,uint32_t> classAssignments;
     uint32_t cid = 0;
     for (uint64_t s : config_.tier0ClassAssignments) {
       auto md = MemoryDescriptorType(0,0,cid);
+      //if (config_.tier1ClassAssignments.empty() && s == 2) {
+      //    s = 1;
+      //}
       classAssignments[md] = s; 
       cid++;
+      t1AssignSize += s;
     }
     cid = 0;
     for (uint64_t s : config_.tier1ClassAssignments) {
       auto md = MemoryDescriptorType(1,0,cid);
       classAssignments[md] = s; 
       cid++;
+      t2AssignSize += s;
     }
     allocatorConfig_.setClassAssignments(std::move(classAssignments));
+    auto t0 = config_.tier0ClassAssignments.size();
+    auto t1 = config_.tier1ClassAssignments.size();
+    auto inclusives = config_.classInclusives.size();
+    auto sizes = config_.allocSizes.size();
+    if (t0 != t1) {
+        XLOGF(INFO,"t0 assignments != t1 assignments {}, {}",t0,t1);
+    }
+    if (inclusives != t0) {
+        XLOGF(INFO,"t0 assignments != inclusives {}, {}",t0,inclusives);
+    }
+    if (sizes != t0) {
+        XLOGF(INFO,"t0 assignments != sizes {}, {}",t0,sizes);
+    }
+    if (sizes != inclusives) {
+        XLOGF(INFO,"inclusives != sizes {}, {}",inclusives,sizes);
+    }
   }
 
   // Set hash table config
@@ -116,7 +135,11 @@ Cache<Allocator>::Cache(const CacheConfig& config,
       static_cast<uint32_t>(config_.chainedItemHtBucketPower),
       static_cast<uint32_t>(config_.chainedItemHtLockPower)});
 
-  allocatorConfig_.setCacheSize(config_.cacheSizeMB * (MB));
+  if (useAssignmentsForSize) {
+    allocatorConfig_.setCacheSize((t1AssignSize + t2AssignSize + 4 ) * (config_.slabSize));
+  } else {
+    allocatorConfig_.setCacheSize(config_.cacheSizeMB * (MB));
+  }
 
   if (!cacheDir.empty()) {
     allocatorConfig_.cacheDir = cacheDir;
@@ -475,11 +498,11 @@ typename Cache<Allocator>::WriteHandle Cache<Allocator>::allocate(
     handle = cache_->allocate(pid, key, CacheValue::getSize(size), ttlSecs);
     if (handle) {
       CacheValue::initialize(handle->getMemory());
-      XDCHECK(!handle->isInclusive());
-      auto allocInfo = cache_->getAllocInfo(handle.get());
-      if (config_.classInclusives[allocInfo.classId] == 1) {
-         handle->markInclusive();
-      }
+      //XDCHECK(!handle->isInclusive());
+      //auto allocInfo = cache_->getAllocInfo(handle.get());
+      //if (config_.classInclusives[allocInfo.classId] == 1) {
+      //   handle->markInclusive();
+      //}
       
     }
   } catch (const std::invalid_argument& e) {
@@ -704,6 +727,9 @@ Stats Cache<Allocator>::getStats() const {
     }
     ret.numEvictions.push_back(aggregate.numEvictions());
     ret.numWritebacks.push_back(aggregate.numWritebacks());
+    ret.numWritebacksIncl.push_back(aggregate.numWritebacksIncl());
+    ret.numWritebacksExcl.push_back(aggregate.numWritebacksExcl());
+    ret.numWritebackBytes.push_back(aggregate.numWritebackBytes());
     ret.numInclWrites.push_back(aggregate.numInclWrites());
     ret.numWritebacksFailBadMove.push_back(aggregate.numWritebacksFailBadMove());
     ret.numWritebacksFailNoAlloc.push_back(aggregate.numWritebacksFailNoAlloc());
@@ -913,13 +939,55 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
   if (dataSize < 1)
     return;
 
-  auto ptr = reinterpret_cast<char*>(getMemory(handle));
-  std::strncpy(ptr, str.c_str(), dataSize);
+  auto dptr = reinterpret_cast<void*>(getMemory(handle));
+  auto sptr = reinterpret_cast<const void*>(str.c_str());
+  nt_move(dptr,sptr,dataSize);
+  //std::strncpy(ptr, str.c_str(), dataSize);
 
   // Make sure the copied string ends with null char
-  if (str.size() + 1 > dataSize) {
-    ptr[dataSize - 1] = '\0';
-  }
+  //if (str.size() + 1 > dataSize) {
+  //  dptr[dataSize - 1] = '\0';
+  //}
+}
+
+#define CACHE_LINE_SIZE 64
+#define NT_THRESHOLD (2 * CACHE_LINE_SIZE)
+template <typename Allocator>
+void Cache<Allocator>::nt_move(void *__restrict dst, const void * __restrict src, size_t n) { 
+    if (n < NT_THRESHOLD) {
+        std::memcpy(dst, src, n);
+        return;
+    }
+
+    size_t n_unaligned = CACHE_LINE_SIZE - (uintptr_t)dst % CACHE_LINE_SIZE;
+
+    if (n_unaligned > n)
+        n_unaligned = n;
+
+    std::memcpy(dst, src, n_unaligned);
+    dst += n_unaligned;
+    src += n_unaligned;
+    n -= n_unaligned;
+
+    size_t num_lines = n / CACHE_LINE_SIZE;
+
+    size_t i;
+    for (i = 0; i < num_lines; i++) {
+        size_t j;
+        for (j = 0; j < CACHE_LINE_SIZE / sizeof(__m128i); j++) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src);
+            /* non-temporal store */
+            _mm_stream_si128((__m128i *)dst, blk);
+            src += sizeof(__m128i);
+            dst += sizeof(__m128i);
+        }
+        n -= CACHE_LINE_SIZE;
+    }
+
+    if (num_lines > 0)
+        _mm_sfence();
+
+    std::memcpy(dst, src, n);
 }
 
 template <typename Allocator>

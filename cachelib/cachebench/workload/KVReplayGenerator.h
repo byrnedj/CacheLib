@@ -97,7 +97,64 @@ class KVReplayGenerator : public ReplayGeneratorBase {
     for (uint32_t i = 0; i < numShards_; ++i) {
       stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
     }
-
+    uint32_t actualClasses = 0;
+    std::array<uint32_t,100> aclasses;
+    for (uint32_t i = 0; i < config_.tier0ClassAssignments.size(); i++) {
+        if (config_.tier0ClassAssignments[i] > 2) {
+            aclasses[actualClasses] = i;
+            actualClasses++;
+        }
+    }
+    //we have n actual classes to divide among nshards
+    uint32_t shardsPerClass = numShards_ / actualClasses;
+    XLOGF(INFO,"shardsperclass {}",shardsPerClass);
+    if (shardsPerClass >= 1) {
+        uint32_t currShard = 0;
+        uint32_t classIdx = 0;
+        uint32_t currClass = aclasses[classIdx];
+        classIdx++;
+        while (currShard < numShards_) {
+          int first = currShard;
+          int last = (currShard + shardsPerClass) - 1;
+          XLOGF(INFO,"class {} gets {} to {}, currShard {}",currClass,first,last,currShard);
+          shardToStressor[currClass] = StressorId(currClass,first,last,shardsPerClass);
+          currShard += shardsPerClass;
+          currClass = aclasses[classIdx];
+          classIdx++;
+        }
+    } else {
+        int tClasses = actualClasses;
+        int c = 0;
+        int tShards = numShards_;
+        int hidx = actualClasses - 1;
+        int lidx = 0;
+        while (tClasses > tShards) {
+            int lc = aclasses[lidx];
+            int hc = aclasses[hidx];
+            shardToStressor[hc] = StressorId(hc,c,c+1,1);
+            shardToStressor[lc] = StressorId(lc,c,c+1,1);
+            c++;
+            tClasses -= 2;
+            tShards--;
+            hidx--;
+            lidx++;
+        }
+        if (tClasses > 0 && tClasses == tShards) {
+            for (int i = lidx; i < hidx; i++) {
+                shardToStressor[i] = StressorId(i,c,c+1,1);
+                c++;
+            }
+        }
+    }
+    for (int i = 0; i < actualClasses; i++) {
+        StressorId id = shardToStressor[aclasses[i]];
+        XLOGF(INFO,"===================");
+        XLOGF(INFO,"cid {} gets the following ( cid {}, first {}, last {}, total {}, curr {} ):",aclasses[i],id.classId,id.firstStressorId,id.lastStressorId,id.totalStressors,id.currStressorId);
+        for (int j = 0; j < id.totalStressors*2; j++) {
+            XLOGF(INFO,"j: {} , stressor {}",j,id.getAndUpdate());
+        }
+        XLOGF(INFO,"======================");
+    }
     //std::condition_variable cv;
     genWorker_ = std::thread([this] {
       folly::setThreadName("cb_replay_gen");
@@ -153,7 +210,8 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 10;
-  static constexpr size_t kMaxRequests = 50000000;
+  static constexpr size_t kMaxRequests = 250000000;
+
 
   using ReqQueue = folly::ProducerConsumerQueue<std::unique_ptr<ReqWrapper>>;
 
@@ -212,6 +270,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
   bool isEOF() { return eof.load(std::memory_order_relaxed); }
 
   inline StressorCtx& getStressorCtx(size_t shardId) {
+
     XCHECK_LT(shardId, numShards_);
     return *stressorCtxs_[shardId];
   }
@@ -312,11 +371,16 @@ inline std::unique_ptr<ReqWrapper> KVReplayGenerator::getReqInternal() {
 }
 
 inline void KVReplayGenerator::genRequests() {
-  //XLOGF(INFO, "== gen Baton: {}",(void*)&baton);
+  uint32_t nclasses = config_.allocSizes.size();
+  uint32_t max = config_.allocSizes[nclasses-1];
+  XLOGF(INFO, "nclasses: {}, nshards: {}, max item size: {}",nclasses,numShards_,max);
+  uint64_t waits = 0;
+  uint64_t treqs = 0;
   while (!shouldShutdown()) {
     std::unique_ptr<ReqWrapper> reqWrapper;
     try {
       reqWrapper = getReqInternal();
+      treqs++;
     } catch (const EndOfTrace& e) {
       //baton.post();    
       break;
@@ -343,17 +407,43 @@ inline void KVReplayGenerator::genRequests() {
         req->key_.append(folly::sformat("{:04d}", keySuffix));
       }
 
-      auto shardId = getShard(req->req_.key);
-      //auto shardId = getShardBySize(req->key_.size() + req->sizes_[0]);
-      auto& stressorCtx = getStressorCtx(shardId);
-      auto& reqQ = *stressorCtx.reqQueue_;
+      //auto shardId = getShard(req->req_.key);
+      req->sizes_[0] += 23; //MEMCACHED_CONVERT
+      
+      uint32_t nclasses = config_.allocSizes.size();
+      uint32_t max = config_.allocSizes[nclasses-1] - 1024;
+      uint32_t totalSize = req->key_.size() + req->sizes_[0];
+      if (totalSize <= max) {
+        uint32_t shardId = 0;
+        if (config_.bySize) {
+          shardId = getShardBySize(totalSize);
+          shardId = shardToStressor[shardId].getAndUpdate();
+        } else {
+          shardId = getShard(req->key_);
+        }
+        auto& stressorCtx = getStressorCtx(shardId);
+        auto& reqQ = *stressorCtx.reqQueue_;
 
-      while (!reqQ.write(std::move(req)) && !stressorCtx.isFinished() &&
-             !shouldShutdown()) {
-        //baton.post();    
-        // ProducerConsumerQueue does not support blocking, so use sleep
-        //std::this_thread::sleep_for(
-        //    std::chrono::microseconds{checkIntervalUs_});
+        while (!reqQ.write(std::move(req)) && !stressorCtx.isFinished() &&
+               !shouldShutdown()) {
+          if (waits % 1000000 == 0) {
+              XLOGF(INFO,"======= waits {}, treqs {}, shardId {} =======",waits,treqs,shardId);
+              uint64_t sum = 0;
+              for (int i = 0; i < numShards_; i++) {
+                  auto& stressorCtx = getStressorCtx(shardId);
+                  auto& reqQ = *stressorCtx.reqQueue_;
+                  uint64_t size = reqQ.sizeGuess();
+                  XLOGF(INFO,"reqQ[{}]: {}",i,size);
+                  sum += size;
+              }
+              XLOGF(INFO,"======= sum {} =========", sum);
+          }
+          waits++;
+          //baton.post();    
+          // ProducerConsumerQueue does not support blocking, so use sleep
+          //std::this_thread::sleep_for(
+          //    std::chrono::microseconds{checkIntervalUs_});
+        }
       }
     }
   }
@@ -371,6 +461,9 @@ const Request& KVReplayGenerator::getReq(uint8_t,
   //auto& reqQ = *stressorCtx.reqQueue_[stressorCtx.id_];
   auto& reqQ = *stressorCtx.reqQueue_;
   auto& resubmitQueue = stressorCtx.resubmitQueue_;
+  if (reqQ.isEmpty() && isEOF()) {
+      throw cachelib::cachebench::EndOfTrace("EOF reached");
+  }
 
   while (resubmitQueue.empty() && !reqQ.read(reqWrapper)) {
     if (resubmitQueue.empty() && isEOF()) {

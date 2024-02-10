@@ -75,9 +75,13 @@ class CACHELIB_PACKED_ATTR Slab {
 
   // used to represent the fact that the slab does not belong to any MemoryPool
   static constexpr PoolId kInvalidPoolId = -1;
-
+#ifdef MEMCACHED
   // size of the slab in bytes.
   static constexpr unsigned int kNumSlabBits = 20;
+#else
+  // size of the slab in bytes.
+  static constexpr unsigned int kNumSlabBits = 22;
+#endif
 
   // minimum of 64 byte allocations.
   static constexpr unsigned int kMinAllocPower = 6;

@@ -21,13 +21,15 @@ template <typename CacheT>
 BackgroundMover<CacheT>::BackgroundMover(
     Cache& cache,
     std::shared_ptr<BackgroundMoverStrategy> strategy,
-    MoverDir direction)
+    MoverDir direction,
+    uint32_t id)
     : cache_(cache), strategy_(strategy), direction_(direction) {
   if (direction_ == MoverDir::Evict) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItems;
   } else if (direction_ == MoverDir::Promote) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndPromoteItems;
   }
+  id_ = id;
 }
 
 template <typename CacheT>
@@ -61,7 +63,13 @@ void BackgroundMover<CacheT>::work() {
 template <typename CacheT>
 void BackgroundMover<CacheT>::setAssignedMemory(
     std::vector<MemoryDescriptorType>&& assignedMemory) {
-  XLOG(INFO, "Class assigned to background worker:");
+  std::string type = "";
+  if (direction_ == MoverDir::Evict) {
+      type = "evictor";
+  } else if (direction_ == MoverDir::Promote) {
+      type = "promoter";
+  }
+  XLOGF(INFO, "Class assigned to background {} {}:",type,id_);
   for (auto [tid, pid, cid] : assignedMemory) {
     XLOGF(INFO, "Tid: {}, Pid: {}, Cid: {}", tid, pid, cid);
   }

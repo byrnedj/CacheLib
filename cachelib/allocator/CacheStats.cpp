@@ -26,11 +26,15 @@ void Stats::init() {
   cacheHits = std::make_unique<PerTierPerPoolClassTLCounters>();
   allocAttempts = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   evictionAttempts = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  onlineEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   fragmentationSize = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   allocFailures = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   chainedItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   regularItemEvictions = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacks = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  numWritebacksIncl = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  numWritebacksExcl = std::make_unique<PerTierPerPoolClassAtomicCounters>();
+  numWritebackBytes = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numInclWrites = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacksFailBadMove = std::make_unique<PerTierPerPoolClassAtomicCounters>();
   numWritebacksFailNoAlloc = std::make_unique<PerTierPerPoolClassAtomicCounters>();
@@ -48,11 +52,15 @@ void Stats::init() {
 
   initToZero(*allocAttempts);
   initToZero(*evictionAttempts);
+  initToZero(*onlineEvictions);
   initToZero(*allocFailures);
   initToZero(*fragmentationSize);
   initToZero(*chainedItemEvictions);
   initToZero(*regularItemEvictions);
   initToZero(*numWritebacks);
+  initToZero(*numWritebacksIncl);
+  initToZero(*numWritebacksExcl);
+  initToZero(*numWritebackBytes);
   initToZero(*numInclWrites);
   initToZero(*numWritebacksFailBadMove);
   initToZero(*numWritebacksFailNoAlloc);
@@ -67,7 +75,7 @@ struct SizeVerify {};
 
 void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
 #ifndef SKIP_SIZE_VERIFY
-  SizeVerify<sizeof(Stats)> a = SizeVerify<16592>{};
+  SizeVerify<sizeof(Stats)> a = SizeVerify<16624>{};
   std::ignore = a;
 #endif
   ret.numCacheGets = numCacheGets.get();
@@ -168,6 +176,9 @@ void Stats::populateGlobalCacheStats(GlobalCacheStats& ret) const {
     ret.numEvictions.push_back(chainedEvictions[tid] + regularEvictions[tid]);
   }
   ret.numWritebacks = accum(*numWritebacks);
+  ret.numWritebacksIncl = accum(*numWritebacksIncl);
+  ret.numWritebacksExcl = accum(*numWritebacksExcl);
+  ret.numWritebackBytes = accum(*numWritebackBytes);
   ret.numInclWrites = accum(*numInclWrites);
   ret.numWritebacksFailBadMove = accum(*numWritebacksFailBadMove);
   ret.numWritebacksFailNoAlloc = accum(*numWritebacksFailNoAlloc);
@@ -239,6 +250,9 @@ PoolStats& PoolStats::operator+=(const PoolStats& other) {
       d.fragmentationSize += s.fragmentationSize;
       d.numHits += s.numHits;
       d.numWritebacks += s.numWritebacks;
+      d.numWritebacksIncl += s.numWritebacksIncl;
+      d.numWritebacksExcl += s.numWritebacksExcl;
+      d.numWritebackBytes += s.numWritebackBytes;
       d.numInclWrites += s.numInclWrites;
       d.numWritebacksFailBadMove += s.numWritebacksFailBadMove;
       d.numWritebacksFailNoAlloc += s.numWritebacksFailNoAlloc;
@@ -303,6 +317,30 @@ uint64_t PoolStats::numWritebacks() const noexcept {
   uint64_t n = 0;
   for (const auto& s : cacheStats) {
     n += s.second.numWritebacks;
+  }
+  return n;
+}
+
+uint64_t PoolStats::numWritebacksIncl() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numWritebacksIncl;
+  }
+  return n;
+}
+
+uint64_t PoolStats::numWritebacksExcl() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numWritebacksExcl;
+  }
+  return n;
+}
+
+uint64_t PoolStats::numWritebackBytes() const noexcept {
+  uint64_t n = 0;
+  for (const auto& s : cacheStats) {
+    n += s.second.numWritebackBytes;
   }
   return n;
 }

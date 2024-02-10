@@ -44,6 +44,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(BUILD_TESTS "If enabled, compile the tests." ON)
 option(BUILD_WITH_DTO "If enabled, build with DSA transparent offloading." OFF)
+option(BUILD_MEMCACHED "If enabled, use memcached 1mb slabs." OFF)
 
 
 set(BIN_INSTALL_DIR bin CACHE STRING
@@ -385,6 +386,7 @@ if (BUILD_SHARED_LIBS)
     VERSION ${PACKAGE_VERSION}
   )
 endif ()
+
 
 if (BUILD_TESTS)
   get_property(TEST_BINARIES GLOBAL PROPERTY TEST_BINARIES)

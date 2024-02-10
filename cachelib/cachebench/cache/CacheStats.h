@@ -35,6 +35,9 @@ struct Stats {
 
   std::vector<uint64_t> numEvictions;
   std::vector<uint64_t> numWritebacks;
+  std::vector<uint64_t> numWritebacksIncl;
+  std::vector<uint64_t> numWritebacksExcl;
+  std::vector<uint64_t> numWritebackBytes;
   std::vector<uint64_t> numInclWrites;
   std::vector<uint64_t> numWritebacksFailBadMove;
   std::vector<uint64_t> numWritebacksFailNoAlloc;
@@ -131,7 +134,7 @@ struct Stats {
   // errors from the nvm engine.
   std::unordered_map<std::string, double> nvmErrors;
 
-  void render(std::ostream& out) const {
+  void render(std::ostream& out, uint64_t elapsedTimeNs) const {
     auto totalMisses = getTotalMisses();
     const double overallHitRatio = invertPctFn(totalMisses, numCacheGets);
     const auto nTiers = numItems.size();
@@ -157,6 +160,10 @@ struct Stats {
     for (TierId tid = 0; tid < nTiers; tid++) {
         out << folly::sformat("Tier {} Evictions: {:,}\n"
                               "Tier {} Writebacks: {:,}\n"
+                              "Tier {} Incl Writebacks: {:,}\n"
+                              "Tier {} Excl Writebacks: {:,}\n"
+                              "Tier {} Writeback Bytes (MB): {:,}\n"
+                              "Tier {} Avg Writeback Bytes Per Sec (MB/s): {:6.2f}\n"
                               "Tier {} Success: {:.2f}%\n"
                               "Tier {} Failed WB Bad Move: {:,}\n"
                               "Tier {} Failed WB No Alloc: {:,}\n"
@@ -165,6 +172,10 @@ struct Stats {
                               "Tier {} Promotion Hit Ratio: {:.2f}",
                               tid, numEvictions[tid],
                               tid, numWritebacks[tid],
+                              tid, numWritebacksIncl[tid],
+                              tid, numWritebacksExcl[tid],
+                              tid, numWritebackBytes[tid] / 1000000,
+                              tid, ((double)numWritebackBytes[tid] / (elapsedTimeNs / 1000000000.0))/1000000.0,
                               tid, invertPctFn(numEvictions[tid] - numWritebacks[tid], numEvictions[tid]),
                               tid, numWritebacksFailBadMove[tid],
                               tid, numWritebacksFailNoAlloc[tid], 
@@ -237,11 +248,29 @@ struct Stats {
           out << folly::sformat(
                    "tid{:2} pid{:2} cid{:4} {:8.2f}{} usage fraction: {:4.2f}\n"
                    "tid{:2} pid{:2} cid{:4} {:8.2f}{} memory size in {}: {:8.2f}\n"
-                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} eviction success: {:4.2f}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} total slabs: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} perslab: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} hits: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} items: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} evictions: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} onlineEvictions: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} writebacks: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} writebacks-incl: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} writebacks-excl: {:,}\n"
+                   "tid{:2} pid{:2} cid{:4} {:8.2f}{} writeback bytes (MB): {:4.2f}\n"
                    "tid{:2} pid{:2} cid{:4} {:8.2f}{} rolling avg alloc latency in ns: {:8.2f}",
                    tid, pid, cid, allocSize, allocSizeSuffix, acUsageFraction,
                    tid, pid, cid, allocSize, allocSizeSuffix, memorySizeSuffix, memorySize,
-                   tid, pid, cid, allocSize, allocSizeSuffix, (double)(stats.evictions/(double)stats.evictionAttempts),
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.totalSlabs(),
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.allocsPerSlab,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.hits,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.items,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.evictions,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.onlineEvictions,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.writebacks,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.inclWritebacks,
+                   tid, pid, cid, allocSize, allocSizeSuffix, stats.exclWritebacks,
+                   tid, pid, cid, allocSize, allocSizeSuffix, (double) stats.writebackBytes / 1000000.0,
                    tid, pid, cid, allocSize, allocSizeSuffix, stats.allocLatencyNs.estimate())
             << std::endl;
         }

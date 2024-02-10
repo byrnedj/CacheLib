@@ -52,7 +52,14 @@ struct ACStats {
   util::RollingStats allocLatencyNs;
 
   uint64_t evictionAttempts;
+  uint64_t onlineEvictions;
   uint64_t evictions;
+  uint64_t hits;
+  uint64_t writebacks;
+  uint64_t writebackBytes;
+  uint64_t inclWritebacks;
+  uint64_t exclWritebacks;
+  uint64_t items;
 
   constexpr unsigned long long totalSlabs() const noexcept {
     return freeSlabs + usedSlabs;

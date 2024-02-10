@@ -43,7 +43,7 @@ bool Runner::run(std::chrono::seconds progressInterval,
   tracker.stop();
 
   std::cout << "== Test Results ==\n== Allocator Stats ==" << std::endl;
-  cacheStats.render(std::cout);
+  cacheStats.render(std::cout, durationNs);
 
   std::cout << "\n== Throughput for  ==\n";
   opsStats.render(durationNs, std::cout);

@@ -32,6 +32,8 @@ namespace cachelib {
 namespace cachebench {
 ThroughputStats& ThroughputStats::operator+=(const ThroughputStats& other) {
   set += other.set;
+  setBytes += other.setBytes;
+  getBytes += other.getBytes;
   setFailure += other.setFailure;
   get += other.get;
   getMiss += other.getMiss;
@@ -50,12 +52,15 @@ ThroughputStats& ThroughputStats::operator+=(const ThroughputStats& other) {
 
 void ThroughputStats::render(uint64_t elapsedTimeNs, std::ostream& out) const {
   const double elapsedSecs = elapsedTimeNs / static_cast<double>(1e9);
-
+  const double setMB = setBytes / 1000000.0;
   const uint64_t setPerSec = util::narrow_cast<uint64_t>(set / elapsedSecs);
+  const double setBytesPerSec = setMB / elapsedSecs;
   const double setSuccessRate =
       set == 0 ? 0.0 : 100.0 * (set - setFailure) / set;
 
+  const double getMB = getBytes / 1000000.0;
   const uint64_t getPerSec = util::narrow_cast<uint64_t>(get / elapsedSecs);
+  const double getBytesPerSec = getMB / elapsedSecs;
   const double getSuccessRate = get == 0 ? 0.0 : 100.0 * (get - getMiss) / get;
 
   const uint64_t delPerSec = util::narrow_cast<uint64_t>(del / elapsedSecs);
@@ -84,6 +89,9 @@ void ThroughputStats::render(uint64_t elapsedTimeNs, std::ostream& out) const {
   out << folly::sformat("{:10}: {:.2f} million", "Total Ops", ops / 1e6)
       << std::endl;
   out << folly::sformat("{:10}: {:,}", "Total sets", set) << std::endl;
+  out << folly::sformat("{:10}: {:.2f}", "Total set bytes (MB)", setMB) << std::endl;
+  out << folly::sformat("{:10}: {:.2f}", "Total get bytes (MB)", getMB) << std::endl;
+  out << folly::sformat("{:10}: {:.2f}", "Total time", elapsedSecs) << std::endl;
 
   auto outFn = [&out](folly::StringPiece k1, uint64_t v1, folly::StringPiece k2,
                       double v2) {
@@ -93,6 +101,8 @@ void ThroughputStats::render(uint64_t elapsedTimeNs, std::ostream& out) const {
   outFn("get", getPerSec, "success", getSuccessRate);
   outFn("couldExist", couldExistPerSec, "success", couldExistSuccessRate);
   outFn("set", setPerSec, "success", setSuccessRate);
+  out << folly::sformat("{:10}: {:9.2f}/s", "setBytes", setBytesPerSec) << std::endl;
+  out << folly::sformat("{:10}: {:9.2f}/s", "getBytes", getBytesPerSec) << std::endl;
   outFn("del", delPerSec, "found", delSuccessRate);
   if (update > 0) {
     outFn("update", updatePerSec, "success", updateSuccessRate);
@@ -105,7 +115,6 @@ void ThroughputStats::render(uint64_t elapsedTimeNs, std::ostream& out) const {
 void ThroughputStats::render(uint64_t elapsedTimeNs,
                              folly::UserCounters& counters) const {
   const double elapsedSecs = elapsedTimeNs / static_cast<double>(1e9);
-
   const uint64_t setPerSec = util::narrow_cast<uint64_t>(set / elapsedSecs);
   const double setSuccessRate =
       set == 0 ? 0.0 : 100.0 * (set - setFailure) / set;

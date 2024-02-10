@@ -54,22 +54,22 @@ bool MMLru::Container<T, HookPtr>::recordAccess(T& node,
       ((curr >= getUpdateTime(node) +
                     lruRefreshTime_.load(std::memory_order_relaxed)) ||
        !isAccessed(node))) {
-    if (!isAccessed(node)) {
-      markAccessed(node);
-    }
+    //if (!isAccessed(node)) {
+    //  markAccessed(node);
+    //}
 
     auto func = [this, &node, curr]() {
-      reconfigureLocked(curr);
-      ensureNotInsertionPoint(node);
+      //reconfigureLocked(curr);
+      //ensureNotInsertionPoint(node);
       if (node.isInMMContainer()) {
         lru_.moveToHead(node);
-        setUpdateTime(node, curr);
+        //setUpdateTime(node, curr);
       }
       if (isTail(node)) {
         unmarkTail(node);
         tailSize_--;
         XDCHECK_LE(0u, tailSize_);
-        updateLruInsertionPoint();
+        //updateLruInsertionPoint();
       }
     };
 
@@ -204,9 +204,9 @@ bool MMLru::Container<T, HookPtr>::add(T& node) noexcept {
       lru_.insertBefore(*insertionPoint_, node);
     }
     node.markInMMContainer();
-    setUpdateTime(node, currTime);
-    unmarkAccessed(node);
-    updateLruInsertionPoint();
+    //setUpdateTime(node, currTime);
+    //unmarkAccessed(node);
+    //updateLruInsertionPoint();
     return true;
   });
 }
@@ -227,9 +227,9 @@ uint32_t MMLru::Container<T, HookPtr>::addBatch(std::vector<T*>& nodes) noexcept
           lru_.insertBefore(*insertionPoint_, *node);
         }
         node->markInMMContainer();
-        setUpdateTime(*node, currTime);
-        unmarkAccessed(*node);
-        updateLruInsertionPoint();
+        //setUpdateTime(*node, currTime);
+        //unmarkAccessed(*node);
+        //updateLruInsertionPoint();
       }
       i++;
     }
@@ -350,12 +350,12 @@ bool MMLru::Container<T, HookPtr>::replace(T& oldNode, T& newNode) noexcept {
     lru_.replace(oldNode, newNode);
     oldNode.unmarkInMMContainer();
     newNode.markInMMContainer();
-    setUpdateTime(newNode, updateTime);
-    if (isAccessed(oldNode)) {
-      markAccessed(newNode);
-    } else {
-      unmarkAccessed(newNode);
-    }
+    //setUpdateTime(newNode, updateTime);
+    //if (isAccessed(oldNode)) {
+    //  markAccessed(newNode);
+    //} else {
+    //  unmarkAccessed(newNode);
+    //}
     XDCHECK(!isTail(newNode));
     if (isTail(oldNode)) {
       markTail(newNode);
@@ -393,8 +393,8 @@ serialization::MMLruObject MMLru::Container<T, HookPtr>::saveState()
 
 template <typename T, MMLru::Hook<T> T::*HookPtr>
 MMContainerStat MMLru::Container<T, HookPtr>::getStats() const noexcept {
-  auto stat = lruMutex_->lock_combine([this]() {
-    auto* tail = lru_.getTail();
+  //auto stat = lruMutex_->lock_combine([this]() {
+  //  auto* tail = lru_.getTail();
 
     // we return by array here because DistributedMutex is fastest when the
     // output data fits within 48 bytes.  And the array is exactly 48 bytes, so
@@ -402,13 +402,13 @@ MMContainerStat MMLru::Container<T, HookPtr>::getStats() const noexcept {
     //
     // the rest of the parameters are 0, so we don't need the critical section
     // to return them
-    return folly::make_array(lru_.size(),
-                             tail == nullptr ? 0 : getUpdateTime(*tail),
-                             lruRefreshTime_.load(std::memory_order_relaxed));
-  });
-  return {stat[0] /* lru size */,
-          stat[1] /* tail time */,
-          stat[2] /* refresh time */,
+    //return folly::make_array(lru_.size(),
+     //                        tail == nullptr ? 0 : getUpdateTime(*tail),
+     //                        lruRefreshTime_.load(std::memory_order_relaxed));
+  //});
+  return {lru_.size() /* lru size */,
+          0 /* tail time */,
+          0 /* refresh time */,
           0,
           0,
           0,

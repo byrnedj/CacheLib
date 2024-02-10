@@ -185,6 +185,7 @@ struct StressorConfig : public JSONConfig {
 
   // ignore opCount and does not repeat operations
   bool ignoreOpCount{false};
+  bool bySize{false};
 
   // only set a key in the cache if the key already doesn't exist
   // this is useful for replaying traces with both get and set, and also
@@ -270,6 +271,7 @@ struct StressorConfig : public JSONConfig {
   bool useCombinedLockForIterators{false};
   
   std::vector<uint64_t> allocSizes{};
+  std::vector<uint64_t> tier0ClassAssignments{};
 
   // admission policy for cache.
   std::shared_ptr<StressorAdmPolicy> admPolicy{};
@@ -282,6 +284,10 @@ struct StressorConfig : public JSONConfig {
 
   void setAllocSizes(std::vector<uint64_t> allocSizes_) {
     allocSizes = allocSizes_;
+  }
+  
+  void setAssignments(std::vector<uint64_t> assignments_) {
+    tier0ClassAssignments = assignments_;
   }
 };
 

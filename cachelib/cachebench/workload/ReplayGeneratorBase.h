@@ -257,6 +257,38 @@ class TraceFileStream {
   std::vector<std::string> keys_;
 };
 
+struct StressorId {
+    int classId;
+    int currStressorId;
+    int totalStressors;
+    int firstStressorId;
+    int lastStressorId;
+    StressorId() {
+        classId = 0;
+        currStressorId = 0;
+        totalStressors = 0;
+        firstStressorId = 0;
+        lastStressorId = 0;
+    }
+    StressorId(int cid, int first, int last, int total) {
+        classId = cid;
+        firstStressorId = first;
+        lastStressorId = last;
+        currStressorId = firstStressorId;
+        totalStressors = total;
+    }
+    int getAndUpdate() {
+        int curr = currStressorId++;
+        if (currStressorId > lastStressorId) {
+            currStressorId = firstStressorId;
+        }
+        return curr;
+    }
+    void reset() {
+        currStressorId = firstStressorId;
+    }
+};
+
 class ReplayGeneratorBase : public GeneratorBase {
  public:
   explicit ReplayGeneratorBase(const StressorConfig& config)
@@ -280,6 +312,7 @@ class ReplayGeneratorBase : public GeneratorBase {
   const StressorConfig config_;
   const bool repeatTraceReplay_;
   const size_t ampFactor_;
+  std::array<StressorId,100> shardToStressor;
 
   // The constant to be divided from the timestamp value
   // to turn the timestamp into seconds.
@@ -305,12 +338,21 @@ class ReplayGeneratorBase : public GeneratorBase {
   
   // Return the shard for the key.
   uint32_t getShardBySize(uint32_t size) {
-    for (uint32_t i = 1; i < config_.allocSizes.size(); i++) {
-      if (size+64 > config_.allocSizes[i]) {
-          return i-1;
-      }
+    uint32_t shard = 0;
+    uint32_t nclasses = config_.allocSizes.size();
+    uint32_t max = config_.allocSizes[nclasses-1];
+    if (size == 0 || size > max) {
+      int* p = 0;
+      *p = 0;
+      XCHECK_LT(size, nclasses-1);
+      return nclasses-1;
     }
-    return 0;
+    while (size > config_.allocSizes[shard]) {
+        if (shard++ == (nclasses-1)) {
+            return shard % (nclasses-1);
+        }
+    }
+    return shard % (nclasses-1);
   }
 };
 
