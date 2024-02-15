@@ -45,18 +45,7 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
       : ReplayGeneratorBase(config), binaryStream_(config) {
     for (uint32_t i = 0; i < numShards_; ++i) {
       stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
-      std::string_view s{"abc"};
-      requestPtr_.emplace_back(new Request(s,reinterpret_cast<size_t*>(0),
-                                   OpType::kGet,0));
     }
-
-    folly::Latch latch(1);
-    genWorker_ = std::thread([this, &latch] {
-      folly::setThreadName("cb_replay_gen");
-      genRequests(latch);
-    });
-
-    latch.wait();
 
     XLOGF(INFO,
           "Started BinaryKVReplayGenerator (amp factor {}, # of stressor threads {}, fast foward {})",
@@ -65,9 +54,6 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
 
   virtual ~BinaryKVReplayGenerator() {
     XCHECK(shouldShutdown());
-    if (genWorker_.joinable()) {
-      genWorker_.join();
-    }
   }
 
   // getReq generates the next request from the trace file.
@@ -95,9 +81,9 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // We use polling with the delay since the ProducerConsumerQueue does not
   // support blocking read or writes with a timeout
   static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 20000000; //just stores pointers to mmap'd data
-
-  using ReqQueue = folly::ProducerConsumerQueue<BinaryRequest*>;
+  static constexpr size_t kMaxRequests = 50000000; //just stores pointers to mmap'd data
+  static constexpr size_t PG_RELEASE = 100000000;
+  uint64_t reqsCompleted = 0;
 
   // StressorCtx keeps track of the state including the submission queues
   // per stressor thread. Since there is only one request generator thread,
@@ -109,15 +95,17 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // can be outstanding for sync stressor
   struct StressorCtx {
     explicit StressorCtx(uint32_t id)
-        : id_(id), reqQueue_(std::in_place_t{}, kMaxRequests) {}
+        : id_(id), reqIdx_(id) {
+      std::string_view s{"abc"};
+      requestPtr_ = new Request(s,reinterpret_cast<size_t*>(0),OpType::kGet,0);
+    }
 
     bool isFinished() { return finished_.load(std::memory_order_relaxed); }
     void markFinish() { finished_.store(true, std::memory_order_relaxed); }
 
+    Request* requestPtr_;
+    uint64_t reqIdx_{0};
     uint32_t id_{0};
-    //std::queue<std::unique_ptr<BinaryReqWrapper>> resubmitQueue_;
-    std::queue<BinaryRequest*> resubmitQueue_;
-    folly::cacheline_aligned<ReqQueue> reqQueue_;
     // Thread that finish its operations mark it here, so we will skip
     // further request on its shard
     std::atomic<bool> finished_{false};
@@ -134,15 +122,9 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // stressorIdx_ is used to index.
   std::vector<std::unique_ptr<StressorCtx>> stressorCtxs_;
 
-  // Pointer to request object used to carry binary
-  // request data
-  std::vector<Request*> requestPtr_;
-
   // Class that holds a vector of pointers to the
   // binary data
   BinaryFileStream binaryStream_;
-
-  std::thread genWorker_;
 
   // Used to signal end of file as EndOfTrace exception
   std::atomic<bool> eof{false};
@@ -150,8 +132,6 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // Stats
   std::atomic<uint64_t> parseError = 0;
   std::atomic<uint64_t> parseSuccess = 0;
-
-  void genRequests(folly::Latch& latch);
 
   void setEOF() { eof.store(true, std::memory_order_relaxed); }
   bool isEOF() { return eof.load(std::memory_order_relaxed); }
@@ -169,117 +149,59 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
     return getStressorCtx(*stressorIdx_);
   }
   
-  inline Request* getRequestPtr(size_t shardId) {
-    XCHECK_LT(shardId, numShards_);
-    return requestPtr_[shardId];
-  }
-  
-  inline Request* getRequestPtr() {
-    if (!stressorIdx_.get()) {
-      stressorIdx_.reset(new uint32_t(incrementalIdx_++));
-    }
-
-    return getRequestPtr(*stressorIdx_);
-  }
 };
-
-inline void BinaryKVReplayGenerator::genRequests(folly::Latch& latch) {
-  bool init = true;
-  uint64_t nreqs = 0;
-  binaryStream_.setOffset(fastForwardCount_);
-  auto begin = util::getCurrentTimeSec();
-  while (!shouldShutdown()) {
-    try {
-      BinaryRequest* req = binaryStream_.getNextPtr();
-      auto key = req->getKey(binaryStream_.getKeyOffset());
-      XDCHECK_LT(req->op_,11);
-      nreqs++;
-      auto shardId = getShard(key);
-      auto& stressorCtx = getStressorCtx(shardId);
-      auto& reqQ = *stressorCtx.reqQueue_;
-      while (!reqQ.write(req) && !stressorCtx.isFinished() &&
-             !shouldShutdown()) {
-        // ProducerConsumerQueue does not support blocking, so use sleep
-	if (init) {
-	  latch.count_down();
-	  init = false;
-	}
-        std::this_thread::sleep_for(
-            std::chrono::microseconds{checkIntervalUs_});
-      }
-      if (nreqs >= preLoadReqs_ && init) {
-        auto end = util::getCurrentTimeSec();
-	double reqsPerSec = nreqs / (double)(end - begin);
-        XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);
-	latch.count_down();
-	init = false;
-      }
-    } catch (const EndOfTrace& e) {
-      if (init) {
-	latch.count_down();
-      }
-      break;
-    }
-  }
-
-  setEOF();
-}
 
 const Request& BinaryKVReplayGenerator::getReq(uint8_t,
                                          std::mt19937_64&,
                                          std::optional<uint64_t>) {
-  BinaryRequest *req = nullptr;
-  auto& stressorCtx = getStressorCtx();
-  auto& reqQ = *stressorCtx.reqQueue_;
-  auto& resubmitQueue = stressorCtx.resubmitQueue_;
-  XDCHECK_EQ(req,nullptr);
 
-  while (resubmitQueue.empty() && !reqQ.read(req)) {
-    if (resubmitQueue.empty() && isEOF()) {
+  auto& stressorCtx = getStressorCtx();
+  auto& r = *stressorCtx.requestPtr_;
+  BinaryRequest* prevReq = reinterpret_cast<BinaryRequest*>(*(r.requestId));
+  if (prevReq != nullptr && prevReq->repeats_ > 1) {
+    prevReq->repeats_ = prevReq->repeats_ - 1;
+  } else {
+    BinaryRequest *req = nullptr;
+    try {
+      req = binaryStream_.getNextPtr(stressorCtx.reqIdx_);
+    } catch (const EndOfTrace& e) {
       throw cachelib::cachebench::EndOfTrace("Test stopped or EOF reached");
     }
-    // ProducerConsumerQueue does not support blocking, so use sleep
-    std::this_thread::sleep_for(std::chrono::microseconds{checkIntervalUs_});
+    
+    XDCHECK_NE(req,nullptr);
+    XDCHECK_NE(reinterpret_cast<uint64_t>(req),0);
+    XDCHECK_LT(req->op_,12);
+    auto key = req->getKey(binaryStream_.getKeyOffset());
+    OpType op;
+    switch (req->op_) {
+      case 1:
+        op = OpType::kGet;
+        break;
+      case 2:
+        op = OpType::kSet;
+        break;
+      case 3:
+        op = OpType::kDel;
+        break;
+    }
+    r.update(key,
+             const_cast<size_t*>(reinterpret_cast<size_t*>(&req->valueSize_)),
+             op,
+             req->ttl_,
+             reinterpret_cast<uint64_t>(req));
+    stressorCtx.reqIdx_ += numShards_;
   }
-
-  if (req == nullptr) {
-    XCHECK(!resubmitQueue.empty());
-    req = resubmitQueue.front();
-    resubmitQueue.pop();
-  }
-  XDCHECK_NE(req,nullptr);
-  XDCHECK_NE(reinterpret_cast<uint64_t>(req),0);
-  XDCHECK_LT(req->op_,12);
-  auto key = req->getKey(binaryStream_.getKeyOffset());
-  OpType op;
-  switch (req->op_) {
-    case 1:
-      op = OpType::kGet;
-      break;
-    case 2:
-      op = OpType::kSet;
-      break;
-    case 3:
-      op = OpType::kDel;
-      break;
-  }
-  auto r = getRequestPtr();
-  r->update(key,
-           const_cast<size_t*>(reinterpret_cast<size_t*>(&req->valueSize_)),
-           op,
-           req->ttl_,
-           reinterpret_cast<uint64_t>(req));
-  return *r;
+  return r;
 }
 
 void BinaryKVReplayGenerator::notifyResult(uint64_t requestId, OpResultType) {
-  // requestId should point to the BinaryRequesat object.
-  BinaryRequest* req = reinterpret_cast<BinaryRequest*>(requestId);
-  if (req->repeats_ > 0) {
-    req->repeats_ = req->repeats_ - 1;
-    // need to insert into the queue again
-    getStressorCtx().resubmitQueue_.emplace(req);
+  reqsCompleted++;
+  //every 100M requests we can dump the old pages
+  //here we are at PG_REQUESTS*1 (200M) we safely can release the first 100M requests
+  if ((reqsCompleted % PG_RELEASE == 0) && reqsCompleted >= PG_RELEASE*2) {
+      binaryStream_.releaseOldData(PG_RELEASE,reqsCompleted);
   }
+  
 }
 
 } // namespace cachebench

@@ -19,6 +19,7 @@
 #include <folly/Format.h>
 #include <folly/Random.h>
 #include <folly/logging/xlog.h>
+#include <folly/synchronization/DistributedMutex.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -37,7 +38,6 @@
 #include "cachelib/cachebench/util/Exceptions.h"
 #include "cachelib/cachebench/workload/GeneratorBase.h"
 
-#define PG_RELEASE 100000000
 
 namespace facebook {
 namespace cachelib {
@@ -320,42 +320,33 @@ class BinaryFileStream {
   }
  
   char* getKeyOffset() {
-      return binaryKeyData_;
+    return binaryKeyData_;
   }
 
-  BinaryRequest* getNextPtr() {
-    //here we are at PG_REQUESTS*2 (200M) we can release the first 100M requests
-    if ((offset_ % PG_RELEASE == 0) && offset_ > PG_RELEASE*2) {
-      //uint64_t reqStart = reinterpret_cast<uint64_t>(binaryReqData_ + (offset_ - PG_RELEASE));
-      //reqStart = reqStart + (4096 - reqStart % 4096);
-      //uint64_t reqEnd = reinterpret_cast<uint64_t>(binaryReqData_ + PG_RELEASE*relcount);
-      //reqEnd = reqEnd + (4096 - reqEnd % 4096);
-      //int rres = 0;
-      //int rres = madvise( reinterpret_cast<void*>(reqStart), reqEnd - reqStart, MADV_DONTNEED);
-      uint64_t keyBytes = binaryReqData_[PG_RELEASE*relcount_].keyOffset_;
-      int rres = madvise( reinterpret_cast<void*>(pgBinaryData_), (PG_RELEASE*relcount_) * sizeof(BinaryRequest) + sizeof(size_t), MADV_DONTNEED);
-      XDCHECK_EQ(rres,0);
-      if (rres != 0) {
-	XLOGF(INFO,"Failed to release old reqs, nrel {} curr {}, res {}",PG_RELEASE*relcount_, offset_,strerror(errno));
-      } else {
-	XLOGF(INFO,"release old reqs, nrel {} curr {}",PG_RELEASE*relcount_, offset_);
-      }
-      
-      
-      //uint64_t keyStart = reinterpret_cast<uint64_t>(binaryKeyData_ + lastKeyOffset_);
-      //keyStart = keyStart + (4096 - keyStart % 4096);
-      //uint64_t keyEnd = reinterpret_cast<uint64_t>(binaryKeyData_ + currKeyOffset_);
-      //keyEnd = keyEnd + (4096 - keyEnd % 4096);
-      //int kres = 0;
-      int kres = madvise( reinterpret_cast<void*>(pgBinaryKeyData_), keyBytes, MADV_DONTNEED);
-      XDCHECK_EQ(kres,0);
-      if (kres != 0) {
-	XLOGF(INFO,"Failed to release old keys, curr {}",keyBytes);
-      } else {
-	XLOGF(INFO,"release old keys, curr {}",keyBytes);
-      }
-      relcount_++;
+  void releaseOldData(size_t PG_RELEASE, uint64_t reqsCompleted) {
+    uint64_t keyBytes = binaryReqData_[PG_RELEASE*relcount_].keyOffset_;
+    
+    int rres = madvise( reinterpret_cast<void*>(pgBinaryData_), (PG_RELEASE*relcount_) * sizeof(BinaryRequest) + sizeof(size_t), MADV_DONTNEED);
+    XDCHECK_EQ(rres,0);
+    if (rres != 0) {
+      XLOGF(INFO,"Failed to release old reqs, nrel {} completed {}, res {}",PG_RELEASE*relcount_, reqsCompleted,strerror(errno));
+    } else {
+      XLOGF(INFO,"release old reqs, nrel {} completed {}",PG_RELEASE*relcount_, reqsCompleted);
+    }
 
+    int kres = madvise( reinterpret_cast<void*>(pgBinaryKeyData_), keyBytes, MADV_DONTNEED);
+    XDCHECK_EQ(kres,0);
+    if (kres != 0) {
+      XLOGF(INFO,"Failed to release old keys, curr {}",keyBytes);
+    } else {
+      XLOGF(INFO,"release old keys, curr {}",keyBytes);
+    }
+    relcount_++;
+  }
+
+  BinaryRequest* getNextPtr(uint64_t reqIdx) {
+    if (reqIdx > offset_) {
+      offset_ = reqIdx; //approx place in trace
     }
     if (offset_ >= nreqs_) {
       if (!repeatTraceReplay_) {
@@ -364,9 +355,7 @@ class BinaryFileStream {
         offset_ = 0;
       }
     }
-    BinaryRequest* binReq = binaryReqData_ + offset_;
-    currKeyOffset_ = binReq->keyOffset_;
-    offset_++;
+    BinaryRequest *binReq = binaryReqData_ + reqIdx;
     XDCHECK_LT(binReq->op_,12);
     return binReq;
   }
@@ -380,6 +369,7 @@ class BinaryFileStream {
     const bool repeatTraceReplay_;
     std::string infileName_;
     BinaryRequest *binaryReqData_;
+    mutable folly::cacheline_aligned<folly::DistributedMutex> mutex_;
     char *binaryKeyData_;
     void *pgBinaryKeyData_;
     void *pgBinaryData_;
