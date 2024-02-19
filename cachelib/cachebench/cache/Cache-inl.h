@@ -893,9 +893,7 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
 
   auto ptr2 = reinterpret_cast<char*>(getMemory(handle));
   // Make sure the copied string ends with null char
-  if (str.size() + 1 > dataSize) {
-    ptr2[dataSize - 1] = '\0';
-  }
+  ptr2[dataSize - 1] = '\0';
 }
 
 template <typename Allocator>
