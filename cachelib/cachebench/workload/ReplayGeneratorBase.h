@@ -38,13 +38,14 @@
 #include "cachelib/cachebench/util/Exceptions.h"
 #include "cachelib/cachebench/workload/GeneratorBase.h"
 
+#define PG_SIZE 4096
 
 namespace facebook {
 namespace cachelib {
 namespace cachebench {
 
+constexpr size_t kPgRelease = 100000000;
 constexpr size_t kIfstreamBufferSize = 1L << 14;
-
 // ColumnInfo is to pass the information required to parse the trace
 // to map the column to the replayer-specific field ID.
 struct ColumnInfo {
@@ -295,43 +296,64 @@ class TraceFileStream {
 
 class BinaryFileStream {
  public:
-  BinaryFileStream(const StressorConfig& config)
-      : infileName_(config.traceFileName),
-        repeatTraceReplay_(config.repeatTraceReplay) {
+  BinaryFileStream(const StressorConfig& config, const uint32_t numShards)
+      : infileName_(config.traceFileName) {
+
     fd_ = open(infileName_.c_str(),O_RDONLY);
     // Get the size of the file
     struct stat fileStat;
     if (fstat(fd_, &fileStat) == -1) {
-        close(fd_);
-	XLOGF(INFO, "Error reading file size {}",infileName_);
+      close(fd_);
+      XLOGF(INFO, "Error reading file size {}",infileName_);
     }
-    fileSize_ = fileStat.st_size;
-    size_t *binaryData = reinterpret_cast<size_t*>(mmap(nullptr, fileSize_, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd_, 0));
+    size_t *binaryData = reinterpret_cast<size_t*>(
+            mmap(nullptr, fileStat.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd_, 0));
+    // binary data pg align save for releasing old requests
     pgBinaryData_ = reinterpret_cast<void*>(binaryData);
+
+    // first value is the number of requests in the file
     nreqs_ = binaryData[0];
     binaryData++;
+    // next is the request data
     binaryReqData_ = reinterpret_cast<BinaryRequest*>(binaryData);
     binaryKeyData_ = reinterpret_cast<char*>(binaryData);
+
+    // keys are stored after request structures
     binaryKeyData_ += nreqs_*sizeof(BinaryRequest);
-    pgBinaryKeyData_ = reinterpret_cast<void*>(binaryKeyData_) +  (4096 - reinterpret_cast<uint64_t>(binaryKeyData_) % 4096);
-    offset_ = 0;
-    lastKeyOffset_ = 0;
-    relcount_ = 1;
+    // save the pg aligned key space for releasing old key data
+    pgBinaryKeyData_ = reinterpret_cast<void*>(binaryKeyData_) + 
+        (PG_SIZE - reinterpret_cast<uint64_t>(binaryKeyData_) % PG_SIZE);
+
+    releaseCount_ = 1; //release data after first nRelease reqs
+    nRelease_ = kPgRelease;
+    releaseIdx_ = nRelease_ * releaseCount_;
+    // pre fault some initial keys
+    for (int i = 0; i < nRelease_ && i < nreqs_; i += 2) {
+      BinaryRequest *r = binaryReqData_ + i;
+      auto key = r->getKey(binaryKeyData_);
+    }
   }
- 
+
+  ~BinaryFileStream() {
+    close(fd_);
+  }
+
+  uint64_t getN() {
+    return nreqs_;
+  }
+
   char* getKeyOffset() {
     return binaryKeyData_;
   }
 
-  void releaseOldData(size_t PG_RELEASE, uint64_t reqsCompleted) {
-    uint64_t keyBytes = binaryReqData_[PG_RELEASE*relcount_].keyOffset_;
-    
-    int rres = madvise( reinterpret_cast<void*>(pgBinaryData_), (PG_RELEASE*relcount_) * sizeof(BinaryRequest) + sizeof(size_t), MADV_DONTNEED);
+  void releaseOldData(uint64_t reqsCompleted) {
+    uint64_t keyBytes = binaryReqData_[releaseIdx_].keyOffset_;
+    int rres = madvise( reinterpret_cast<void*>(pgBinaryData_), (releaseIdx_) * sizeof(BinaryRequest) + sizeof(size_t), MADV_DONTNEED);
     XDCHECK_EQ(rres,0);
     if (rres != 0) {
-      XLOGF(INFO,"Failed to release old reqs, nrel {} completed {}, res {}",PG_RELEASE*relcount_, reqsCompleted,strerror(errno));
+      XLOGF(INFO,"Failed to release old reqs, nrel {} completed {}, res {}",releaseIdx_, reqsCompleted,strerror(errno));
     } else {
-      XLOGF(INFO,"release old reqs, nrel {} completed {}",PG_RELEASE*relcount_, reqsCompleted);
+      XLOGF(INFO,"release old reqs, nrel {} completed {}",releaseIdx_, reqsCompleted);
     }
 
     int kres = madvise( reinterpret_cast<void*>(pgBinaryKeyData_), keyBytes, MADV_DONTNEED);
@@ -341,44 +363,43 @@ class BinaryFileStream {
     } else {
       XLOGF(INFO,"release old keys, curr {}",keyBytes);
     }
-    relcount_++;
+    releaseIdx_ = nRelease_ * (++releaseCount_);
   }
 
   BinaryRequest* getNextPtr(uint64_t reqIdx) {
-    if (reqIdx > offset_) {
-      offset_ = reqIdx; //approx place in trace
+    if ((reqIdx > releaseIdx_) && 
+            (reqIdx % nRelease_ == 0)) {
+        releaseOldData(reqIdx);
     }
-    if (offset_ >= nreqs_) {
-      if (!repeatTraceReplay_) {
-        throw cachelib::cachebench::EndOfTrace("");
-      } else {
-        offset_ = 0;
-      }
+    if (reqIdx >= nreqs_) {
+      throw cachelib::cachebench::EndOfTrace("");
     }
     BinaryRequest *binReq = binaryReqData_ + reqIdx;
     XDCHECK_LT(binReq->op_,12);
     return binReq;
   }
 
-  void setOffset(uint64_t offset) {
-    offset_ = offset;
-  }
-
   private:
     const StressorConfig config_;
-    const bool repeatTraceReplay_;
     std::string infileName_;
+
+    // pointers to mmaped data
     BinaryRequest *binaryReqData_;
-    mutable folly::cacheline_aligned<folly::DistributedMutex> mutex_;
     char *binaryKeyData_;
+    
+    // these two pointers are to madvise 
+    // away old request data
     void *pgBinaryKeyData_;
     void *pgBinaryData_;
-    size_t offset_;
-    size_t relcount_;
+
+    // number of requests released so far
+    size_t releaseIdx_;
+    size_t releaseCount_;
+    // how often to release old requests
+    size_t nRelease_; 
+
     size_t fileSize_;
     uint64_t nreqs_;
-    size_t lastKeyOffset_;
-    size_t currKeyOffset_;
     int fd_;
 };
 

@@ -42,14 +42,14 @@ namespace cachebench {
 class BinaryKVReplayGenerator : public ReplayGeneratorBase {
  public:
   explicit BinaryKVReplayGenerator(const StressorConfig& config)
-      : ReplayGeneratorBase(config), binaryStream_(config) {
+      : ReplayGeneratorBase(config), binaryStream_(config, numShards_) {
     for (uint32_t i = 0; i < numShards_; ++i) {
       stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
     }
 
     XLOGF(INFO,
-          "Started BinaryKVReplayGenerator (amp factor {}, # of stressor threads {}, fast foward {})",
-          ampFactor_, numShards_, fastForwardCount_);
+          "Started BinaryKVReplayGenerator (# of stressor threads {}, total requests {})",
+           numShards_, binaryStream_.getN());
   }
 
   virtual ~BinaryKVReplayGenerator() {
@@ -71,19 +71,12 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
         << std::endl;
   }
 
-  void notifyResult(uint64_t requestId, OpResultType result) override;
-
   void markFinish() override { getStressorCtx().markFinish(); }
 
  private:
-  // Interval at which the submission queue is polled when it is either
-  // full (producer) or empty (consumer).
-  // We use polling with the delay since the ProducerConsumerQueue does not
-  // support blocking read or writes with a timeout
-  static constexpr uint64_t checkIntervalUs_ = 100;
-  static constexpr size_t kMaxRequests = 50000000; //just stores pointers to mmap'd data
-  static constexpr size_t PG_RELEASE = 100000000;
-  uint64_t reqsCompleted = 0;
+  // per thread: the number of requests to run through
+  // the trace before jumping to next offset
+  static constexpr size_t kRunLength = 10000;
 
   // StressorCtx keeps track of the state including the submission queues
   // per stressor thread. Since there is only one request generator thread,
@@ -95,9 +88,10 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // can be outstanding for sync stressor
   struct StressorCtx {
     explicit StressorCtx(uint32_t id)
-        : id_(id), reqIdx_(id) {
+        : id_(id), reqIdx_(id*kRunLength) {
       std::string_view s{"abc"};
       requestPtr_ = new Request(s,reinterpret_cast<size_t*>(0),OpType::kGet,0);
+      runIdx_ = 0;
     }
 
     bool isFinished() { return finished_.load(std::memory_order_relaxed); }
@@ -106,6 +100,7 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
     Request* requestPtr_;
     uint64_t reqIdx_{0};
     uint32_t id_{0};
+    uint64_t runIdx_{0};
     // Thread that finish its operations mark it here, so we will skip
     // further request on its shard
     std::atomic<bool> finished_{false};
@@ -152,7 +147,7 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
 };
 
 const Request& BinaryKVReplayGenerator::getReq(uint8_t,
-                                         std::mt19937_64&,
+                                         std::mt19937_64& gen,
                                          std::optional<uint64_t>) {
 
   auto& stressorCtx = getStressorCtx();
@@ -163,8 +158,9 @@ const Request& BinaryKVReplayGenerator::getReq(uint8_t,
   } else {
     BinaryRequest *req = nullptr;
     try {
-      req = binaryStream_.getNextPtr(stressorCtx.reqIdx_);
+      req = binaryStream_.getNextPtr(stressorCtx.reqIdx_ + stressorCtx.runIdx_);
     } catch (const EndOfTrace& e) {
+      setEOF();
       throw cachelib::cachebench::EndOfTrace("Test stopped or EOF reached");
     }
     
@@ -189,19 +185,14 @@ const Request& BinaryKVReplayGenerator::getReq(uint8_t,
              op,
              req->ttl_,
              reinterpret_cast<uint64_t>(req));
-    stressorCtx.reqIdx_ += numShards_;
+    if (stressorCtx.runIdx_ < kRunLength) {
+      stressorCtx.runIdx_++;
+    } else {
+      stressorCtx.runIdx_ = 0;
+      stressorCtx.reqIdx_ += numShards_ * kRunLength;
+    }
   }
   return r;
-}
-
-void BinaryKVReplayGenerator::notifyResult(uint64_t requestId, OpResultType) {
-  reqsCompleted++;
-  //every 100M requests we can dump the old pages
-  //here we are at PG_REQUESTS*1 (200M) we safely can release the first 100M requests
-  if ((reqsCompleted % PG_RELEASE == 0) && reqsCompleted >= PG_RELEASE*2) {
-      binaryStream_.releaseOldData(PG_RELEASE,reqsCompleted);
-  }
-  
 }
 
 } // namespace cachebench
