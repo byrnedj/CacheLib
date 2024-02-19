@@ -263,11 +263,12 @@ class CacheStressor : public Stressor {
       cache_->setUint64ToItem(handle, folly::Random::rand64(rng));
     }
 
-    if (!itemValue.empty()) {
-      cache_->setStringItem(handle, itemValue);
-    } else {
-      cache_->setStringItem(handle, hardcodedString_);
-    }
+    //if (!itemValue.empty()) {
+    //  cache_->setStringItem(handle, itemValue);
+    //} else {
+    //  cache_->setStringItem(handle, hardcodedString_);
+    //}
+    cache_->setStringItem(handle, hardcodedString_);
   }
 
   // Runs a number of operations on the cache allocator. The actual
