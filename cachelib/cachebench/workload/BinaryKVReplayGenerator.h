@@ -44,7 +44,7 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   explicit BinaryKVReplayGenerator(const StressorConfig& config)
       : ReplayGeneratorBase(config), binaryStream_(config, numShards_) {
     for (uint32_t i = 0; i < numShards_; ++i) {
-      stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i));
+      stressorCtxs_.emplace_back(std::make_unique<StressorCtx>(i, fastForwardCount_));
     }
 
     XLOGF(INFO,
@@ -87,8 +87,8 @@ class BinaryKVReplayGenerator : public ReplayGeneratorBase {
   // be more than one requests outstanding for async stressor while only one
   // can be outstanding for sync stressor
   struct StressorCtx {
-    explicit StressorCtx(uint32_t id)
-        : id_(id), reqIdx_(id*kRunLength) {
+    explicit StressorCtx(uint32_t id, uint32_t fastForwardCount)
+        : id_(id), reqIdx_(id*kRunLength + fastForwardCount) {
       std::string_view s{"abc"};
       requestPtr_ = new Request(s,reinterpret_cast<size_t*>(0),OpType::kGet,0);
       runIdx_ = 0;
@@ -180,6 +180,10 @@ const Request& BinaryKVReplayGenerator::getReq(uint8_t,
         op = OpType::kDel;
         break;
     }
+    req->valueSize_ = (req->valueSize_)*ampSizeFactor_; 
+    if (req->valueSize_ > 4000000) {
+      req->valueSize_ = 4000000;
+    }	
     r.update(key,
              const_cast<size_t*>(reinterpret_cast<size_t*>(&req->valueSize_)),
              op,
