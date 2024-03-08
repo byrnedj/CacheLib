@@ -1345,6 +1345,12 @@ CacheAllocator<CacheTrait>::insertOrReplace(const WriteHandle& handle) {
           //}
       } else if (handle->isInclusive() && tid == 1) {
           replaced->setNextTierCopy(0);
+          replaced->markCopy();
+          handle->markDirty();
+          handle->setNextTierCopy(replaced.getInternal());
+          //auto& oldContainer = getMMContainer(*replaced);
+          //auto mmContainerRemoved = oldContainer.remove(*replaced);
+          //XDCHECK(mmContainerRemoved);
           //handle->markDirty();
           //handle->setNextTierCopy(replaced.getInternal());
       }
@@ -1931,7 +1937,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotionQueue(TierId tid,
       typename NvmCacheT::PutToken token{};
       auto ret = handleFailedMove(candidate,token,false,markMoving);
       XDCHECK(ret);
-      if (fromBgThread && markMoving && candidate->getRefCountAndFlagsRaw() == 0) {
+      if (fromBgThread && markMoving) {
         const auto res =
             releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
         XDCHECK(res == ReleaseRes::kReleased);
@@ -2088,7 +2094,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
       removeFromMMContainer(*newAllocs[i]);
       auto ret = handleFailedMove(candidate,token,false,markMoving);
       XDCHECK(ret);
-      if (markMoving && candidate->getRefCountAndFlagsRaw() == 0) {
+      if (markMoving) {
         const auto res =
             releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
         XDCHECK(res == ReleaseRes::kReleased);
@@ -2129,7 +2135,14 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
     blankAllocs = allocateInternalTierByCidBatch(tid+1,pid,cid,batch);
     if (blankAllocs.empty()) {
       return {candidates,toRecycles};  
-    } else if (blankAllocs.size() != batch) {
+    } else if (blankAllocs.size() < batch) {
+      if (blankAllocs.size() < 3) {
+        for (int i = 0; i < blankAllocs.size(); i++) {
+          allocator_[tid+1]->free(blankAllocs.back());
+          blankAllocs.pop_back();
+        }
+        return {candidates,toRecycles};  
+      }
       batch = blankAllocs.size(); 
     }
     XDCHECK_EQ(blankAllocs.size(),batch);
@@ -2752,7 +2765,7 @@ CacheAllocator<CacheTrait>::tryEvictToNextMemoryTier(
     }
 
     if (newItemHdl) {
-      XDCHECK_EQ(newItemHdl->getSize(), item.getSize());
+      XDCHECK_EQ(newItemHdl->getSize(), item.getSize()) << item.toString();
       bool moveSuccess = chainedItem
           ? moveChainedItem(item.asChainedItem(),
                             newItemHdl, *parentItem)
@@ -3248,7 +3261,7 @@ void CacheAllocator<CacheTrait>::markUseful(const ReadHandle& handle,
   const auto pid = allocInfo.poolId;
   const auto cid = allocInfo.classId;
   if (tid > 0) {
-    if (backgroundPromoter_.size() > 0 && config_.usePromotionQueue && !item.isCopy()) {
+    if ((config_.getClassAssignments(0,pid)[cid] > 1) && config_.usePromotionQueue && !item.isCopy()) {
       auto &promoQueue = getPromoQueue(tid,pid,cid);
       bool added = false;
       if (!config_.useHandleForBgSync) {
@@ -3647,12 +3660,13 @@ PoolId CacheAllocator<CacheTrait>::addPool(
   }
   uint32_t id = 0;
   size_t actualThreads = 0;
-  auto assignments = config_.getClassAssignments(0,0);
+  auto assignments1 = config_.getClassAssignments(0,0);
+  auto assignments2 = config_.getClassAssignments(1,0);
   std::vector<std::vector<MemoryDescriptorType>> memoryMapE;
   std::vector<std::vector<MemoryDescriptorType>> memoryMapP;
-  for (auto entry : assignments) {
+  for (auto entry : assignments1) {
       ClassId cid = entry.first;
-      uint32_t slabs = entry.second;
+      uint32_t slabs = entry.second + assignments2[cid];
       if (slabs > 2) {
           actualThreads++;
           MemoryDescriptorType md0(0,0,cid);
@@ -3660,7 +3674,7 @@ PoolId CacheAllocator<CacheTrait>::addPool(
           std::vector<MemoryDescriptorType> mems;
           std::vector<MemoryDescriptorType> memsP;
           mems.push_back(md0);
-          mems.push_back(md1);
+          //mems.push_back(md1);
           memsP.push_back(md1);
           memoryMapE.push_back(mems);
           memoryMapP.push_back(memsP);
@@ -5365,10 +5379,11 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundPromoter(
     bool useQueue) {
   size_t actualThreads = 0;
   auto assignments = config_.getClassAssignments(0,0);
+  auto assignments2 = config_.getClassAssignments(1,0);
   std::vector<std::vector<MemoryDescriptorType>> memoryMap;
   for (auto entry : assignments) {
       ClassId cid = entry.first;
-      uint32_t slabs = entry.second;
+      uint32_t slabs = entry.second + assignments2[cid];
       if (slabs > 2) {
           actualThreads++;
           MemoryDescriptorType md1(1,0,cid);

@@ -91,7 +91,7 @@ StressorConfig::StressorConfig(const folly::dynamic& configJson) {
   // If you added new fields to the configuration, update the JSONSetVal
   // to make them available for the json configs and increment the size
   // below
-  checkCorrectSize<StressorConfig, 560>();
+  checkCorrectSize<StressorConfig, 584>();
 }
 
 bool StressorConfig::usesChainedItems() const {
@@ -140,6 +140,7 @@ CacheBenchConfig::CacheBenchConfig(
       cacheConfigCustomizer ? cacheConfigCustomizer(cacheConfig) : cacheConfig;
   stressorConfig_.setAllocSizes(cacheConfig.getAllocSizes());
   stressorConfig_.setAssignments(cacheConfig.getAssignments());
+  stressorConfig_.set1Assignments(cacheConfig.get1Assignments());
 }
 
 DistributionConfig::DistributionConfig(const folly::dynamic& jsonConfig,

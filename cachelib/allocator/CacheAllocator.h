@@ -2145,14 +2145,8 @@ class CacheAllocator : public CacheBase {
 
   static typename MemoryAllocator::Config getAllocatorConfig(
       const Config& config) {
-    return MemoryAllocator::Config{
-        config.defaultAllocSizes.empty()
-            ? util::generateAllocSizes(
-                  config.allocationClassSizeFactor,
-                  config.maxAllocationClassSize,
-                  config.minAllocationClassSize,
-                  config.reduceFragmentationInAllocationClass)
-            : config.defaultAllocSizes,
+    XDCHECK_GE(config.defaultAllocSizes.size(),1);
+    return MemoryAllocator::Config{config.defaultAllocSizes,
         config.enableZeroedSlabAllocs, config.disableFullCoredump,
         config.lockMemory};
   }

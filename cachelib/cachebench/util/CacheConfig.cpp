@@ -65,6 +65,14 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, classInclusives);
   JSONSetVal(configJson, tier0ClassAssignments);
   JSONSetVal(configJson, tier1ClassAssignments);
+ 
+  uint32_t actualClasses = 0;
+  for (uint32_t i = 0; i < tier0ClassAssignments.size(); i++) {
+      if (tier0ClassAssignments[i] > 1 || tier1ClassAssignments[i] > 1) {
+          actualClasses++;
+      }
+  }
+
 
   JSONSetVal(configJson, numPools);
   JSONSetVal(configJson, poolSizes);
@@ -128,6 +136,8 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, syncPromotion);
   JSONSetVal(configJson, evictorThreads);
   JSONSetVal(configJson, promoterThreads);
+  promoterThreads = actualClasses;
+  evictorThreads = actualClasses;
   JSONSetVal(configJson, promotionAcWatermark);
   JSONSetVal(configJson, maxEvictionBatch);
   JSONSetVal(configJson, maxPromotionBatch);

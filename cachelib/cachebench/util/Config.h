@@ -275,6 +275,7 @@ struct StressorConfig : public JSONConfig {
   
   std::vector<uint64_t> allocSizes{};
   std::vector<uint64_t> tier0ClassAssignments{};
+  std::vector<uint64_t> tier1ClassAssignments{};
 
   // admission policy for cache.
   std::shared_ptr<StressorAdmPolicy> admPolicy{};
@@ -291,6 +292,10 @@ struct StressorConfig : public JSONConfig {
   
   void setAssignments(std::vector<uint64_t> assignments_) {
     tier0ClassAssignments = assignments_;
+  }
+  
+  void set1Assignments(std::vector<uint64_t> assignments_) {
+    tier1ClassAssignments = assignments_;
   }
 };
 

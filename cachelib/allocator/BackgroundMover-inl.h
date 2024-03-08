@@ -113,7 +113,7 @@ void BackgroundMover<CacheT>::checkAndRun() {
       numTraversals++;
     }
     //we didn't move that many objects done with this run
-    if (moves == 0 || moves < (assignedMemory.size()/2) || shouldStopWork()) {
+    if (moves == 0 || shouldStopWork()) {
         break;
     }
   }

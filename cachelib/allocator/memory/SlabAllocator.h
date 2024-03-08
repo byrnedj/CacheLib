@@ -270,7 +270,7 @@ class SlabAllocator {
 #ifndef NDEBUG
     if (UNLIKELY(!isValidSlab(slab))) {
       throw std::invalid_argument(
-          folly::sformat("Invalid slab index {}", slabIndex));
+          folly::sformat("Invalid slab index {}, slabForMemory {}, slab {}", slabIndex, getSlabForMemory(slab), slab));
     }
 #endif
 

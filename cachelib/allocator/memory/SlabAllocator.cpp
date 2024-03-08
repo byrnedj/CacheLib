@@ -141,6 +141,11 @@ SlabAllocator::SlabAllocator(void* memoryStart,
   XDCHECK(nextSlabAllocation_ != nullptr);
   XDCHECK_EQ(reinterpret_cast<uintptr_t>(nextSlabAllocation_),
              reinterpret_cast<uintptr_t>(slabMemoryStart_));
+  
+  if (getSlabForMemory(reinterpret_cast<void*>(slabMemoryStart_)) != slabMemoryStart_) {
+      int *a = 0;
+      *a = 12;
+  }
 }
 
 SlabAllocator::SlabAllocator(const serialization::SlabAllocatorObject& object,

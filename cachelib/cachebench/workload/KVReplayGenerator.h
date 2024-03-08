@@ -101,7 +101,7 @@ class KVReplayGenerator : public ReplayGeneratorBase {
     uint32_t actualClasses = 0;
     std::array<uint32_t,100> aclasses;
     for (uint32_t i = 0; i < config_.tier0ClassAssignments.size(); i++) {
-        if (config_.tier0ClassAssignments[i] > 2) {
+        if (config_.tier0ClassAssignments[i] > 1 || config_.tier1ClassAssignments[i] > 1) {
             aclasses[actualClasses] = i;
             actualClasses++;
         }

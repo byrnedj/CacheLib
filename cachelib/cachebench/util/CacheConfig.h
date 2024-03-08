@@ -333,6 +333,9 @@ struct CacheConfig : public JSONConfig {
   std::vector<uint64_t> getAssignments() {
       return tier0ClassAssignments;
   }
+  std::vector<uint64_t> get1Assignments() {
+      return tier1ClassAssignments;
+  }
   std::shared_ptr<RebalanceStrategy> getRebalanceStrategy() const;
   std::shared_ptr<BackgroundMoverStrategy> getBackgroundEvictorStrategy() const;
   std::shared_ptr<BackgroundMoverStrategy> getBackgroundPromoterStrategy() const;
