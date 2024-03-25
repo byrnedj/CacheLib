@@ -1565,6 +1565,11 @@ void CacheAllocator<CacheTrait>::evictRegularItems(TierId tid, PoolId pid, Class
     return;
   }
 
+  /* Complete book keeping for items moved successfully via DSA based batch move */
+  for (auto i = 0U; i < dmlBatchSize; i++) {
+    moved[i] = moveRegularItemBookKeeper(*evictionData[i].candidate, newItemHdls[i]);
+  }
+
   /* Complete the DSA based batch move */
   dml::batch_result result{};
   {
@@ -1584,10 +1589,6 @@ void CacheAllocator<CacheTrait>::evictRegularItems(TierId tid, PoolId pid, Class
     return;
   }
 
-  /* Complete book keeping for items moved successfully via DSA based batch move */
-  for (auto i = 0U; i < dmlBatchSize; i++) {
-    moved[i] = moveRegularItemBookKeeper(*evictionData[i].candidate, newItemHdls[i]);
-  }
 }
 
 template <typename CacheTrait>
