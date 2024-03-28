@@ -127,6 +127,11 @@ void MemoryAllocator::free(void* memory) {
   mp.free(memory);
 }
 
+const Slab* MemoryAllocator::getSlabForMemory(PoolId pid, ClassId cid, void* memory) {
+  auto& mp = memoryPoolManager_.getPoolById(pid);
+  return mp.getSlabForMemory(cid, memory);
+}
+
 MemoryPool& MemoryAllocator::getMemoryPool(const void* memory) const {
   const auto* header = slabAllocator_.getSlabHeader(memory);
   if (header == nullptr) {

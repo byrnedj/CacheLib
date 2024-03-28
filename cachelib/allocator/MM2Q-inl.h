@@ -221,6 +221,12 @@ void MM2Q::Container<T, HookPtr>::rebalance() noexcept {
 }
 
 template <typename T, MM2Q::Hook<T> T::*HookPtr>
+typename MM2Q::Container<T, HookPtr>::Iterator
+MM2Q::Container<T, HookPtr>::peekTail() const noexcept {
+  return Iterator{lru_.rbegin()};
+}
+
+template <typename T, MM2Q::Hook<T> T::*HookPtr>
 bool MM2Q::Container<T, HookPtr>::add(T& node) noexcept {
   const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
   return lruMutex_->lock_combine([this, &node, currTime]() {
@@ -259,6 +265,26 @@ uint32_t MM2Q::Container<T, HookPtr>::addBatch(It begin, It end) noexcept {
         return i;
       }
       addNodeLocked(*node,currTime);
+      i++;
+    }
+    return i;
+  });
+}
+
+template <typename T, MM2Q::Hook<T> T::*HookPtr>
+template <typename It>
+uint32_t MM2Q::Container<T, HookPtr>::removeBatch(It begin, It end) noexcept {
+  const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
+  return lruMutex_->lock_combine([this, begin, end, currTime]() {
+    uint32_t i = 0;
+    for (auto itr = begin; itr != end; itr++) {
+      T* node = *itr;
+      if (!node->isInMMContainer()) {
+        throw std::runtime_error(
+          folly::sformat("Was not able to remove all new items, failed item {}",
+                          node->toString()));
+      }
+      removeLocked(*node,currTime);
       i++;
     }
     return i;

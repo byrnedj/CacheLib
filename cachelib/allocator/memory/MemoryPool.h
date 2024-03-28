@@ -167,6 +167,8 @@ class MemoryPool {
   // @throw std::invalid_argument if the memory does not belong to this pool.
   // @throw std::run_time_error if the slab class information is corrupted.
   void free(void* memory);
+  
+  const Slab* getSlabForMemory(ClassId cid, void* memory);
 
   // resize the memory pool. This only adjusts the Pool size. It does not
   // release the slabs back to the SlabAllocator if the new size is less than

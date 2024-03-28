@@ -393,6 +393,11 @@ void MemoryPool::free(void* alloc) {
   currAllocSize_ -= ac.getAllocSize();
 }
 
+const Slab* MemoryPool::getSlabForMemory(ClassId cid, void* alloc) {
+  auto& ac = getAllocationClassFor(cid);
+  return ac.getSlabForMemory(alloc);
+}
+
 serialization::MemoryPoolObject MemoryPool::saveState() const {
   if (!slabAllocator_.isRestorable()) {
     throw std::logic_error("Memory Pool can not be restored");

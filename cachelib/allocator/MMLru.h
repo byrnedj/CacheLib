@@ -350,6 +350,9 @@ class MMLru {
     //          expected nodes have been added.
     template <typename It>
     uint32_t addBatch(It begin, It end) noexcept;
+    
+    template <typename It>
+    uint32_t removeBatch(It begin, It end) noexcept;
 
     // removes the node from the lru and sets it previous and next to nullptr.
     //
@@ -382,6 +385,7 @@ class MMLru {
     // to search for evictions. This iterator holds a lock to this
     // container and only one such iterator can exist at a time
     LockedIterator getEvictionIterator() const noexcept;
+    Iterator peekTail() const noexcept;
 
     // Execute provided function under container lock. Function gets
     // iterator passed as parameter.

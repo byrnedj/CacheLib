@@ -34,6 +34,14 @@ struct BackgroundMoverAPIWrapper {
                                       size_t batch) {
     return cache.traverseAndEvictItems(tid, pid, cid, batch);
   }
+  
+  static size_t traverseAndEvictSlab(C& cache,
+                                      unsigned int tid,
+                                      unsigned int pid,
+                                      unsigned int cid,
+                                      size_t batch) {
+    return cache.traverseAndEvictSlab(tid, pid, cid, batch);
+  }
 
   static size_t traverseAndPromoteItems(C& cache,
                                         unsigned int tid,
@@ -44,7 +52,7 @@ struct BackgroundMoverAPIWrapper {
   }
 };
 
-enum class MoverDir { Evict = 0, Promote };
+enum class MoverDir { Evict = 0, EvictSlab, Promote };
 
 // Periodic worker that evicts items from tiers in batches
 // The primary aim is to reduce insertion times for new items in the

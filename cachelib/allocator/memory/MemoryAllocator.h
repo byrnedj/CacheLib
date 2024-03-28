@@ -188,6 +188,8 @@ class MemoryAllocator {
   //        allocation handed out by this allocator.
   void free(void* memory);
 
+  const Slab* getSlabForMemory(PoolId pid, ClassId cid, void *memory);
+
   // Memory pool interface. The memory pools must be established before the
   // first allocation happens. Currently we dont support adding / removing
   // pools dynamically.
@@ -424,6 +426,10 @@ class MemoryAllocator {
   // @return const reference to memory pool for the id if one exists.
   // @throw std::invalid_argument if the pool id is invalid.
   const MemoryPool& getPool(PoolId id) const {
+    return memoryPoolManager_.getPoolById(id);
+  }
+  
+  MemoryPool& getPoolForTraversal(PoolId id) const {
     return memoryPoolManager_.getPoolById(id);
   }
 

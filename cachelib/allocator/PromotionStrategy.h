@@ -33,6 +33,7 @@ class PromotionStrategy : public BackgroundMoverStrategy {
         minPromotionBatch(minPromotionBatch) {}
   ~PromotionStrategy() {}
 
+  size_t getBatchSize() { return maxPromotionBatch; }
   std::vector<size_t> calculateBatchSizes(
       const CacheBase& cache, std::vector<MemoryDescriptorType> acVec) {
     std::vector<size_t> batches{};

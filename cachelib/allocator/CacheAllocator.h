@@ -2134,6 +2134,162 @@ class CacheAllocator : public CacheBase {
     return evictions;
   }
   
+  // exposed for the background evictor to iterate through the memory and evict
+  // in batch. This should improve insertion path for tiered memory config
+  size_t traverseAndEvictSlab(unsigned int tid,
+                               unsigned int pid,
+                               unsigned int cid,
+                               size_t batch) {
+    util::LatencyTracker tracker{stats().bgEvictLatency_, batch};
+    
+    auto& dstContainer = getMMContainer(tid+1, pid, cid);
+    auto dstTail = dstContainer.peekTail();
+    Item* dstCandidate = nullptr;
+    while (dstTail) {
+      auto* toRecycle_ = dstTail.get();
+      bool chainedItem_ = toRecycle_->isChainedItem();
+      // of course no chained item support yet
+      if (chainedItem_) {
+          ++dstTail;
+          continue;
+      }
+      if (toRecycle_->markForEviction()) {
+        dstCandidate = toRecycle_;
+        break;
+      }
+      ++dstTail;
+    }
+    if (dstCandidate == nullptr) {
+      return 0;
+    }
+
+    //at this point we have a valid handle
+    //insertOrReplace could invalidate it
+    //but nobody can evict it or mark it moving
+    //we want to get the slab it belongs to
+    Slab* dstToFreeSlab = const_cast<Slab*>(allocator_[tid+1]->getSlabForMemory(pid,cid,
+            reinterpret_cast<void*>(dstCandidate)));
+
+    auto& dstPool = allocator_[tid+1]->getPoolForTraversal(pid);
+    std::vector<Item*> slabAllocs;
+    slabAllocs.reserve(65536);
+    slabAllocs.push_back(dstCandidate);
+    auto evict = [dstCandidate,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
+        XDCHECK(ptr);
+        auto* item = reinterpret_cast<Item*>(ptr);
+        bool marked = false;
+        if (item != dstCandidate) {
+          while (!marked) {
+            marked = item->markForEviction();
+          }
+          XDCHECK(marked);
+          slabAllocs.push_back(item);
+        }
+        return true;
+    };
+
+    auto status = dstPool.forEachAllocation(cid,dstToFreeSlab,evict);
+    dstContainer.removeBatch(slabAllocs.begin(), slabAllocs.end());
+    for (auto *it : slabAllocs) {
+      accessContainer_->remove(*it);
+      const auto ref = it->unmarkForEviction();
+      XDCHECK_EQ(0u, ref);
+      auto ret = releaseBackToAllocator(*it, RemoveContext::kEviction,
+                                      /* isNascent */ false, it);
+      XDCHECK_EQ(ret,ReleaseRes::kRecycled);
+    }
+
+    auto& mmContainer = getMMContainer(tid, pid, cid);
+    auto tail = mmContainer.peekTail();
+    WriteHandle candidateHandle;
+    while (tail) {
+      auto* toRecycle_ = tail.get();
+      bool chainedItem_ = toRecycle_->isChainedItem();
+      // of course no chained item support yet
+      if (chainedItem_) {
+          ++tail;
+          continue;
+      }
+      //atempt to acquire and check ref count
+      auto hdl = acquire(toRecycle_);
+      if (hdl && hdl->getRefCount() == 1) {
+        candidateHandle = std::move(hdl);
+        break;
+      }
+      ++tail;
+    }
+    if (!candidateHandle) {
+      return 0;
+    }
+    //at this point we have a valid handle
+    //insertOrReplace could invalidate it
+    //but nobody can evict it or mark it moving
+    //we want to get the slab it belongs to
+    Slab* toFreeSlab = const_cast<Slab*>(allocator_[tid]->getSlabForMemory(pid,cid,
+            reinterpret_cast<void*>(candidateHandle.get())));
+    
+    auto& srcPool = allocator_[tid]->getPoolForTraversal(pid);
+    std::vector<Item*> srcAllocs;
+    srcAllocs.reserve(65536);
+    srcAllocs.push_back(candidateHandle.get());
+    
+    std::vector<WriteHandle> srcHdls;
+    srcHdls.reserve(65536);
+    srcHdls.push_back(std::move(candidateHandle));
+    
+    auto srcMarking = [&srcHdls,&srcAllocs,this](void *ptr, AllocInfo allocInfo) -> bool {
+        XDCHECK(ptr);
+        auto* item = reinterpret_cast<Item*>(ptr);
+        bool marked = false;
+        if (item != srcHdls[0].get()) {
+          while (!marked) {
+            //atempt to acquire and check ref count
+            auto hdl = acquire(item);
+            if (hdl && hdl->getRefCount() == 1) {
+              srcHdls.push_back(std::move(hdl));
+              marked = true;
+            }
+          }
+          srcAllocs.push_back(item);
+          XDCHECK(marked);
+        }
+        return true;
+    };
+    auto status2 = srcPool.forEachAllocation(cid,toFreeSlab,srcMarking);
+    
+    std::memcpy(dstToFreeSlab,toFreeSlab,Slab::kSize);
+
+    //remove tier0 items from mmContainer
+    mmContainer.removeBatch(srcAllocs.begin(), srcAllocs.end());
+
+    //all the tier1 allocs should be added to front
+    dstContainer.addBatch(slabAllocs.begin(), slabAllocs.end());
+   
+    int i = 0;
+    // insert the new tier1 allocs to the mmContainer
+    for (auto *it : slabAllocs) {
+      if (!accessContainer_->replaceIfAccessible(*srcAllocs[i], *it)) {
+        //this means that insertOrReplace was called so
+        //we need to remove the slabAlloc from mmContainer and release it back
+        //to the allocator
+        dstContainer.remove(*it);
+        XDCHECK_EQ(0u, it->getRefCount());
+        auto ret = releaseBackToAllocator(*it, RemoveContext::kNormal, false);
+        XDCHECK_EQ(ret,ReleaseRes::kReleased);
+      } else {
+        XDCHECK_EQ(1u, it->getRefCount());
+      }
+      i++;
+    }
+
+    //the srcHdls should now have refcount = 0 since unlinked in mmContainer
+    //and removed from ac container and the allocs should be released
+    // i have no idea wthat the dst handles metadata looks like
+    size_t evictions = srcAllocs.size();
+    (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
+    return evictions;
+  }
+  
   size_t traverseAndPromoteItems(unsigned int tid,
                                  unsigned int pid,
                                  unsigned int cid,

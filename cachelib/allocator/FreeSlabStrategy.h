@@ -27,13 +27,11 @@ namespace cachelib {
 // Free threshold strategy for background promotion worker.
 // This strategy tries to keep certain percent of memory free
 // at all times.
-class FreeThresholdStrategy : public BackgroundMoverStrategy {
+class FreeSlabStrategy : public BackgroundMoverStrategy {
  public:
-  FreeThresholdStrategy(double lowEvictionAcWatermark,
-                        double highEvictionAcWatermark,
-                        uint64_t maxEvictionBatch,
-                        uint64_t minEvictionBatch);
-  ~FreeThresholdStrategy() {}
+  FreeSlabStrategy(double lowEvictionAcWatermark,
+                        double highEvictionAcWatermark);
+  ~FreeSlabStrategy() {}
   size_t getBatchSize() { return maxEvictionBatch; }
   std::vector<size_t> calculateBatchSizes(
       const CacheBase& cache, std::vector<MemoryDescriptorType> acVecs);
@@ -43,10 +41,10 @@ class FreeThresholdStrategy : public BackgroundMoverStrategy {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-private-field"
 #endif
-  double lowEvictionAcWatermark{2.0};
-  double highEvictionAcWatermark{5.0};
-  uint64_t maxEvictionBatch{40};
-  uint64_t minEvictionBatch{5};
+  double lowEvictionAcWatermark{1.0};
+  double highEvictionAcWatermark{2.0};
+  uint64_t maxEvictionBatch{1};
+  uint64_t minEvictionBatch{1};
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif

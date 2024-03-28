@@ -663,6 +663,18 @@ void AllocationClass::processAllocForRelease(
   });
 }
 
+const Slab* AllocationClass::getSlabForMemory(void* memory) {
+  const auto* header = slabAlloc_.getSlabHeader(memory);
+  auto* slab = slabAlloc_.getSlabForMemory(memory);
+  if (header == nullptr || header->classId != classId_) {
+    throw std::invalid_argument(folly::sformat(
+        "trying to free memory {} (with ClassId {}), not belonging to this "
+        "AllocationClass (ClassId {})",
+        memory, header ? header->classId : Slab::kInvalidClassId, classId_));
+  }
+  return slab;
+}
+
 void AllocationClass::free(void* memory) {
   const auto* header = slabAlloc_.getSlabHeader(memory);
   auto* slab = slabAlloc_.getSlabForMemory(memory);

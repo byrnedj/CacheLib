@@ -23,6 +23,8 @@ BackgroundMover<CacheT>::BackgroundMover(
     : cache_(cache), strategy_(strategy), direction_(direction) {
   if (direction_ == MoverDir::Evict) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictItems;
+  } else if (direction_ == MoverDir::EvictSlab) {
+    moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndEvictSlab;
   } else if (direction_ == MoverDir::Promote) {
     moverFunc = BackgroundMoverAPIWrapper<CacheT>::traverseAndPromoteItems;
   }

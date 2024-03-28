@@ -34,7 +34,7 @@ class BackgroundMoverStrategy {
   //         batch size for the memory descriptor in acVec
   virtual std::vector<size_t> calculateBatchSizes(
       const CacheBase& cache, std::vector<MemoryDescriptorType> acVec) = 0;
-
+  virtual size_t getBatchSize() = 0;
   virtual ~BackgroundMoverStrategy() = default;
 };
 
@@ -62,6 +62,7 @@ class DefaultBackgroundMoverStrategy : public BackgroundMoverStrategy {
     }
     return batches;
   }
+  size_t getBatchSize() { return batchSize_; }
   private:
     uint64_t batchSize_{100};
     double targetFree_{0.05};

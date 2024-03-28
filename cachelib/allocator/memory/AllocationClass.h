@@ -219,6 +219,7 @@ class AllocationClass {
   // @throws std::invalid_argument if the memory does not belong to a slab of
   // this slab class.
   void free(void* memory);
+  const Slab* getSlabForMemory(void* memory);
 
   // acquires a new slab for this allocation class.
   // @param slab    a new slab to be added. This can NOT be nullptr.

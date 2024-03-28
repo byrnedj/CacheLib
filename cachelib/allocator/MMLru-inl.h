@@ -238,10 +238,38 @@ uint32_t MMLru::Container<T, HookPtr>::addBatch(It begin, It end) noexcept {
 }
 
 template <typename T, MMLru::Hook<T> T::*HookPtr>
+template <typename It>
+uint32_t MMLru::Container<T, HookPtr>::removeBatch(It begin, It end) noexcept {
+  const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
+  return lruMutex_->lock_combine([this, begin, end, currTime]() {
+    uint32_t i = 0;
+    for (auto itr = begin; itr != end; ++itr) {
+      T* node = *itr;
+      XDCHECK(node->isInMMContainer());
+      if (!node->isInMMContainer()) {
+        throw std::runtime_error(
+          folly::sformat("Was not able to remove all new items, failed item {}",
+                          node->toString()));
+      }
+      removeLocked(*node);
+      i++;
+    }
+    return i;
+  });
+}
+
+template <typename T, MMLru::Hook<T> T::*HookPtr>
 typename MMLru::Container<T, HookPtr>::LockedIterator
 MMLru::Container<T, HookPtr>::getEvictionIterator() const noexcept {
   LockHolder l(*lruMutex_);
   return LockedIterator{std::move(l), lru_.rbegin()};
+}
+
+
+template <typename T, MMLru::Hook<T> T::*HookPtr>
+typename MMLru::Container<T, HookPtr>::Iterator
+MMLru::Container<T, HookPtr>::peekTail() const noexcept {
+  return Iterator{lru_.rbegin()};
 }
 
 template <typename T, MMLru::Hook<T> T::*HookPtr>
