@@ -2143,22 +2143,24 @@ class CacheAllocator : public CacheBase {
     util::LatencyTracker tracker{stats().bgEvictLatency_, batch};
     
     auto& dstContainer = getMMContainer(tid+1, pid, cid);
-    auto dstTail = dstContainer.peekTail();
+    //auto dstTail = dstContainer.peekTail();
     Item* dstCandidate = nullptr;
-    while (dstTail) {
-      auto* toRecycle_ = dstTail.get();
-      bool chainedItem_ = toRecycle_->isChainedItem();
-      // of course no chained item support yet
-      if (chainedItem_) {
-          ++dstTail;
-          continue;
+    dstContainer.withEvictionIterator([&dstCandidate](auto &&dstTail) {
+      while (dstTail) {
+        auto* toRecycle_ = dstTail.get();
+        bool chainedItem_ = toRecycle_->isChainedItem();
+        // of course no chained item support yet
+        if (chainedItem_) {
+            ++dstTail;
+            continue;
+        }
+        if (toRecycle_->markForEviction()) {
+          dstCandidate = toRecycle_;
+          break;
+        }
+        ++dstTail;
       }
-      if (toRecycle_->markForEviction()) {
-        dstCandidate = toRecycle_;
-        break;
-      }
-      ++dstTail;
-    }
+    });
     if (dstCandidate == nullptr) {
       return 0;
     }
@@ -2173,51 +2175,84 @@ class CacheAllocator : public CacheBase {
     auto& dstPool = allocator_[tid+1]->getPoolForTraversal(pid);
     std::vector<Item*> slabAllocs;
     slabAllocs.reserve(65536);
-    slabAllocs.push_back(dstCandidate);
-    auto evict = [dstCandidate,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
+    auto evict = [dstCandidate,this,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
         XDCHECK(ptr);
         auto* item = reinterpret_cast<Item*>(ptr);
         bool marked = false;
         if (item != dstCandidate) {
           while (!marked) {
-            marked = item->markForEviction();
+            auto key = item->getKey();
+            while (Item::getRequiredSize(key, 0 /* value size*/) > allocInfo.allocSize) {
+              key = item->getKey();
+            }
+            //atempt to acquire and check ref count
+            auto hdl = findInternal(key);
+            if (hdl && hdl.get() == item) {
+              auto res = hdl->incRef(); // nobody will evict       
+              if (res == RefcountWithFlags::IncResult::kIncOk) {
+                marked = true;
+                XDCHECK_EQ(item->getKey(),key);
+              }
+            }
           }
+          XDCHECK_GT(item->getRefCount(),0);
+          slabAllocs.push_back(item);
           XDCHECK(marked);
+        } else {
+          XDCHECK_EQ(item->getKey(),dstCandidate->getKey());
+          XDCHECK(item->isMarkedForEviction());
           slabAllocs.push_back(item);
         }
         return true;
     };
 
+    
     auto status = dstPool.forEachAllocation(cid,dstToFreeSlab,evict);
     dstContainer.removeBatch(slabAllocs.begin(), slabAllocs.end());
     for (auto *it : slabAllocs) {
+      //it's not in the mmContainer so nobody will pick it for 
+      //eviction, it is still linked and we need to remove it
+      //from ac, but need to wait for ref count to drain
       accessContainer_->remove(*it);
-      const auto ref = it->unmarkForEviction();
-      XDCHECK_EQ(0u, ref);
+      if (it == dstCandidate) {
+        auto ref = it->unmarkForEviction();
+        XDCHECK_EQ(0u, ref);
+        wakeUpWaiters(it->getKey(),{});
+      } else {
+        auto refc = it->getRefCount();
+        while (refc > 1) {
+          refc = it->getRefCount();
+        }
+        XDCHECK_EQ(1u, refc);
+        auto ref = it->decRef();
+        XDCHECK_EQ(0u, ref);
+      }
       auto ret = releaseBackToAllocator(*it, RemoveContext::kEviction,
                                       /* isNascent */ false, it);
       XDCHECK_EQ(ret,ReleaseRes::kRecycled);
     }
 
-    auto& mmContainer = getMMContainer(tid, pid, cid);
-    auto tail = mmContainer.peekTail();
     WriteHandle candidateHandle;
-    while (tail) {
-      auto* toRecycle_ = tail.get();
-      bool chainedItem_ = toRecycle_->isChainedItem();
-      // of course no chained item support yet
-      if (chainedItem_) {
-          ++tail;
-          continue;
+    auto& mmContainer = getMMContainer(tid, pid, cid);
+    mmContainer.withEvictionIterator([&candidateHandle,this](auto&& tail) {
+      while (tail) {
+        auto* toRecycle_ = tail.get();
+        bool chainedItem_ = toRecycle_->isChainedItem();
+        // of course no chained item support yet
+        if (chainedItem_) {
+            ++tail;
+            continue;
+        }
+        //need container lock to maked sure is in container
+        //atempt to acquire and check ref count
+        auto hdl = acquire(toRecycle_);
+        if (hdl) {
+          candidateHandle = std::move(hdl);
+          break;
+        }
+        ++tail;
       }
-      //atempt to acquire and check ref count
-      auto hdl = acquire(toRecycle_);
-      if (hdl && hdl->getRefCount() == 1) {
-        candidateHandle = std::move(hdl);
-        break;
-      }
-      ++tail;
-    }
+    });
     if (!candidateHandle) {
       return 0;
     }
@@ -2231,7 +2266,6 @@ class CacheAllocator : public CacheBase {
     auto& srcPool = allocator_[tid]->getPoolForTraversal(pid);
     std::vector<Item*> srcAllocs;
     srcAllocs.reserve(65536);
-    srcAllocs.push_back(candidateHandle.get());
     
     std::vector<WriteHandle> srcHdls;
     srcHdls.reserve(65536);
@@ -2243,21 +2277,44 @@ class CacheAllocator : public CacheBase {
         bool marked = false;
         if (item != srcHdls[0].get()) {
           while (!marked) {
+            auto key = item->getKey();
+            while (Item::getRequiredSize(key, 0 /* value size*/) > allocInfo.allocSize) {
+              key = item->getKey();
+            } 
             //atempt to acquire and check ref count
-            auto hdl = acquire(item);
-            if (hdl && hdl->getRefCount() == 1) {
+            auto hdl = findInternal(key);
+            if (hdl && hdl.get() == item) {
               srcHdls.push_back(std::move(hdl));
               marked = true;
             }
           }
           srcAllocs.push_back(item);
           XDCHECK(marked);
+        } else {
+          XDCHECK_EQ(srcHdls[0].get(),item);
+          srcAllocs.push_back(item);
         }
         return true;
     };
+
+    //also need container lock to get each valid alloc (or use find internal
+    //instead of aquire??
+    // mmContainer.withContainerLock([&srcPool,&srcHdls,&srcAllocs,cid,&toFreeSlab,srcMarking,this]() {
     auto status2 = srcPool.forEachAllocation(cid,toFreeSlab,srcMarking);
+    //});
     
     std::memcpy(dstToFreeSlab,toFreeSlab,Slab::kSize);
+    
+    auto resetMetadata= [](void *ptr, AllocInfo allocInfo) -> bool {
+        XDCHECK(ptr);
+        auto* item = reinterpret_cast<Item*>(ptr);
+        item->resetMetadata();
+        return true;
+    };
+
+    //reset metadata in dst since these items are totally 
+    //ours, no other thread will have this slab
+    auto status3 = dstPool.forEachAllocation(cid,dstToFreeSlab,resetMetadata);
 
     //remove tier0 items from mmContainer
     mmContainer.removeBatch(srcAllocs.begin(), srcAllocs.end());
@@ -2266,8 +2323,9 @@ class CacheAllocator : public CacheBase {
     dstContainer.addBatch(slabAllocs.begin(), slabAllocs.end());
    
     int i = 0;
-    // insert the new tier1 allocs to the mmContainer
+    // insert the new tier1 allocs to the acContainer
     for (auto *it : slabAllocs) {
+      XDCHECK_EQ(it->getKey(),srcAllocs[i]->getKey());
       if (!accessContainer_->replaceIfAccessible(*srcAllocs[i], *it)) {
         //this means that insertOrReplace was called so
         //we need to remove the slabAlloc from mmContainer and release it back
@@ -2276,8 +2334,6 @@ class CacheAllocator : public CacheBase {
         XDCHECK_EQ(0u, it->getRefCount());
         auto ret = releaseBackToAllocator(*it, RemoveContext::kNormal, false);
         XDCHECK_EQ(ret,ReleaseRes::kReleased);
-      } else {
-        XDCHECK_EQ(1u, it->getRefCount());
       }
       i++;
     }

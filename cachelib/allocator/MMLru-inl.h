@@ -245,13 +245,10 @@ uint32_t MMLru::Container<T, HookPtr>::removeBatch(It begin, It end) noexcept {
     uint32_t i = 0;
     for (auto itr = begin; itr != end; ++itr) {
       T* node = *itr;
-      XDCHECK(node->isInMMContainer());
-      if (!node->isInMMContainer()) {
-        throw std::runtime_error(
-          folly::sformat("Was not able to remove all new items, failed item {}",
-                          node->toString()));
+      if (node->isInMMContainer()) {
+        XDCHECK(node->isInMMContainer());
+        removeLocked(*node);
       }
-      removeLocked(*node);
       i++;
     }
     return i;

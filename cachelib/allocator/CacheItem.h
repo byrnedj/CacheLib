@@ -229,6 +229,8 @@ class CACHELIB_PACKED_ATTR CacheItem {
   bool isChainedItem() const noexcept;
   bool hasChainedItem() const noexcept;
 
+  void resetMetadata();
+
   /**
    * Keep track of whether the item was modified while in ram cache
    */

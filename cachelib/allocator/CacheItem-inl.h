@@ -329,6 +329,11 @@ bool CacheItem<CacheTrait>::hasChainedItem() const noexcept {
 }
 
 template <typename CacheTrait>
+void CacheItem<CacheTrait>::resetMetadata() {
+  ref_.resetMetadata();
+}
+
+template <typename CacheTrait>
 template <typename RefcountWithFlags::Flags flagBit>
 void CacheItem<CacheTrait>::setFlag() noexcept {
   ref_.template setFlag<flagBit>();

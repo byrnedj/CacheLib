@@ -709,6 +709,7 @@ void AllocationClass::free(void* memory) {
       return;
     }
 
+    XDCHECK_NE(memory,nullptr);
     // TODO add checks here to ensure that we dont double free in debug mode.
     freedAllocations_.insert(*reinterpret_cast<FreeAlloc*>(memory));
     canAllocate_ = true;

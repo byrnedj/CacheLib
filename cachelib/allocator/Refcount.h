@@ -165,6 +165,40 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
     atomicUpdateValue(predicate, newValue);
     return res;
   }
+  
+  FOLLY_ALWAYS_INLINE IncResult setRef() {
+    IncResult res = kIncOk;
+    auto predicate = [&res](const Value curValue) {
+      Value bitMask = getAdminRef<kExclusive>();
+      Value linkMask = getAdminRef<kLinked>();
+      Value acMask = getAdminRef<kAccessible>();
+
+      const bool exlusiveBitIsSet = curValue & bitMask;
+      const bool linkBitIsSet = curValue & linkMask;
+      const bool acBitIsSet = curValue & acMask;
+      if (UNLIKELY((curValue & kAccessRefMask) == (kAccessRefMask))) {
+        throw exception::RefcountOverflow("Refcount maxed out.");
+      //} else if (!(linkBitIsSet || acBitIsSet)) {
+      //  throw exception::RefcountOverflow("Refcount ac or link not set.");
+      } else if (exlusiveBitIsSet) {
+        res = (curValue & kAccessRefMask) == 0 ? kIncFailedEviction
+                                               : kIncFailedMoving;
+        return false;
+      }
+      res = kIncOk;
+      return true;
+    };
+
+    Value resetBitMask = ~getAdminRef<kLinked>() & ~getAdminRef<kAccessible>();
+    auto newValue = [resetBitMask](const Value curValue) {
+      auto curr = (curValue & kAccessRefMask);
+      //want to set it to zero
+      return (curValue - static_cast<Value>(curr)) & resetBitMask;
+    };
+
+    atomicUpdateValue(predicate, newValue);
+    return res;
+  }
 
   // Bumps down the reference count
   //
@@ -406,6 +440,10 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   void markHasChainedItem() noexcept { setFlag<kHasChainedItem>(); }
   void unmarkHasChainedItem() noexcept { unSetFlag<kHasChainedItem>(); }
   bool hasChainedItem() const noexcept { return isFlagSet<kHasChainedItem>(); }
+  
+  void resetMetadata() {
+    setRef();
+  }
 
   /**
    * Keep track of whether the item was modified while in ram cache
