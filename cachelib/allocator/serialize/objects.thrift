@@ -144,6 +144,24 @@ struct MMTinyLFUCollection {
   1: required map<MemoryDescriptorObject, MMTinyLFUObject> containers;
 }
 
+struct MMS3FIFOConfig {
+  2: required bool updateOnWrite;
+  4: bool updateOnRead = true;
+}
+
+struct MMS3FIFOObject {
+  1: required MMS3FIFOConfig config;
+
+  // number of evictions for this MM object.
+  5: i64 evictions = 0;
+
+  8: required S3FIFOListObject qdlist;
+}
+
+struct MMS3FIFOCollection {
+  1: required map<MemoryDescriptorObject, MMS3FIFOObject> containers;
+}
+
 struct ChainedHashTableObject {
   // fields in ChainedHashTable::Config
   1: required i32 bucketsPower;

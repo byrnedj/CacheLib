@@ -19,6 +19,7 @@
 #include "cachelib/allocator/MM2Q.h"
 #include "cachelib/allocator/MMLru.h"
 #include "cachelib/allocator/MMTinyLFU.h"
+#include "cachelib/allocator/MMS3FIFO.h"
 #include "cachelib/common/Mutex.h"
 
 namespace facebook {
@@ -51,6 +52,12 @@ struct Lru2QCacheTrait {
 
 struct TinyLFUCacheTrait {
   using MMType = MMTinyLFU;
+  using AccessType = ChainedHashTable;
+  using AccessTypeLocks = SharedMutexBuckets;
+};
+
+struct S3FIFOCacheTrait {
+  using MMType = MMS3FIFO;
   using AccessType = ChainedHashTable;
   using AccessTypeLocks = SharedMutexBuckets;
 };

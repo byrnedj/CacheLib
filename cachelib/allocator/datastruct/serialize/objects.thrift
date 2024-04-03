@@ -35,6 +35,17 @@ struct DListObject {
   3: required i64 size;
 }
 
+struct AtomicDListObject {
+  1: required i64 compressedHead,
+  2: required i64 compressedTail,
+  3: required i64 size,
+}
+
+struct S3FIFOListObject {
+  1: required AtomicDListObject pfifo;
+  2: required AtomicDListObject mfifo;
+}
+
 struct MultiDListObject {
   1: required list<DListObject> lists;
 }

@@ -274,6 +274,16 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   // Returns true if the item is in access container, false otherwise
   bool isAccessible() const noexcept;
+  
+  /**
+   * Functions to set, unset and get bits
+   */
+  template <RefcountWithFlags::Flags flagBit>
+  void setFlag() noexcept;
+  template <RefcountWithFlags::Flags flagBit>
+  void unSetFlag() noexcept;
+  template <RefcountWithFlags::Flags flagBit>
+  bool isFlagSet() const noexcept;
 
  protected:
   // construct an item without expiry timestamp.
@@ -400,15 +410,6 @@ class CACHELIB_PACKED_ATTR CacheItem {
   // Returns the offset of the beginning of usable memory for an item
   uint32_t getOffsetForMemory() const noexcept;
 
-  /**
-   * Functions to set, unset and get bits
-   */
-  template <RefcountWithFlags::Flags flagBit>
-  void setFlag() noexcept;
-  template <RefcountWithFlags::Flags flagBit>
-  void unSetFlag() noexcept;
-  template <RefcountWithFlags::Flags flagBit>
-  bool isFlagSet() const noexcept;
 
   /**
    * The following are the data members of CacheItem
