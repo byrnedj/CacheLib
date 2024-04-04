@@ -1411,7 +1411,7 @@ class CacheAllocator : public CacheBase {
                  sizeof(uint32_t) + sizeof(KAllocation)) == sizeof(Item),
                 "vtable overhead");
   // Check for CompressedPtr single/multi tier support
-  static_assert(32 == sizeof(Item), "item overhead is 32 bytes");
+  static_assert(44 == sizeof(Item), "item overhead is 44 bytes");
 
   // make sure there is no overhead in ChainedItem on top of a regular Item
   static_assert(sizeof(Item) == sizeof(ChainedItem),

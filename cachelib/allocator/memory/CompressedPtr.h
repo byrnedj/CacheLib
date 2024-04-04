@@ -55,7 +55,10 @@ class PtrCompressor;
 
 class CACHELIB_PACKED_ATTR CompressedPtr {
  public:
-  using PtrType = uint32_t;
+  typedef struct {
+    unsigned char ptr[6];
+  } myPtr;
+  using PtrType = uint64_t;
   // Thrift doesn't support unsigned type
   using SerializedPtrType = int64_t;
 
@@ -118,8 +121,8 @@ class CACHELIB_PACKED_ATTR CompressedPtr {
   static constexpr unsigned int kNumAllocIdxBits =
       Slab::kNumSlabBits - Slab::kMinAllocPower;
 
-  // Use 32nd bit position for TierId
-  static constexpr unsigned int kNumTierIdxOffset = 31;
+  // Use 46th bit position for TierId
+  static constexpr unsigned int kNumTierIdxOffset = 46;
 
   static constexpr PtrType kAllocIdxMask = ((PtrType)1 << kNumAllocIdxBits) - 1;
 
@@ -147,7 +150,7 @@ class CACHELIB_PACKED_ATTR CompressedPtr {
     if (!isMultiTiered) {
       return (slabIdx << kNumAllocIdxBits) + allocIdx;
     }
-    return (static_cast<uint32_t>(tid) << kNumTierIdxOffset) +
+    return (static_cast<uint64_t>(tid) << kNumTierIdxOffset) +
            (slabIdx << kNumAllocIdxBits) + allocIdx;
   }
 
@@ -172,7 +175,7 @@ class CACHELIB_PACKED_ATTR CompressedPtr {
   }
 
   void setTierId(TierId tid) noexcept {
-    ptr_ += static_cast<uint32_t>(tid) << kNumTierIdxOffset;
+    ptr_ += static_cast<uint64_t>(tid) << kNumTierIdxOffset;
   }
 
   friend SlabAllocator;
