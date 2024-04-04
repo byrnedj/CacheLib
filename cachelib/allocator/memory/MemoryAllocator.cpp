@@ -127,6 +127,11 @@ void MemoryAllocator::free(void* memory) {
   mp.free(memory);
 }
 
+bool MemoryAllocator::removeFromFreeListLocked(PoolId pid, ClassId cid, void* memory) {
+  auto& mp = memoryPoolManager_.getPoolById(pid);
+  return mp.removeFromFreeListLocked(cid, memory);
+}
+
 const Slab* MemoryAllocator::getSlabForMemory(PoolId pid, ClassId cid, void* memory) {
   auto& mp = memoryPoolManager_.getPoolById(pid);
   return mp.getSlabForMemory(cid, memory);

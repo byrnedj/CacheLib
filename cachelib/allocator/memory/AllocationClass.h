@@ -307,6 +307,8 @@ class AllocationClass {
   //          entry.
   bool allFreed(const Slab* slab) const;
 
+  bool removeFromFreeListLocked(void *memory);
+
   // for saving and restoring the state of the allocation class
   //
   // precondition:  The object must have been instantiated with a restorable

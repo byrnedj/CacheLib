@@ -189,6 +189,7 @@ class MemoryAllocator {
   void free(void* memory);
 
   const Slab* getSlabForMemory(PoolId pid, ClassId cid, void *memory);
+  bool removeFromFreeListLocked(PoolId pid, ClassId cid, void *memory);
 
   // Memory pool interface. The memory pools must be established before the
   // first allocation happens. Currently we dont support adding / removing

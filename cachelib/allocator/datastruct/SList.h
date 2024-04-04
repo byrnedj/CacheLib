@@ -161,6 +161,9 @@ class SList {
 
     // Returns a pointer to the previous element
     T* previous() const noexcept { return prev_; }
+    
+    // Returns a pointer to the current element
+    T* curr() const noexcept { return curr_; }
 
     // Returns a pointer to the current element
     T* operator->() const noexcept { return curr_; }

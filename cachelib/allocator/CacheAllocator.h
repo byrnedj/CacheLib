@@ -2175,7 +2175,7 @@ class CacheAllocator : public CacheBase {
     auto& dstPool = allocator_[tid+1]->getPoolForTraversal(pid);
     std::vector<Item*> slabAllocs;
     slabAllocs.reserve(65536);
-    auto evict = [dstCandidate,this,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
+    auto evict = [tid,dstCandidate,this,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
         XDCHECK(ptr);
         auto* item = reinterpret_cast<Item*>(ptr);
         bool marked = false;
@@ -2193,6 +2193,33 @@ class CacheAllocator : public CacheBase {
                 marked = true;
                 XDCHECK_EQ(item->getKey(),key);
               }
+            } else if ((hdl == nullptr) || (hdl && hdl.get() != item) ) {
+              hdl.reset();
+              //insert or replace was called, this key is no longer valid
+              //check to see if it is in freelist
+              //here we hold the allocation class lock which means
+              //that allocate lock will sync and no other
+              //thread will allocate this item
+              //if in the free list then releasebacktoallocator
+              //was already called, if not in freelist then either it
+              //was allocated (so will have key soon) or it
+              //will be released soon the problem is that
+              //release back to allocator may have just called free
+              //and could be blocked here since we hold AC lock
+              //but maybe that is okay due to std::try_lock? i.e. we
+              //always wait for other threads before contentending
+              bool inFreeAlloc = allocator_[tid+1]->removeFromFreeListLocked(allocInfo.poolId,allocInfo.classId,ptr);
+              XDCHECK(inFreeAlloc);
+              if (item->getRefCountAndFlagsRaw() == 0 && inFreeAlloc) {
+                auto hdl2 = acquire(item);
+                if (hdl2 && hdl2.get() == item) {
+                  auto res = hdl2->incRef(); // nobody will evict       
+                  if (res == RefcountWithFlags::IncResult::kIncOk) {
+                    marked = true;
+                    XDCHECK_EQ(item->getKey(),key);
+                  }
+                }
+              }
             }
           }
           XDCHECK_GT(item->getRefCount(),0);
@@ -2208,6 +2235,9 @@ class CacheAllocator : public CacheBase {
 
     
     auto status = dstPool.forEachAllocation(cid,dstToFreeSlab,evict);
+    while (status != SlabIterationStatus::kFinishedCurrentSlabAndContinue) {
+      status = dstPool.forEachAllocation(cid,dstToFreeSlab,evict);
+    }
     dstContainer.removeBatch(slabAllocs.begin(), slabAllocs.end());
     for (auto *it : slabAllocs) {
       //it's not in the mmContainer so nobody will pick it for 
@@ -2271,7 +2301,7 @@ class CacheAllocator : public CacheBase {
     srcHdls.reserve(65536);
     srcHdls.push_back(std::move(candidateHandle));
     
-    auto srcMarking = [&srcHdls,&srcAllocs,this](void *ptr, AllocInfo allocInfo) -> bool {
+    auto srcMarking = [tid,&srcHdls,&srcAllocs,this](void *ptr, AllocInfo allocInfo) -> bool {
         XDCHECK(ptr);
         auto* item = reinterpret_cast<Item*>(ptr);
         bool marked = false;
@@ -2286,6 +2316,29 @@ class CacheAllocator : public CacheBase {
             if (hdl && hdl.get() == item) {
               srcHdls.push_back(std::move(hdl));
               marked = true;
+            } else if ((hdl == nullptr) || (hdl && hdl.get() != item) ) {
+              hdl.reset();
+              //insert or replace was called, this key is no longer valid
+              //check to see if it is in freelist
+              //here we hold the allocation class lock which means
+              //that allocate lock will sync and no other
+              //thread will allocate this item
+              //if in the free list then releasebacktoallocator
+              //was already called, if not in freelist then either it
+              //was allocated (so will have key soon) or it
+              //will be released soon the problem is that
+              //release back to allocator may have just called free
+              //and could be blocked here since we hold AC lock
+              //but maybe that is okay due to std::try_lock? i.e. we
+              //always wait for other threads before contentending
+              bool inFreeAlloc = allocator_[tid+1]->removeFromFreeListLocked(allocInfo.poolId,allocInfo.classId,ptr);
+              if (item->getRefCountAndFlagsRaw() == 0 && inFreeAlloc) {
+                auto hdl2 = acquire(item);
+                if (hdl2 && hdl2.get() == item) {
+                  marked = true;
+                  srcHdls.push_back(std::move(hdl2));
+                }
+              }
             }
           }
           srcAllocs.push_back(item);
@@ -2301,8 +2354,11 @@ class CacheAllocator : public CacheBase {
     //instead of aquire??
     // mmContainer.withContainerLock([&srcPool,&srcHdls,&srcAllocs,cid,&toFreeSlab,srcMarking,this]() {
     auto status2 = srcPool.forEachAllocation(cid,toFreeSlab,srcMarking);
+    while (status2 != SlabIterationStatus::kFinishedCurrentSlabAndContinue) {
+      status2 = srcPool.forEachAllocation(cid,toFreeSlab,srcMarking);
+    }
     //});
-    
+    XDCHECK_EQ(srcAllocs.size(),slabAllocs.size()); 
     std::memcpy(dstToFreeSlab,toFreeSlab,Slab::kSize);
     
     auto resetMetadata= [](void *ptr, AllocInfo allocInfo) -> bool {

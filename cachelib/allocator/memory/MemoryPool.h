@@ -169,6 +169,7 @@ class MemoryPool {
   void free(void* memory);
   
   const Slab* getSlabForMemory(ClassId cid, void* memory);
+  bool removeFromFreeListLocked(ClassId cid, void* memory);
 
   // resize the memory pool. This only adjusts the Pool size. It does not
   // release the slabs back to the SlabAllocator if the new size is less than

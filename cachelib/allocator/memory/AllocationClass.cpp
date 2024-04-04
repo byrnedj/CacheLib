@@ -390,6 +390,23 @@ void AllocationClass::partitionFreeAllocs(const Slab* slab,
   }
 }
 
+bool AllocationClass::removeFromFreeListLocked(void *memory) {
+  for (auto it = freedAllocations_.begin(); it != freedAllocations_.end(); ++it) {
+      if (it.curr() == reinterpret_cast<FreeAlloc*>(memory)) {
+          freedAllocations_.remove(it);
+          return true;
+      }
+  }
+  return false;
+  //auto freeIt = std::find(freedAllocations_.begin(), freedAllocations_.end(), reinterpret_cast<FreeAlloc*>(memory));
+  //for (auto alloc : freedAllocations_) {
+  //  if (alloc == memory) {
+  //      freedAllocations_.remove(alloc);
+  //      return true;
+  //  }
+  //}
+}
+
 std::pair<bool, std::vector<void*>> AllocationClass::pruneFreeAllocs(
     const Slab* slab, SlabReleaseAbortFn shouldAbortFn) {
   // Find free allocations that belong to this active slab. If part of
