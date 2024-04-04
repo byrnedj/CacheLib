@@ -4707,7 +4707,8 @@ bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
 
   auto memoryAssignments = createBgWorkerMemoryAssignments(threads, 0);
   for (size_t i = 0; i < threads; i++) {
-    MoverDir direction = strategy->getBatchSize() == 1 ? MoverDir::EvictSlab : MoverDir::Evict;
+    //MoverDir direction = strategy->getBatchSize() == 1 ? MoverDir::EvictSlab : MoverDir::Evict;
+    MoverDir direction = MoverDir::Evict;
     auto ret = startNewWorker("BackgroundEvictor" + std::to_string(i),
                               backgroundEvictor_[i], interval, *this, strategy,
                               direction);
