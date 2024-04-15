@@ -189,8 +189,8 @@ std::shared_ptr<BackgroundMoverStrategy> CacheConfig::getBackgroundEvictorStrate
   } else if (backgroundEvictorStrategy == "fixed") {
     return std::make_shared<DefaultBackgroundMoverStrategy>(maxEvictionBatch, highEvictionAcWatermark);
   } else {
-    //return std::make_shared<FreeThresholdStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark, maxEvictionBatch, minEvictionBatch);
-    return std::make_shared<FreeSlabStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark);
+    return std::make_shared<FreeThresholdStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark, maxEvictionBatch, minEvictionBatch);
+    //return std::make_shared<FreeSlabStrategy>(lowEvictionAcWatermark, highEvictionAcWatermark);
   }
 }
 

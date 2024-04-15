@@ -559,6 +559,12 @@ class MM2Q {
     //       Since we need to always turn on the Tail feature.
     LruType getLruType(const T& node) const noexcept;
 
+    // remove node from lru and adjust insertion points
+    //
+    // @param node          node to remove
+    // @param doRebalance     whether to do rebalance in this remove
+    void removeLocked(T& node, bool doRebalance = true) noexcept;
+
    private:
     // reconfigure the MMContainer: update LRU refresh time according to current
     // tail age
@@ -577,12 +583,6 @@ class MM2Q {
     static void setUpdateTime(T& node, Time time) noexcept {
       (node.*HookPtr).setUpdateTime(time);
     }
-
-    // remove node from lru and adjust insertion points
-    //
-    // @param node          node to remove
-    // @param doRebalance     whether to do rebalance in this remove
-    void removeLocked(T& node, bool doRebalance = true) noexcept;
 
     // Bit MM_BIT_0 is used to record if the item is hot.
     void markHot(T& node) noexcept {

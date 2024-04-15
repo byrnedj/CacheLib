@@ -169,6 +169,7 @@ class MemoryAllocator {
   void* allocate(PoolId id, uint32_t size);
   void* allocateByCid(PoolId id, ClassId cid);
   std::vector<void*> allocateByCidBatch(PoolId id, ClassId cid, uint64_t batch);
+  std::vector<void*> allocateByCidBatchCont(PoolId id, ClassId cid, uint64_t batch);
 
   // Allocate a zeroed Slab
   //
@@ -189,7 +190,7 @@ class MemoryAllocator {
   void free(void* memory);
 
   const Slab* getSlabForMemory(PoolId pid, ClassId cid, void *memory);
-  bool removeFromFreeListLocked(PoolId pid, ClassId cid, void *memory);
+  bool removeFromFreeList(PoolId pid, ClassId cid, void *memory);
 
   // Memory pool interface. The memory pools must be established before the
   // first allocation happens. Currently we dont support adding / removing

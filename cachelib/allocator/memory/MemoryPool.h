@@ -149,6 +149,7 @@ class MemoryPool {
   void* allocate(uint32_t size);
   void* allocateByCid(ClassId cid);
   std::vector<void*> allocateByCidBatch(ClassId cid, uint64_t batch);
+  std::vector<void*> allocateByCidBatchCont(ClassId cid, uint64_t batch);
 
   // Allocate a slab with zeroed memory
   //
@@ -169,7 +170,7 @@ class MemoryPool {
   void free(void* memory);
   
   const Slab* getSlabForMemory(ClassId cid, void* memory);
-  bool removeFromFreeListLocked(ClassId cid, void* memory);
+  bool removeFromFreeList(ClassId cid, void* memory);
 
   // resize the memory pool. This only adjusts the Pool size. It does not
   // release the slabs back to the SlabAllocator if the new size is less than
@@ -339,6 +340,7 @@ class MemoryPool {
   
   void* allocateForClass(AllocationClass& ac);
   std::vector<void*> allocateForClassBatch(AllocationClass& ac, uint64_t batch);
+  std::vector<void*> allocateForClassBatchCont(AllocationClass& ac, uint64_t batch);
 
   // @return  AllocationClass corresponding to the memory, if it
   //          belongs to an AllocationClass

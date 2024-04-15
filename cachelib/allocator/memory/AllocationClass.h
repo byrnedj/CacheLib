@@ -212,6 +212,59 @@ class AllocationClass {
     }
     return SlabIterationStatus::kFinishedCurrentSlabAndContinue;
   }
+  
+  template <typename AllocTraversalFn>
+  SlabIterationStatus forEachAllocation(Slab* slab, void *curr,
+                                        AllocTraversalFn&& callback) {
+    // Take a try_lock on this allocation class beginning any new slab release.
+    std::unique_lock<std::mutex> startSlabReleaseLockHolder(
+        startSlabReleaseLock_, std::defer_lock);
+
+    // If the try_lock fails, skip this slab
+    if (!startSlabReleaseLockHolder.try_lock()) {
+      return SlabIterationStatus::kSkippedCurrentSlabAndContinue;
+    }
+
+    // check for the header to be valid.
+    using Return = folly::Optional<AllocInfo>;
+    auto allocInfo = lock_->lock_combine([this, slab]() -> Return {
+      auto slabHdr = slabAlloc_.getSlabHeader(slab);
+
+      if (!slabHdr || slabHdr->classId != classId_ ||
+          slabHdr->poolId != poolId_ || slabHdr->isAdvised() ||
+          slabHdr->isMarkedForRelease()) {
+        return folly::none;
+      }
+
+      return Return{{slabHdr->poolId, slabHdr->classId, slabHdr->allocSize}};
+    });
+    if (!allocInfo) {
+      return SlabIterationStatus::kSkippedCurrentSlabAndContinue;
+    }
+
+    // Prefetch the first kForEachAllocPrefetchPffset items in the slab.
+    // Note that the prefetch is for read with no temporal locality.
+    void* prefetchOffsetPtr = reinterpret_cast<void*>(curr);
+    for (unsigned int i = 0; i < kForEachAllocPrefetchOffset; i++) {
+      prefetchOffsetPtr = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(prefetchOffsetPtr) + allocationSize_);
+      __builtin_prefetch(prefetchOffsetPtr, 0, 0);
+    }
+    void* ptr = reinterpret_cast<void*>(curr);
+    unsigned int allocsPerSlab = getAllocsPerSlab();
+    for (unsigned int i = 0; i < allocsPerSlab; ++i) {
+      prefetchOffsetPtr = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(prefetchOffsetPtr) + allocationSize_);
+      // Prefetch ahead the kForEachAllocPrefetchOffset item.
+      __builtin_prefetch(prefetchOffsetPtr, 0, 0);
+      if (!callback(ptr, allocInfo.value())) {
+        return SlabIterationStatus::kAbortIteration;
+      }
+      ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(ptr) +
+                                    allocationSize_);
+    }
+    return SlabIterationStatus::kFinishedCurrentSlabAndContinue;
+  }
 
   // release the memory back to the slab class.
   //
@@ -308,6 +361,7 @@ class AllocationClass {
   bool allFreed(const Slab* slab) const;
 
   bool removeFromFreeListLocked(void *memory);
+  bool removeFromFreeList(void *memory);
 
   // for saving and restoring the state of the allocation class
   //
@@ -418,6 +472,7 @@ class AllocationClass {
   //          don't have any free memory. The caller will have to add a slab
   //          to this slab class to make further allocations out of it.
   void* allocateLocked();
+  void* allocateLockedBatch();
 
   // lock for serializing access to currSlab_, currOffset, allocatedSlabs_,
   // freeSlabs_, freedAllocations_.

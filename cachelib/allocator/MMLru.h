@@ -435,6 +435,10 @@ class MMLru {
     static LruType getLruType(const T& /* node */) noexcept {
       return LruType{};
     }
+    
+    // remove node from lru and adjust insertion points
+    // @param node          node to remove
+    void removeLocked(T& node);
 
    private:
     EvictionAgeStat getEvictionAgeStatLocked(
@@ -459,9 +463,6 @@ class MMLru {
     // to maintain the tailSize_, for the next insertion.
     void updateLruInsertionPoint() noexcept;
 
-    // remove node from lru and adjust insertion points
-    // @param node          node to remove
-    void removeLocked(T& node);
 
     // Bit MM_BIT_0 is used to record if the item is in tail. This
     // is used to implement LRU insertion points

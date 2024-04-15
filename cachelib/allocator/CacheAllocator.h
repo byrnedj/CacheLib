@@ -1599,6 +1599,11 @@ class CacheAllocator : public CacheBase {
                                    PoolId pid,
                                    ClassId cid,
                                    uint64_t batch);
+  
+  std::vector<void*> allocateInternalTierByCidBatchContigous(TierId tid,
+                                   PoolId pid,
+                                   ClassId cid,
+                                   uint64_t batch);
 
   // Allocate a chained item
   //
@@ -1715,6 +1720,13 @@ class CacheAllocator : public CacheBase {
                          bool skipAddInMMContainer,
                          bool fromBgThread,
                          std::vector<bool>& moved);
+  
+  void evictRegularItemsCont(TierId tid, PoolId pid, ClassId cid,
+                         std::vector<EvictionData>& evictionData,
+                         std::vector<WriteHandle>& newItemHdls,
+                         bool skipAddInMMContainer,
+                         bool fromBgThread,
+                         std::vector<bool>& moved);
 
   // Moves a regular item to a different slab. This should only be used during
   // slab release after the item's exclusive bit has been set. The user supplied
@@ -1739,6 +1751,7 @@ class CacheAllocator : public CacheBase {
   // @param newItemHdl  Reference to the handle of the new item being moved into
   // @return true       If the containers were updated successfully.
   bool moveRegularItemBookKeeper(Item& oldItem, WriteHandle& newItemHdl);
+  bool moveRegularItemBookKeeperCont(Item& oldItem, WriteHandle& newItemHdl);
 
   // template class for viewAsChainedAllocs that takes either ReadHandle or
   // WriteHandle
@@ -1927,6 +1940,13 @@ class CacheAllocator : public CacheBase {
   // similiar to the above method but returns a batch of evicted items
   // as a pair of vectors
   std::vector<EvictionData> getNextCandidates(TierId tid,
+                                              PoolId pid,
+                                              ClassId cid,
+                                              unsigned int batch,
+                                              bool markMoving,
+                                              bool fromBgThread);
+  
+  std::vector<EvictionData> getNextCandidatesCont(TierId tid,
                                               PoolId pid,
                                               ClassId cid,
                                               unsigned int batch,
@@ -2175,7 +2195,9 @@ class CacheAllocator : public CacheBase {
     auto& dstPool = allocator_[tid+1]->getPoolForTraversal(pid);
     std::vector<Item*> slabAllocs;
     slabAllocs.reserve(65536);
-    auto evict = [tid,dstCandidate,this,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
+    size_t allocSize = 0; 
+    auto evict = [&allocSize,tid,dstCandidate,this,&slabAllocs](void *ptr, AllocInfo allocInfo) -> bool {
+        allocSize = allocInfo.allocSize;
         XDCHECK(ptr);
         auto* item = reinterpret_cast<Item*>(ptr);
         bool marked = false;
@@ -2208,7 +2230,13 @@ class CacheAllocator : public CacheBase {
               //and could be blocked here since we hold AC lock
               //but maybe that is okay due to std::try_lock? i.e. we
               //always wait for other threads before contentending
-              bool inFreeAlloc = allocator_[tid+1]->removeFromFreeListLocked(allocInfo.poolId,allocInfo.classId,ptr);
+              bool inFreeAlloc = allocator_[tid+1]->removeFromFreeList(allocInfo.poolId,allocInfo.classId,ptr);
+              if (!inFreeAlloc) {
+                //there is a chance that this alloc has not been put anywhere
+                //and so it is free, will anybody use it in the meantime?
+                //maybe, and so we abort
+                return false;
+              }
               XDCHECK(inFreeAlloc);
               if (item->getRefCountAndFlagsRaw() == 0 && inFreeAlloc) {
                 auto hdl2 = acquire(item);
@@ -2222,6 +2250,7 @@ class CacheAllocator : public CacheBase {
               }
             }
           }
+
           XDCHECK_GT(item->getRefCount(),0);
           slabAllocs.push_back(item);
           XDCHECK(marked);
@@ -2233,13 +2262,16 @@ class CacheAllocator : public CacheBase {
         return true;
     };
 
-    
     auto status = dstPool.forEachAllocation(cid,dstToFreeSlab,evict);
-    while (status != SlabIterationStatus::kFinishedCurrentSlabAndContinue) {
+    while (status == SlabIterationStatus::kSkippedCurrentSlabAndContinue) {
       status = dstPool.forEachAllocation(cid,dstToFreeSlab,evict);
     }
     dstContainer.removeBatch(slabAllocs.begin(), slabAllocs.end());
+    bool dstFound = false;
     for (auto *it : slabAllocs) {
+      if (it == dstCandidate) {
+        dstFound = true;
+      }
       //it's not in the mmContainer so nobody will pick it for 
       //eviction, it is still linked and we need to remove it
       //from ac, but need to wait for ref count to drain
@@ -2262,6 +2294,8 @@ class CacheAllocator : public CacheBase {
       XDCHECK_EQ(ret,ReleaseRes::kRecycled);
     }
 
+    XDCHECK(dstFound);
+
     WriteHandle candidateHandle;
     auto& mmContainer = getMMContainer(tid, pid, cid);
     mmContainer.withEvictionIterator([&candidateHandle,this](auto&& tail) {
@@ -2275,8 +2309,8 @@ class CacheAllocator : public CacheBase {
         }
         //need container lock to maked sure is in container
         //atempt to acquire and check ref count
-        auto hdl = acquire(toRecycle_);
-        if (hdl) {
+        auto hdl = findInternal(toRecycle_->getKey());
+        if (hdl && hdl.get() == toRecycle_) {
           candidateHandle = std::move(hdl);
           break;
         }
@@ -2301,12 +2335,12 @@ class CacheAllocator : public CacheBase {
     srcHdls.reserve(65536);
     srcHdls.push_back(std::move(candidateHandle));
     
-    auto srcMarking = [tid,&srcHdls,&srcAllocs,this](void *ptr, AllocInfo allocInfo) -> bool {
+    auto srcMarking = [tid,slabAllocs,&srcHdls,&srcAllocs,this](void *ptr, AllocInfo allocInfo) -> bool {
         XDCHECK(ptr);
         auto* item = reinterpret_cast<Item*>(ptr);
         bool marked = false;
         if (item != srcHdls[0].get()) {
-          while (!marked) {
+          while (!marked && srcAllocs.size() < slabAllocs.size()) {
             auto key = item->getKey();
             while (Item::getRequiredSize(key, 0 /* value size*/) > allocInfo.allocSize) {
               key = item->getKey();
@@ -2331,7 +2365,11 @@ class CacheAllocator : public CacheBase {
               //and could be blocked here since we hold AC lock
               //but maybe that is okay due to std::try_lock? i.e. we
               //always wait for other threads before contentending
-              bool inFreeAlloc = allocator_[tid+1]->removeFromFreeListLocked(allocInfo.poolId,allocInfo.classId,ptr);
+              bool inFreeAlloc = allocator_[tid]->removeFromFreeList(allocInfo.poolId,allocInfo.classId,ptr);
+              if (!inFreeAlloc) {
+                return false;
+              }
+              XDCHECK(inFreeAlloc);
               if (item->getRefCountAndFlagsRaw() == 0 && inFreeAlloc) {
                 auto hdl2 = acquire(item);
                 if (hdl2 && hdl2.get() == item) {
@@ -2340,6 +2378,9 @@ class CacheAllocator : public CacheBase {
                 }
               }
             }
+          }
+          if (srcAllocs.size() == slabAllocs.size()) {
+            return false;
           }
           srcAllocs.push_back(item);
           XDCHECK(marked);
@@ -2354,17 +2395,19 @@ class CacheAllocator : public CacheBase {
     //instead of aquire??
     // mmContainer.withContainerLock([&srcPool,&srcHdls,&srcAllocs,cid,&toFreeSlab,srcMarking,this]() {
     auto status2 = srcPool.forEachAllocation(cid,toFreeSlab,srcMarking);
-    while (status2 != SlabIterationStatus::kFinishedCurrentSlabAndContinue) {
+    while (status2 == SlabIterationStatus::kSkippedCurrentSlabAndContinue) {
       status2 = srcPool.forEachAllocation(cid,toFreeSlab,srcMarking);
     }
     //});
-    XDCHECK_EQ(srcAllocs.size(),slabAllocs.size()); 
-    std::memcpy(dstToFreeSlab,toFreeSlab,Slab::kSize);
+    XDCHECK_LT(srcAllocs.size(),slabAllocs.size()); 
+    std::memcpy(dstToFreeSlab,toFreeSlab,srcAllocs.size()*allocSize);
     
-    auto resetMetadata= [](void *ptr, AllocInfo allocInfo) -> bool {
+    auto resetMetadata = [slabAllocs,dstCandidate](void *ptr, AllocInfo allocInfo) -> bool {
         XDCHECK(ptr);
         auto* item = reinterpret_cast<Item*>(ptr);
-        item->resetMetadata();
+        if (std::find(slabAllocs.begin(),slabAllocs.end(),item) != slabAllocs.end()) {
+          item->resetMetadata();
+        }
         return true;
     };
 
@@ -2376,20 +2419,24 @@ class CacheAllocator : public CacheBase {
     mmContainer.removeBatch(srcAllocs.begin(), srcAllocs.end());
 
     //all the tier1 allocs should be added to front
-    dstContainer.addBatch(slabAllocs.begin(), slabAllocs.end());
+    dstContainer.addBatch(slabAllocs.begin(), slabAllocs.begin()+srcAllocs.size());
    
     int i = 0;
     // insert the new tier1 allocs to the acContainer
     for (auto *it : slabAllocs) {
-      XDCHECK_EQ(it->getKey(),srcAllocs[i]->getKey());
-      if (!accessContainer_->replaceIfAccessible(*srcAllocs[i], *it)) {
-        //this means that insertOrReplace was called so
-        //we need to remove the slabAlloc from mmContainer and release it back
-        //to the allocator
-        dstContainer.remove(*it);
-        XDCHECK_EQ(0u, it->getRefCount());
-        auto ret = releaseBackToAllocator(*it, RemoveContext::kNormal, false);
-        XDCHECK_EQ(ret,ReleaseRes::kReleased);
+      if (i < srcAllocs.size()) {
+        XDCHECK_EQ(it->getKey(),srcAllocs[i]->getKey());
+        if (!accessContainer_->replaceIfAccessible(*srcAllocs[i], *it)) {
+          //this means that insertOrReplace was called so
+          //we need to remove the slabAlloc from mmContainer and release it back
+          //to the allocator
+          dstContainer.remove(*it);
+          XDCHECK_EQ(0u, it->getRefCount());
+          auto ret = releaseBackToAllocator(*it, RemoveContext::kNormal, false);
+          XDCHECK_EQ(ret,ReleaseRes::kReleased);
+        }
+      } else {
+
       }
       i++;
     }

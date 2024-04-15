@@ -81,6 +81,11 @@ std::vector<void*> MemoryAllocator::allocateByCidBatch(PoolId id, ClassId cid, u
   return mp.allocateByCidBatch(cid, batch);
 }
 
+std::vector<void*> MemoryAllocator::allocateByCidBatchCont(PoolId id, ClassId cid, uint64_t batch) {
+  auto& mp = memoryPoolManager_.getPoolById(id);
+  return mp.allocateByCidBatchCont(cid, batch);
+}
+
 void* MemoryAllocator::allocateZeroedSlab(PoolId id) {
   if (!config_.enableZeroedSlabAllocs) {
     throw std::logic_error("Zeroed Slab allcoation is not enabled");
@@ -127,9 +132,9 @@ void MemoryAllocator::free(void* memory) {
   mp.free(memory);
 }
 
-bool MemoryAllocator::removeFromFreeListLocked(PoolId pid, ClassId cid, void* memory) {
+bool MemoryAllocator::removeFromFreeList(PoolId pid, ClassId cid, void* memory) {
   auto& mp = memoryPoolManager_.getPoolById(pid);
-  return mp.removeFromFreeListLocked(cid, memory);
+  return mp.removeFromFreeList(cid, memory);
 }
 
 const Slab* MemoryAllocator::getSlabForMemory(PoolId pid, ClassId cid, void* memory) {

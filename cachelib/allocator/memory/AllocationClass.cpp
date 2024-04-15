@@ -148,7 +148,7 @@ std::vector<void*> AllocationClass::addSlabAndAllocateBatch(Slab* slab, uint64_t
     addSlabLocked(slab);
     uint64_t total = 0;
     while (total < batch) {
-     void *alloc = allocateLocked();
+     void *alloc = allocateLockedBatch();
      if (alloc != nullptr) {
        allocs.push_back(alloc);
        total++;
@@ -187,7 +187,7 @@ std::vector<void*> AllocationClass::allocateBatch(uint64_t batch) {
   lock_->lock_combine([this, &allocs, batch]() { 
     uint64_t total = 0;
     while (total < batch) {
-      void *alloc = allocateLocked();
+      void *alloc = allocateLockedBatch();
       if (alloc != nullptr) {
         allocs.push_back(alloc);
         total++;
@@ -216,6 +216,29 @@ void* AllocationClass::allocateLocked() {
     freedAllocations_.pop();
     return reinterpret_cast<void*>(ret);
   }
+
+  // see if we have an active slab that is being used to carve the
+  // allocations.
+  if (canAllocateFromCurrentSlabLocked()) {
+    return allocateFromCurrentSlabLocked();
+  }
+
+  XDCHECK(canAllocate_);
+  XDCHECK(!freeSlabs_.empty());
+  setupCurrentSlabLocked();
+  // grab a free slab and make it current.
+  return allocateFromCurrentSlabLocked();
+}
+
+void* AllocationClass::allocateLockedBatch() {
+  // fast path for case when the cache is mostly full.
+  if (freeSlabs_.empty() &&
+      !canAllocateFromCurrentSlabLocked()) {
+    //canAllocate_ = false;
+    return nullptr;
+  }
+
+  XDCHECK(canAllocate_);
 
   // see if we have an active slab that is being used to carve the
   // allocations.
@@ -388,6 +411,10 @@ void AllocationClass::partitionFreeAllocs(const Slab* slab,
       notInSlab.insert(*alloc);
     }
   }
+}
+
+bool AllocationClass::removeFromFreeList(void *memory) {
+  return lock_->lock_combine([this, memory]() -> bool { return removeFromFreeListLocked(memory); });
 }
 
 bool AllocationClass::removeFromFreeListLocked(void *memory) {
