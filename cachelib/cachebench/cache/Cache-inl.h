@@ -353,6 +353,7 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     auto poolIds = cache_->getPoolIds();
     for (auto poolId : poolIds) {
       pools_.push_back(poolId);
+      //cache_->updatePool(poolId,true);
     }
   } else {
     const size_t numBytes = cache_->getCacheMemoryStats().ramCacheSize;

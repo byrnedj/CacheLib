@@ -107,7 +107,12 @@ class KVReplayGenerator : public ReplayGeneratorBase {
         }
     }
     //we have n actual classes to divide among nshards
-    uint32_t shardsPerClass = numShards_ / actualClasses;
+    uint32_t shardsPerClass = 0;
+    if (actualClasses == 0) {
+      shardsPerClass = numShards_ / 4;
+    } else {
+      shardsPerClass = numShards_ / actualClasses;
+    }
     XLOGF(INFO,"shardsperclass {}",shardsPerClass);
     if (shardsPerClass >= 1) {
         uint32_t currShard = 0;

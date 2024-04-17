@@ -79,6 +79,8 @@ CacheAllocator<CacheTrait>::CacheAllocator(
       mmContainers_(type == InitMemType::kMemAttach
                         ? deserializeMMContainers(*deserializer_, compressor_)
                         : MMContainers{getNumTiers()}),
+      //promoQueues_(type == InitMemType::kMemAttach
+      //                  ? deserializePromoQueues(*deserializer_, compressor_)
       promoQueues_(PromoQueues{getNumTiers()}),
       accessContainer_(initAccessContainer(
           type, detail::kShmHashTableName, config.accessConfig)),
@@ -3565,6 +3567,122 @@ folly::IOBuf CacheAllocator<CacheTrait>::wrapAsIOBuf(const Item& item) {
 }
 
 template <typename CacheTrait>
+void CacheAllocator<CacheTrait>::updatePool(
+    PoolId pid,
+    bool ensureProvisionable) {
+  folly::SharedMutex::WriteHolder w(poolsResizeAndRebalanceLock_);
+
+  size_t totalCacheSize = 0;
+
+  XLOGF(INFO,"CacheItem is {} bytes", sizeof(Item));
+  for (TierId tid = 0; tid < getNumTiers(); tid++) {
+    totalCacheSize += allocator_[tid]->getMemorySize();
+    XLOGF(INFO,"assignd {} to tid {}", allocator_[tid]->getMemorySize(), tid);
+  }
+          
+  for (TierId tid = 0; tid < getNumTiers(); tid++) {
+    auto assignments = config_.getClassAssignments(tid,pid);
+    for (auto entry : assignments) {
+      ClassId cid = entry.first;
+      releaseSlabT(tid,pid,cid,Slab::kInvalidClassId,SlabReleaseMode::kRebalance,nullptr);
+    }
+  }
+
+  for (TierId tid = 0; tid < getNumTiers(); tid++) {
+    if (config_.preAssignSlabs) {
+      auto assignments = config_.getClassAssignments(tid,pid);
+      bool takeOne = false;
+      //if ((tierPoolSize / 1000000) > 10000) {
+      //  takeOne = true;
+      //}
+      for (auto entry : assignments) {
+          ClassId cid = entry.first;
+          uint32_t slabs = entry.second;
+          if (takeOne && slabs < 3) {
+            slabs -= 1;
+            takeOne = false;
+          }
+
+          bool ret = allocator_[tid]->assignSlabs(pid,cid,slabs);
+          if (!ret) {
+            XDCHECK(ret) << folly::sformat(
+                "unable to assign {} slabs to cid {} @ tid {}", slabs, cid, tid);
+            throw std::invalid_argument(folly::sformat(
+                "unable to assign {} slabs to cid {} @ tid {}", slabs, cid, tid));
+          }
+          const auto allocSizesa = allocator_[tid]->getPool(pid).getAllocSizes(); 
+          //const auto& allocSizesa = pool.getAllocSizes();
+          XLOGF(INFO,"assignd {} slabs to cid {} @ tid {} - allocSize {}", slabs, cid, tid, allocSizesa[cid]);
+      }
+    }
+  }
+
+  createPromoQueues(pid);
+
+  //for (size_t id = 0; id < backgroundEvictor_.size(); id++) {
+  //  //uint32_t tid = id % getNumTiers();
+  //  uint32_t tid = 0;
+  //  backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(id, backgroundEvictor_.size(), tid ));
+  //}
+
+  uint32_t evictors = backgroundEvictor_.size();
+  uint32_t ept = evictors/getNumTiers();
+  std::vector<uint32_t> evictorsPerTier;
+  uint32_t total = 0;
+  for (int i = 0; i < getNumTiers(); i++) {
+    evictorsPerTier.push_back(ept);
+    total += ept;
+  }
+  while (total < evictors) {
+    uint32_t remain = evictors - total;
+    for (int i = 0; i < remain; i++) {
+      uint32_t tid = i % getNumTiers();
+      evictorsPerTier[tid]++;
+      total++;
+    }
+  }
+  uint32_t id = 0;
+  size_t actualThreads = 0;
+  auto assignments1 = config_.getClassAssignments(0,0);
+  auto assignments2 = config_.getClassAssignments(1,0);
+  std::vector<std::vector<MemoryDescriptorType>> memoryMapE;
+  std::vector<std::vector<MemoryDescriptorType>> memoryMapP;
+  for (auto entry : assignments1) {
+      ClassId cid = entry.first;
+      uint32_t slabs = entry.second + assignments2[cid];
+      if (slabs > 2) {
+          actualThreads++;
+          MemoryDescriptorType md0(0,0,cid);
+          MemoryDescriptorType md1(1,0,cid);
+          std::vector<MemoryDescriptorType> mems;
+          std::vector<MemoryDescriptorType> memsP;
+          mems.push_back(md0);
+          //mems.push_back(md1);
+          memsP.push_back(md1);
+          memoryMapE.push_back(mems);
+          memoryMapP.push_back(memsP);
+      }
+  }
+  if (backgroundEvictor_.size() > 0) {
+    for (int i = 0; i < actualThreads; i++) {
+      backgroundEvictor_[i]->setAssignedMemory(std::move(memoryMapE[i]));
+      backgroundPromoter_[i]->setAssignedMemory(std::move(memoryMapP[i]));
+    }
+  }
+  //  for (int j = 0; j < evictorsPerTier[i]; j++) {
+  //    backgroundEvictor_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(j, evictorsPerTier[i], i));
+  //    id++;
+  //  }
+  //}
+
+  //if (backgroundPromoter_.size()) {
+  //  for (size_t id = 0; id < backgroundPromoter_.size(); id++)
+  //    backgroundPromoter_[id]->setAssignedMemory(getAssignedMemoryToBgWorker(id, backgroundPromoter_.size(), 1));
+  //}
+
+}
+
+template <typename CacheTrait>
 PoolId CacheAllocator<CacheTrait>::addPool(
     folly::StringPiece name,
     size_t size,
@@ -4075,6 +4193,56 @@ void CacheAllocator<CacheTrait>::releaseSlab(PoolId pid,
                                              SlabReleaseMode mode,
                                              const void* hint) {
   releaseSlab(pid, cid, Slab::kInvalidClassId, mode, hint);
+}
+
+template <typename CacheTrait>
+void CacheAllocator<CacheTrait>::releaseSlabT(
+                                             TierId tid,
+                                             PoolId pid,
+                                             ClassId victim,
+                                             ClassId receiver,
+                                             SlabReleaseMode mode,
+                                             const void* hint) {
+  stats_.numActiveSlabReleases.inc();
+  SCOPE_EXIT { stats_.numActiveSlabReleases.dec(); };
+  switch (mode) {
+  case SlabReleaseMode::kRebalance:
+    stats_.numReleasedForRebalance.inc();
+    break;
+  case SlabReleaseMode::kResize:
+    stats_.numReleasedForResize.inc();
+    break;
+  case SlabReleaseMode::kAdvise:
+    stats_.numReleasedForAdvise.inc();
+    break;
+  }
+
+  try {
+    auto releaseContext = allocator_[tid]->startSlabRelease(
+        pid, victim, receiver, mode, hint,
+        [this]() -> bool { return shutDownInProgress_; });
+
+    // No work needed if the slab is already released
+    if (releaseContext.isReleased()) {
+      return;
+    }
+
+    releaseSlabImpl(tid, releaseContext);
+    if (!allocator_[tid]->allAllocsFreed(releaseContext)) {
+      throw std::runtime_error(
+          folly::sformat("Was not able to free all allocs. PoolId: {}, AC: {}",
+                         releaseContext.getPoolId(),
+                         releaseContext.getClassId()));
+    }
+
+    allocator_[tid]->completeSlabRelease(releaseContext);
+  } catch (const exception::SlabReleaseAborted& e) {
+    stats_.numAbortedSlabReleases.inc();
+    throw exception::SlabReleaseAborted(folly::sformat(
+        "Slab release aborted while releasing "
+        "a slab in pool {} victim {} receiver {}. Original ex msg: ",
+        pid, static_cast<int>(victim), static_cast<int>(receiver), e.what()));
+  }
 }
 
 template <typename CacheTrait>
@@ -4836,6 +5004,28 @@ folly::IOBufQueue CacheAllocator<CacheTrait>::saveStateToIOBuf() {
   };
   MMSerializationTypeContainer mmContainersState =
       serializeMMContainers(mmContainers_);
+  
+  //auto serializePromoQueues = [numTiers](PromoQueues& promoQueues) {
+  //  std::map<serialization::MemoryDescriptorObject,MMSerializationType> containers;
+  //  for (unsigned int i = 0; i < numTiers; ++i) {
+  //    for (unsigned int j = 0; j < promoQueues[i].size(); ++j) {
+  //      for (unsigned int k = 0; k < promoQueues[i][j].size(); ++k) {
+  //        if (promoQueues[i][j][k]) {
+  //          serialization::MemoryDescriptorObject md;
+  //          md.tid_ref() = i;
+  //          md.pid_ref() = j;
+  //          md.cid_ref() = k;
+  //          containers[md] = promoQueues[i][j][k]->saveState();
+  //        }
+  //      }
+  //    }
+  //  }
+  //  MMSerializationTypeContainer state;
+  //  state.containers_ref() = containers;
+  //  return state;
+  //};
+  //MMSerializationTypeContainer promoQueuesState =
+  //    serializePromoQueues(promoQueues_);
 
   AccessSerializationType accessContainerState = accessContainer_->saveState();
 
@@ -5007,6 +5197,34 @@ CacheAllocator<CacheTrait>::deserializeMMContainers(
   }
   return mmContainers;
 }
+
+/*
+template <typename CacheTrait>
+typename CacheAllocator<CacheTrait>::PromoQueues
+CacheAllocator<CacheTrait>::deserializePromoQueues(
+    Deserializer& deserializer,
+    const typename Item::PtrCompressor& compressor) {
+  const auto container =
+      deserializer.deserialize<MMSerializationTypeContainer>();
+
+  PromoQueues promoQueues{getNumTiers()};
+
+  std::map<serialization::MemoryDescriptorObject,MMSerializationType> containerMap = 
+      *container.containers();
+  for (auto md : containerMap) {
+     uint32_t tid = *md.first.tid();
+     uint32_t pid = *md.first.pid();
+     uint32_t cid = *md.first.cid();
+     auto& pool = getPoolByTid(pid,tid);
+     PromoQueuePtr ptr =
+         std::make_unique<typename PromoQueuePtr::element_type>(md.second,
+                                                                 compressor);
+     promoQueues[tid][pid][cid] = std::move(ptr);
+  }
+
+  return promoQueues;
+}
+*/
 
 template <typename CacheTrait>
 serialization::CacheAllocatorMetadata

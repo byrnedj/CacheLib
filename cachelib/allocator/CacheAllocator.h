@@ -810,6 +810,9 @@ class CacheAllocator : public CacheBase {
                  std::shared_ptr<RebalanceStrategy> rebalanceStrategy = nullptr,
                  std::shared_ptr<RebalanceStrategy> resizeStrategy = nullptr,
                  bool ensureProvisionable = false);
+  
+  void updatePool(PoolId pid,
+                 bool ensureProvisionable = false);
 
   // update an existing pool's config
   //
@@ -1996,6 +1999,10 @@ class CacheAllocator : public CacheBase {
                    ClassId cid,
                    SlabReleaseMode mode,
                    const void* hint = nullptr) final;
+  //void releaseSlabT(TierId tid,
+  //                 ClassId cid,
+  //                 SlabReleaseMode mode,
+  //                 const void* hint = nullptr) final;
 
   // Releasing a slab from this allocation class id and pool id. The release
   // could be for a pool resizing or allocation class rebalancing.
@@ -2025,6 +2032,12 @@ class CacheAllocator : public CacheBase {
                    ClassId receiver,
                    SlabReleaseMode mode,
                    const void* hint = nullptr) final;
+  void releaseSlabT(TierId tid,
+          PoolId pid,
+                   ClassId victim,
+                   ClassId receiver,
+                   SlabReleaseMode mode,
+                   const void* hint = nullptr);
 
   // @param releaseContext  slab release context
   void releaseSlabImpl(TierId tid, const SlabReleaseContext& releaseContext);
