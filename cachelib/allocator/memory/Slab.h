@@ -80,7 +80,7 @@ class CACHELIB_PACKED_ATTR Slab {
   static constexpr unsigned int kNumSlabBits = 22;
 
   // minimum of 64 byte allocations.
-  static constexpr unsigned int kMinAllocPower = 6;
+  static constexpr unsigned int kMinAllocPower = 8;
   static constexpr size_t kMinAllocSize = 1 << kMinAllocPower;
 
   static constexpr size_t kSize = 1 << kNumSlabBits;
