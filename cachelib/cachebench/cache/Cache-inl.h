@@ -754,6 +754,8 @@ Stats Cache<Allocator>::getStats() const {
       static_cast<int64_t>(itemRecords_.count()) - totalDestructor_;
 
   ret.cacheAllocateLatencyNs = cacheStats.allocateLatencyNs;
+  ret.cacheItemWaitLatencyNs = cacheStats.itemWaitLatencyNs;
+  ret.cacheItemWaitBlocks = cacheStats.numHandleWaitBlocks;
 
   ret.cacheBgEvictLatencyNs = cacheStats.bgEvictLatencyNs;
   ret.cacheEvictDmlLargeItemWaitLatencyNs = cacheStats.evictDmlLargeItemWaitLatencyNs;

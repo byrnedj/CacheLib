@@ -189,6 +189,7 @@ struct Stats {
 
   // latency stats of various cachelib operations
   mutable util::PercentileStats allocateLatency_;
+  mutable util::PercentileStats itemWaitLatency_;
   mutable util::PercentileStats bgEvictLatency_;
   mutable util::PercentileStats evictDmlLargeItemWaitLatency_;
   mutable util::PercentileStats evictDmlSmallItemWaitLatency_;

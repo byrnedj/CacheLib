@@ -29,6 +29,8 @@ namespace cachebench {
 
 
 struct Stats {
+ 
+  uint64_t cacheItemWaitBlocks = 0;
   std::vector<BackgroundMoverStats> backgroundEvictorStats;
   std::vector<BackgroundMoverStats> backgroundPromoStats;
   ReaperStats reaperStats;
@@ -75,6 +77,7 @@ struct Stats {
   uint64_t numNvmItemRemovedSetSize{0};
 
   util::PercentileStats::Estimates cacheAllocateLatencyNs;
+  util::PercentileStats::Estimates cacheItemWaitLatencyNs;
 
   util::PercentileStats::Estimates cacheBgEvictLatencyNs;
   util::PercentileStats::Estimates cacheEvictDmlLargeItemWaitLatencyNs;
@@ -146,6 +149,7 @@ struct Stats {
         out << folly::sformat("Items in Tier {}  : {:,}", tid, numItems[tid]) << std::endl;
     }
     out << folly::sformat("Items in NVM    : {:,}", numNvmItems) << std::endl;
+    out << folly::sformat("Item Wait Blocks    : {:,}", cacheItemWaitBlocks) << std::endl;
     for (TierId tid = 0; tid < nTiers; tid++) {
         out << folly::sformat("Tier {} Alloc Attempts: {:,}\n"
                               "Tier {} Alloc Success: {:.2f}%",
@@ -314,12 +318,24 @@ struct Stats {
               fmtLatency("p999999", latency.p999999);
               fmtLatency("p100", latency.p100);
             };
+        
+        auto printAvgLatencies =
+            [&out](folly::StringPiece cat,
+                   const util::PercentileStats::Estimates& latency) {
+              auto fmtLatency = [&out, &cat](folly::StringPiece pct,
+                                             double val) {
+                out << folly::sformat("{:20} {:8} in ns: {:>10.2f}\n", cat, pct, val);
+              };
+
+              fmtLatency("avg", latency.p50);
+            };
 
         printLatencies("Cache Find API latency", cacheFindLatencyNs);
         printLatencies("Cache Allocate API latency", cacheAllocateLatencyNs);
+        printAvgLatencies("Cache Item Wait latency", cacheItemWaitLatencyNs);
         printLatencies("Cache Background Eviction latency", cacheBgEvictLatencyNs);
-        printLatencies("Cache Evict DML Large Item Wait latency", cacheEvictDmlLargeItemWaitLatencyNs);
-        printLatencies("Cache Evict DML Small Item Wait latency", cacheEvictDmlSmallItemWaitLatencyNs);
+        printAvgLatencies("Cache Evict DML Large Item Wait latency", cacheEvictDmlLargeItemWaitLatencyNs);
+        printAvgLatencies("Cache Evict DML Small Item Wait latency", cacheEvictDmlSmallItemWaitLatencyNs);
         printLatencies("Cache Background Promotion latency", cacheBgPromoteLatencyNs);
         printLatencies("Cache Promote DML Large Item Wait latency", cachePromoteDmlLargeItemWaitLatencyNs);
         printLatencies("Cache Promote DML Small Item Wait latency", cachePromoteDmlSmallItemWaitLatencyNs);

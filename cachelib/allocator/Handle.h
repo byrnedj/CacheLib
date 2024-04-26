@@ -27,6 +27,7 @@
 
 #include "cachelib/allocator/nvmcache/WaitContext.h"
 #include "cachelib/common/Exceptions.h"
+#include "cachelib/common/PercentileStats.h"
 
 namespace facebook {
 namespace cachelib {
@@ -77,7 +78,7 @@ struct ReadHandleImpl {
     }
     it_ = nullptr;
   }
-
+  
   // Waits for item (if async op in progress) and then releases item's
   // ownership to the caller.
   Item* release() noexcept {
@@ -267,6 +268,7 @@ struct ReadHandleImpl {
       if (isReady()) {
         return;
       }
+      util::LatencyTracker tracker{alloc_.stats().itemWaitLatency_};
       alloc_.bumpHandleWaitBlocks();
       baton_.wait();
       XDCHECK(isReady());

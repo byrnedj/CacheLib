@@ -553,6 +553,7 @@ struct GlobalCacheStats {
 
   // latency and percentile stats of various cachelib operations
   util::PercentileStats::Estimates allocateLatencyNs{};
+  util::PercentileStats::Estimates itemWaitLatencyNs{};
   util::PercentileStats::Estimates bgEvictLatencyNs{};
   util::PercentileStats::Estimates evictDmlLargeItemWaitLatencyNs{};
   util::PercentileStats::Estimates evictDmlSmallItemWaitLatencyNs{};

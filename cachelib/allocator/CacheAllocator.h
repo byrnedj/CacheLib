@@ -2147,9 +2147,25 @@ class CacheAllocator : public CacheBase {
         return 0;
       }
     }
-    auto evictionData = getNextCandidates(tid,pid,cid,batch,
+    bool markMoving = true;
+    auto evictionData = getNextCandidatesCont(tid,pid,cid,batch,
                                      true,true);
+    //auto evictionData = getNextCandidates(tid,pid,cid,batch,
+    //                                 markMoving,true);
     size_t evictions = evictionData.size();
+    if (!markMoving) {
+      for (int i = 0; i < evictionData.size(); i++) {
+        while (evictionData[i].candidate->getRefCount() > 2) {};
+        XDCHECK_EQ(2u, evictionData[i].candidate->getRefCount());
+        evictionData[i].candidateHandle.reset(); //destroy handle
+        XDCHECK_EQ(1u, evictionData[i].candidate->getRefCount());
+        evictionData[i].candidate->decRef();
+        XDCHECK_EQ(0u, evictionData[i].candidate->getRefCount());
+        const auto res =
+            releaseBackToAllocator(*evictionData[i].candidate, RemoveContext::kNormal, false);
+        XDCHECK(res == ReleaseRes::kReleased);
+      }
+    }
     (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
     return evictions;
   }

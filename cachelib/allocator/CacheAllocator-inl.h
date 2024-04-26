@@ -1749,9 +1749,11 @@ bool CacheAllocator<CacheTrait>::moveRegularItem(Item& oldItem,
     config_.moveCb(oldItem, *newItemHdl, nullptr);
   } else {
     if (fromBgThread) {
+      util::LatencyTracker largeItemWait{stats().evictDmlLargeItemWaitLatency_};
       std::memmove(newItemHdl->getMemory(), oldItem.getMemory(),
                 oldItem.getSize());
     } else {
+      util::LatencyTracker largeItemWait{stats().evictDmlSmallItemWaitLatency_};
       std::memcpy(newItemHdl->getMemory(), oldItem.getMemory(),
                 oldItem.getSize());
     }
@@ -1882,10 +1884,23 @@ CacheAllocator<CacheTrait>::findEvictionBatch(TierId tid,
 
   std::vector<Item*> toRecycles;
   toRecycles.reserve(batch);
-  auto evictionData = getNextCandidatesCont(tid,pid,cid,batch,true,false);
+  bool markMoving = true;
+  auto evictionData = getNextCandidatesCont(tid,pid,cid,batch,markMoving,false);
+  //if (tid == getNumTiers()-1 ) {
+  //  markMoving = true;
+  //}
+  //auto evictionData = getNextCandidates(tid,pid,cid,batch,markMoving,false);
   for (int i = 0; i < evictionData.size(); i++) {
     Item *candidate = evictionData[i].candidate;
     Item *toRecycle = evictionData[i].toRecycle;
+    if (!markMoving) {
+      while (candidate->getRefCount() > 2) {};
+      XDCHECK_EQ(2u, candidate->getRefCount()) << candidate->toString();
+      evictionData[i].candidateHandle.reset();
+      XDCHECK_EQ(1u, candidate->getRefCount()) << candidate->toString();
+      candidate->decRef();
+      XDCHECK_EQ(0u, candidate->getRefCount()) << candidate->toString();
+    }
     toRecycles.push_back(toRecycle);
     // recycle the item. it's safe to do so, even if toReleaseHandle was
     // NULL. If `ref` == 0 then it means that we are the last holder of
@@ -2183,8 +2198,8 @@ CacheAllocator<CacheTrait>::getNextCandidatesCont(TierId tid,
         marked = syncItem_->markMoving();
       } else if (!markMoving) {
         //we use item handle as sync point - for background eviction
-        auto hdl = acquire(candidate_);
-        if (hdl && hdl->getRefCount() == 1) {
+        auto hdl = findInternal(candidate_->getKey());
+        if (hdl) {
           marked = true;
           candidateHandle_ = std::move(hdl);
         }
@@ -2261,7 +2276,10 @@ CacheAllocator<CacheTrait>::getNextCandidatesCont(TierId tid,
       }
     }
     //2. copy item data - don't need to add in mmContainer yet
-    std::memmove(newHandles[0].get(),evictionData[0].candidate,moveSize);
+    {
+      util::LatencyTracker largeItemWait{stats().evictDmlLargeItemWaitLatency_};
+      std::memmove(newHandles[0].get(),evictionData[0].candidate,moveSize);
+    }
     for (auto i = 0U; i < batchSize; i++) {
       newHandles[i]->resetMetadata(); //refcount is 1
       XDCHECK(!newHandles[i]->isInMMContainer());
@@ -2346,7 +2364,6 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   evictionData.reserve(batch);
   newAllocs.reserve(batch);
   newHandles.reserve(batch);
-  
   auto& mmContainer = getMMContainer(tid, pid, cid);
   bool lastTier = tid+1 >= getNumTiers();
   unsigned int maxSearchTries = std::max(config_.evictionSearchTries,
@@ -2434,8 +2451,9 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
         marked = syncItem_->markMoving();
       } else if (!markMoving) {
         //we use item handle as sync point - for background eviction
-        auto hdl = acquire(candidate_);
-        if (hdl && hdl->getRefCount() == 1) {
+        auto hdl = findInternal(syncItem_->getKey());
+        if (hdl && hdl.get() == syncItem_) {
+          hdl->incRef();
           marked = true;
           candidateHandle_ = std::move(hdl);
         }
