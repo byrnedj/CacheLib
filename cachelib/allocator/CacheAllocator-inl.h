@@ -420,7 +420,7 @@ std::vector<void*> CacheAllocator<CacheTrait>::allocateInternalTierByCidBatch(Ti
   SCOPE_FAIL { stats_.invalidAllocs.add(batch); };
 
   util::RollingLatencyTracker rollTracker{
-      (*stats_.classAllocLatency)[tid][pid][cid]};
+      (*stats_.classAllocLatency)[tid][pid][cid],batch};
 
   (*stats_.allocAttempts)[tid][pid][cid].add(batch);
   

@@ -54,6 +54,8 @@ class RollingLatencyTracker {
  public:
   explicit RollingLatencyTracker(RollingStats& stats)
       : stats_(&stats), begin_(std::chrono::steady_clock::now()) {}
+  explicit RollingLatencyTracker(RollingStats& stats, uint64_t batch)
+      : stats_(&stats), begin_(std::chrono::steady_clock::now()), batch_(batch) {}
   RollingLatencyTracker() {}
   ~RollingLatencyTracker() {
     if (stats_) {
@@ -61,7 +63,7 @@ class RollingLatencyTracker {
       auto diffNanos =
           std::chrono::duration_cast<std::chrono::nanoseconds>(tp - begin_)
               .count();
-      stats_->trackValue(static_cast<double>(diffNanos));
+      stats_->trackValue(static_cast<double>(diffNanos)/batch_);
     }
   }
 
@@ -84,6 +86,7 @@ class RollingLatencyTracker {
  private:
   RollingStats* stats_{nullptr};
   std::chrono::time_point<std::chrono::steady_clock> begin_;
+  uint64_t batch_{1};
 };
 } // namespace util
 } // namespace cachelib
