@@ -2556,11 +2556,14 @@ extern template class CacheAllocator<LruCacheTrait>;
 extern template class CacheAllocator<LruCacheWithSpinBucketsTrait>;
 extern template class CacheAllocator<Lru2QCacheTrait>;
 extern template class CacheAllocator<TinyLFUCacheTrait>;
+extern template class CacheAllocator<SieveCacheTrait>;
 
 // CacheAllocator with an LRU eviction policy
 // LRU policy can be configured to act as a segmented LRU as well
 using LruAllocator = CacheAllocator<LruCacheTrait>;
 using LruAllocatorSpinBuckets = CacheAllocator<LruCacheWithSpinBucketsTrait>;
+
+using SieveAllocator = CacheAllocator<SieveCacheTrait>;
 
 // CacheAllocator with 2Q eviction policy
 // Hot, Warm, Cold queues are maintained

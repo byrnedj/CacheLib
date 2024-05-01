@@ -478,6 +478,18 @@ inline typename LruAllocator::MMConfig makeMMConfig(CacheConfig const& config) {
                                 config.useCombinedLockForIterators);
 }
 
+template <>
+inline typename SieveAllocator::MMConfig makeMMConfig(CacheConfig const& config) {
+  return SieveAllocator::MMConfig(
+                                config.lruUpdateOnWrite,
+                                config.lruUpdateOnRead,
+                                1,
+                                config.tryLockUpdate,
+                                static_cast<uint8_t>(config.lruIpSpec),
+                                0,
+                                config.useCombinedLockForIterators);
+}
+
 // LRU
 template <>
 inline typename Lru2QAllocator::MMConfig makeMMConfig(

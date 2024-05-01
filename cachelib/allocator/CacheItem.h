@@ -401,16 +401,6 @@ class CACHELIB_PACKED_ATTR CacheItem {
   uint32_t getOffsetForMemory() const noexcept;
 
   /**
-   * Functions to set, unset and get bits
-   */
-  template <RefcountWithFlags::Flags flagBit>
-  void setFlag() noexcept;
-  template <RefcountWithFlags::Flags flagBit>
-  void unSetFlag() noexcept;
-  template <RefcountWithFlags::Flags flagBit>
-  bool isFlagSet() const noexcept;
-
-  /**
    * The following are the data members of CacheItem
    *
    * Hooks to access and mm containers are public since other parts of the
@@ -430,6 +420,16 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   using MMContainer =
       typename CacheTrait::MMType::template Container<Item, &Item::mmHook_>;
+  
+  /**
+   * Functions to set, unset and get bits
+   */
+  template <RefcountWithFlags::Flags flagBit>
+  void setFlag() noexcept;
+  template <RefcountWithFlags::Flags flagBit>
+  void unSetFlag() noexcept;
+  template <RefcountWithFlags::Flags flagBit>
+  bool isFlagSet() const noexcept;
 
  protected:
   // Refcount for the item and also flags on the items state
