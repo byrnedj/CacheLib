@@ -2117,8 +2117,11 @@ CacheAllocator<CacheTrait>::getNextCandidatesCont(TierId tid,
   const auto& allocSizes = pool.getAllocSizes();
   const auto& allocSize = allocSizes[cid];
 
+  std::vector<Item*> candidates;
+  candidates.reserve(batch);
   auto iterateAndMark = [this, allocSize, tid, pid, cid, batch,
                          markMoving, lastTier, maxSearchTries,
+                         &candidates,
                          &evictionData, &mmContainer](auto&& itr) {
     unsigned int searchTries = 0;
     if (!itr) {
@@ -2220,7 +2223,8 @@ CacheAllocator<CacheTrait>::getNextCandidatesCont(TierId tid,
           XDCHECK(l_);
           XDCHECK_EQ(toRecycleParent_,&toRecycle_->asChainedItem().getParentItem(compressor_));
       }
-      mmContainer.removeLocked(*toRecycle_);
+      //mmContainer.removeLocked(*toRecycle_);
+      candidates.push_back(candidate_);
       EvictionData ed(candidate_,toRecycle_,toRecycleParent_,chainedItem_,
                       candidate_->isExpired(), std::move(token_), std::move(candidateHandle_));
       evictionData.push_back(std::move(ed));
@@ -2232,8 +2236,12 @@ CacheAllocator<CacheTrait>::getNextCandidatesCont(TierId tid,
       i++;
     }
   };
-  
-  mmContainer.withEvictionIterator(iterateAndMark);
+ 
+  {
+    auto tail = mmContainer.getEvictionIterator();
+    iterateAndMark(tail);
+  }
+  mmContainer.removeBatch(candidates.begin(),candidates.end());
 
   if (evictionData.size() < batch) {
     if (!lastTier) {
@@ -2247,7 +2255,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesCont(TierId tid,
       return evictionData;  
     }
   }
-  
+ 
   if (!lastTier) {
   
     const auto& pool = allocator_[tid]->getPool(pid);

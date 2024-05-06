@@ -290,16 +290,16 @@ class MMLru {
       // 2. Unlock
       void destroy() {
         Iterator::reset();
-        if (l_.owns_lock()) {
-          l_.unlock();
+        if (l_) {
+          l_.reset();
         }
       }
 
       // Reset this iterator to the beginning
       void resetToBegin() {
-        if (!l_.owns_lock()) {
-          l_.lock();
-        }
+        //if (!lockHolder_) {
+        //  lockHolder_ = std::make_shared<LockHolder>(lockHolder_.lock());
+        //}
         Iterator::resetToBegin();
       }
 
@@ -307,14 +307,16 @@ class MMLru {
       // private because it's easy to misuse and cause deadlock for MMLru
       LockedIterator& operator=(LockedIterator&&) noexcept = default;
 
-      // create an lru iterator with the lock being held.
-      LockedIterator(LockHolder l, const Iterator& iter) noexcept;
+      // create an lru iterator with the lock being held from a shared_ptr
+      LockedIterator(LockHolder l, const Iterator& iter) noexcept
+          : l_(std::make_shared<LockHolder>(std::move(l))),
+            Iterator(iter) {}
 
       // only the container can create iterators
       friend Container<T, HookPtr>;
 
       // lock protecting the validity of the iterator
-      LockHolder l_;
+      std::shared_ptr<LockHolder> l_;
     };
 
     // records the information that the node was accessed. This could bump up

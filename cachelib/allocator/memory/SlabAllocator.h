@@ -125,6 +125,7 @@ class SlabAllocator {
   //         nullptr if the allocation is in invalid state according to
   //         allocator.
   const void* getRandomAlloc() const noexcept;
+  const void* getRandomAlloc(PoolId pid, ClassId cid) const noexcept;
 
   // grab an empty slab from the slab allocator if one is available.
   //
