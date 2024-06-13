@@ -177,7 +177,7 @@ std::unique_ptr<Stressor> Stressor::makeStressor(
     return std::make_unique<FastShutdownStressor>(cacheConfig,
                                                   stressorConfig.numOps);
   } else if (stressorConfig.name == "async") {
-    if (stressorConfig.generator != "workload" &&
+    if (!(stressorConfig.generator == "workload" || stressorConfig.generator == "binary-replay") &&
         !stressorConfig.generator.empty()) {
       // async model has not been tested with other generators
       throw std::invalid_argument(folly::sformat(

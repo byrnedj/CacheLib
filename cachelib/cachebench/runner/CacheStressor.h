@@ -37,9 +37,14 @@
 #include "cachelib/cachebench/util/Request.h"
 #include "cachelib/cachebench/workload/GeneratorBase.h"
 
+#include <dml/dml.hpp>
+
 namespace facebook {
 namespace cachelib {
 namespace cachebench {
+
+using allocator_t = std::allocator<dml::byte_t>;
+using handler_t = dml::handler<dml::mem_move_operation, allocator_t>;
 
 constexpr uint32_t kNvmCacheWarmUpCheckRate = 1000;
 
@@ -82,6 +87,17 @@ class CacheStressor : public Stressor {
       movingSync = [this](typename CacheT::Item::Key key) {
         return std::make_unique<CacheStressSyncObj>(*this, key.str());
       };
+    }
+
+    values.reserve(500);
+    for (int i = 0; i < 500; i++) {
+      std::string value;
+      int len = 1*1024*1024;
+      value.reserve(len);
+      for (int i = 0; i < len; i++) {
+        value.push_back('A' + folly::Random::rand32(26));
+      }
+      values.push_back(value);
     }
 
     if (cacheConfig.useTraceTimeStamp &&
@@ -251,6 +267,21 @@ class CacheStressor : public Stressor {
     using Lock = std::unique_lock<folly::SharedMutex>;
     return lockEnabled_ ? Lock{getLock(key), std::try_to_lock} : Lock{};
   }
+  
+  // populate the input item handle according to the stress setup.
+  handler_t populateItemDsa(WriteHandle& handle, const std::string& itemValue = "") {
+    XDCHECK(handle);
+    XDCHECK_LE(cache_->getSize(handle), 4ULL * 1024 * 1024);
+    if (cache_->consistencyCheckEnabled()) {
+      cache_->setUint64ToItem(handle, folly::Random::rand64(rng));
+    }
+
+    if (!itemValue.empty()) {
+      return cache_->setStringItemDsa(handle, itemValue);
+    } else {
+      return cache_->setStringItemDsa(handle, values[folly::Random::rand32(500)]);
+    }
+  }
 
   // populate the input item handle according to the stress setup.
   void populateItem(WriteHandle& handle, const std::string& itemValue = "") {
@@ -266,7 +297,8 @@ class CacheStressor : public Stressor {
     if (!itemValue.empty()) {
       cache_->setStringItem(handle, itemValue);
     } else {
-      cache_->setStringItem(handle, hardcodedString_);
+      //cache_->setStringItem(handle,values[folly::Random::rand32(500)]);
+      cache_->setStringItem(handle,hardcodedString_);
     }
   }
 
@@ -343,6 +375,9 @@ class CacheStressor : public Stressor {
             }
           }
           auto lock = chainedItemAcquireUniqueLock(key);
+          //if (req.itemValue.empty()) {
+          //  req.itemValue = ];
+          //}
           result = setKey(pid, stats, key, *(req.sizeBegin), req.ttlSecs,
                           req.admFeatureMap, req.itemValue);
 
@@ -468,6 +503,83 @@ class CacheStressor : public Stressor {
     wg_->markFinish();
   }
 
+  static std::string dmlErrStr(dml::mem_move_result& result) {
+  std::string error;
+  switch (result.status) {
+    case dml::status_code::false_predicate:
+      /* Operation completed successfully, but result is unexpected */
+      error = "false predicate";
+      break;
+    case dml::status_code::partial_completion:
+      /* Operation was partially completed */
+      error = "partial complte";
+      break;
+    case dml::status_code::nullptr_error:
+      /* One of data pointers is NULL */
+      error = "nullptr";
+      break;
+    case dml::status_code::bad_size:
+      /* Invalid byte size was specified */
+      error = "bad size";
+      break;
+    case dml::status_code::bad_length:
+      /* Invalid number of elements was specified */
+      error = "bad length";
+      break;
+    case dml::status_code::inconsistent_size:
+      /* Input data sizes are different */
+      error = "inconsistent size";
+      break;
+    case dml::status_code::dualcast_bad_padding:
+      /* Bits 11:0 of the two destination addresses are not the same */
+      error = "dualcast bad padding";
+      break;
+    case dml::status_code::bad_alignment:
+      /* One of data pointers has invalid alignment */
+      error = "bad align";
+      break;
+    case dml::status_code::buffers_overlapping:
+      /* Buffers overlap with each other */
+      error = "buf overlap";
+      break;
+    case dml::status_code::delta_bad_size:
+      /* Invalid delta record size was specified */
+      error = "delta bad size";
+      break;
+    case dml::status_code::delta_delta_empty:
+      /* Delta record is empty */
+      error = "delta emptry";
+      break;
+    case dml::status_code::batch_overflow:
+      /* Batch is full */
+      error = "batch overflow";
+      break;
+    case dml::status_code::execution_failed:
+      /* Unknown execution error */
+      error = "unknown exec";
+      break;
+    case dml::status_code::unsupported_operation:
+      /* Unknown execution error */
+      error = "unsupported op";
+      break;
+    case dml::status_code::queue_busy:
+      /* Enqueue failed to one or several queues */
+      error = "busy";
+      break;
+    case dml::status_code::error:
+      /* Internal library error occurred */
+      error = "internal";
+      break;
+    case dml::status_code::ok:
+      /* should not be here */
+      error = "ok";
+      break;
+    default:
+      error = "none of the above - okay!!";
+      break;
+  }
+  return error + " batch copy error";
+  }
   // inserts key into the cache if the admission policy also indicates the
   // key is worthy to be cached.
   //
@@ -497,8 +609,18 @@ class CacheStressor : public Stressor {
       ++stats.setFailure;
       return OpResultType::kSetFailure;
     } else {
-      populateItem(it, itemValue);
-      cache_->insertOrReplace(it);
+      if (config_.dsaEnabled) {
+        auto handler = populateItemDsa(it, itemValue);
+        cache_->insertOrReplace(it);
+        //use dml wait time
+        auto result = handler.get();
+        if (result.status != dml::status_code::ok) {
+          XLOGF(ERR, "dml failed. Msg: {}", dmlErrStr(result));
+        }
+      } else {
+        populateItem(it, itemValue);
+        cache_->insertOrReplace(it);
+      }
       return OpResultType::kSetSuccess;
     }
   }
@@ -554,6 +676,8 @@ class CacheStressor : public Stressor {
       hasNvmCacheWarmedUp_ = true;
     }
   }
+    
+  std::vector<std::string> values;
 
   const StressorConfig config_; // config for the stress run
 

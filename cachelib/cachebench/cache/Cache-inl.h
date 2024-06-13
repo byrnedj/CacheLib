@@ -492,8 +492,10 @@ void Cache<Allocator>::touchValue(const ReadHandle& it) const {
 
   /* The accumulate call is intended to access all bytes of the value
    * and nothing more. */
-  auto sum = std::accumulate(ptr, ptr + getSize(it), 0ULL);
-  folly::doNotOptimizeAway(sum);
+  //auto sum = std::accumulate(ptr, ptr + getSize(it), 0ULL);
+  char net[4*1024*1024];
+  std::memcpy(net, ptr, getSize(it));
+  folly::doNotOptimizeAway(net);
 }
 
 template <typename Allocator>
@@ -898,12 +900,40 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
     return;
 
   auto ptr = reinterpret_cast<char*>(getMemory(handle));
-  std::strncpy(ptr, str.c_str(), dataSize);
+  std::memcpy(ptr, str.c_str(), dataSize);
 
   // Make sure the copied string ends with null char
   if (str.size() + 1 > dataSize) {
     ptr[dataSize - 1] = '\0';
   }
+}
+
+
+template <typename Allocator>
+handler_t Cache<Allocator>::setStringItemDsa(WriteHandle& handle,
+                                     const std::string& str) {
+  if (folly::Random::rand32(10000) < config_.dsaProb) {
+  auto dataSize = getSize(handle);
+  auto ptr = reinterpret_cast<char*>(getMemory(handle));
+  int endCPUIdx = dataSize*(1-config_.dsaPercent);
+  auto src = dml::make_view(str.c_str() + endCPUIdx,dataSize - endCPUIdx);
+  auto dst = dml::make_view(ptr,dataSize-endCPUIdx);
+  handler_t result = dml::submit<dml::automatic>(dml::mem_move, src , dst );
+  std::memcpy(ptr,str.c_str(),endCPUIdx);
+  return result;
+  } else {
+  auto dataSize = getSize(handle);
+  auto ptr = reinterpret_cast<char*>(getMemory(handle));
+  auto src = dml::make_view(str.c_str(),dataSize);
+  auto dst = dml::make_view(ptr,dataSize);
+  handler_t result = dml::submit<dml::software>(dml::mem_move, src , dst );
+  return result;
+  }
+  // Make sure the copied string ends with null char
+  //if (str.size() + 1 > dataSize) {
+  //  ptr[dataSize - 1] = '\0';
+  //}
+
 }
 
 template <typename Allocator>

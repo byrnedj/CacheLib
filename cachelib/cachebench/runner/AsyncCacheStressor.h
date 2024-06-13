@@ -70,7 +70,7 @@ class AsyncCacheStressor : public Stressor {
     // items during slab release, we want readers and writers of chained
     // allocs to be synchronized
     typename CacheT::ChainedItemMovingSync movingSync;
-    if (config_.usesChainedItems() &&
+    if (config_.usesChainedItems() ||
         (cacheConfig.moveOnSlabRelease || config_.checkConsistency)) {
       lockEnabled_ = true;
 
@@ -224,7 +224,7 @@ class AsyncCacheStressor : public Stressor {
                 folly::EventBase* evb,
                 const std::string_view& key) {
     ++stats.get;
-    auto lock = chainedItemAcquireSharedLock(key);
+    //auto lock = chainedItemAcquireSharedLock(key);
 
     if (ticker_) {
       ticker_->updateTimeStamp(req->timestamp);
@@ -233,7 +233,8 @@ class AsyncCacheStressor : public Stressor {
     // add a distribution over sequences of requests/access patterns
     // e.g. get-no-set and set-no-get
 
-    auto onReadyFn = [&, req, key, l = std::move(lock)](auto hdl) mutable {
+    //auto onReadyFn = [&, req, key, l = std::move(lock)](auto hdl) mutable {
+    auto onReadyFn = [&, req, key](auto hdl) mutable {
       auto result = OpResultType::kGetMiss;
 
       if (hdl == nullptr) {
@@ -244,7 +245,7 @@ class AsyncCacheStressor : public Stressor {
           // allocate and insert on miss
           // upgrade access privledges, (lock_upgrade is not
           // appropriate here)
-          l.unlock();
+          //l.unlock();
           auto xlock = chainedItemAcquireUniqueLock(key);
           setKey(pid, stats, key, *(req->sizeBegin), req->ttlSecs,
                  req->admFeatureMap);

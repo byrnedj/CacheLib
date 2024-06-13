@@ -43,12 +43,18 @@
 #include "cachelib/cachebench/util/CacheConfig.h"
 #include "cachelib/cachebench/util/NandWrites.h"
 
+#include <dml/dml.hpp>
+
 DECLARE_bool(report_api_latency);
 DECLARE_string(report_ac_memory_usage_stats);
 
 namespace facebook {
 namespace cachelib {
 namespace cachebench {
+
+using allocator_t = std::allocator<dml::byte_t>;
+using handler_t = dml::handler<dml::mem_move_operation, allocator_t>;
+
 constexpr folly::StringPiece kCachebenchCacheName = "cachebench";
 
 // An admission policy that rejects items that was last accessed more than
@@ -263,6 +269,7 @@ class Cache {
   // @param handle   the handle for the item
   // @param str      the string value to be set.
   void setStringItem(WriteHandle& handle, const std::string& str);
+  handler_t setStringItemDsa(WriteHandle& handle, const std::string& str);
 
   // when item records are enabled, updates the version for the item and
   // correspondingly invalidates the nvm cache.
