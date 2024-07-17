@@ -1899,14 +1899,12 @@ class CacheAllocator : public CacheBase {
                                               PoolId pid,
                                               ClassId cid,
                                               unsigned int batch,
-                                              bool markMoving,
                                               bool fromBgThread);
   
   std::vector<Item*> getNextCandidatesPromotion(TierId tid,
                                        PoolId pid,
                                        ClassId cid,
                                        unsigned int batch,
-                                       bool markMoving,
                                        bool fromBgThread);
 
   // 
@@ -1928,8 +1926,7 @@ class CacheAllocator : public CacheBase {
   // evict the item to NVM cache
   bool handleFailedMove(Item* candidate, 
                         typename NvmCacheT::PutToken& token, 
-                        bool isExpired,
-                        bool markMoving);
+                        bool isExpired);
 
   // Try to move the item down to the next memory tier
   //
@@ -2096,8 +2093,7 @@ class CacheAllocator : public CacheBase {
         return 0;
       }
     }
-    auto evictionData = getNextCandidates(tid,pid,cid,batch,
-                                     true,true);
+    auto evictionData = getNextCandidates(tid,pid,cid,batch,true);
     size_t evictions = evictionData.size();
     (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
     return evictions;
@@ -2105,8 +2101,7 @@ class CacheAllocator : public CacheBase {
   
   size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
     util::LatencyTracker tracker{stats().bgPromoteLatency_, batch};
-    auto candidates = getNextCandidatesPromotion(tid,pid,cid,batch,
-                                     true,true);
+    auto candidates = getNextCandidatesPromotion(tid,pid,cid,batch,true);
     return candidates.size();
   }
 
@@ -4011,7 +4006,7 @@ CacheAllocator<CacheTrait>::findEvictionBatch(TierId tid,
 
   std::vector<Item*> toRecycles;
   toRecycles.reserve(batch);
-  auto evictionData = getNextCandidates(tid,pid,cid,batch,true,false);
+  auto evictionData = getNextCandidates(tid,pid,cid,batch,true);
   for (int i = 0; i < evictionData.size(); i++) {
     Item *candidate = evictionData[i].candidate;
     Item *toRecycle = evictionData[i].toRecycle;
@@ -4047,7 +4042,6 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
                                              PoolId pid,
                                              ClassId cid,
                                              unsigned int batch,
-                                             bool markMoving,
                                              bool fromBgThread) {
   std::vector<Item*> newAllocs;
   std::vector<void*> blankAllocs;
@@ -4073,7 +4067,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
   XDCHECK_EQ(blankAllocs.size(),batch);
 
   auto iterateAndMark = [this, tid, pid, cid, batch,
-                         markMoving, maxSearchTries,
+                         maxSearchTries,
                          &candidates, &candidateHandles,
                          &mmContainer](auto&& itr) {
 
@@ -4101,17 +4095,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
       candidate_ = toRecycle_;
       syncItem_ = toRecycle_;
       
-      bool marked = false;
-      if (markMoving) {
-        marked = syncItem_->markMoving();
-      } else if (!markMoving) {
-        //we use item handle as sync point - for background eviction
-        auto hdl = acquire(candidate_);
-        if (hdl && hdl->getRefCount() == 1) {
-          marked = true;
-          candidateHandle_ = std::move(hdl);
-        }
-      }
+      bool marked = syncItem_->markMoving();
       if (!marked) {
         ++itr;
         continue;
@@ -4171,25 +4155,20 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
     bool moved = moveRegularItem(*candidate,newHandle, true, true);
     if (moved) {
       XDCHECK(candidate->getKey() == newHandle->getKey());
-      if (markMoving) {
-        auto ref = candidate->unmarkMoving();
-        XDCHECK_EQ(ref,0);
-        wakeUpWaiters(candidate->getKey(), std::move(newHandle));
-        const auto res =
-            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
-        XDCHECK(res == ReleaseRes::kReleased);
-      }
+      auto ref = unmarkMovingAndWakeUpWaiters(*candidate,std::move(newHandle));
+      XDCHECK_EQ(0u,ref);
+      const auto res =
+          releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+      XDCHECK(res == ReleaseRes::kReleased);
     } else {
       typename NvmCacheT::PutToken token{};
       
       removeFromMMContainer(*newAllocs[i]);
-      auto ret = handleFailedMove(candidate,token,false,markMoving);
+      auto ret = handleFailedMove(candidate,token,false);
       XDCHECK(ret);
-      if (markMoving && candidate->getRefCountAndFlagsRaw() == 0) {
-        const auto res =
-            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
-        XDCHECK(res == ReleaseRes::kReleased);
-      }
+      const auto res =
+          releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+      XDCHECK(res == ReleaseRes::kReleased);
 
     }
   }
@@ -4202,7 +4181,6 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
                                              PoolId pid,
                                              ClassId cid,
                                              unsigned int batch,
-                                             bool markMoving,
                                              bool fromBgThread) {
 
   std::vector<void*> blankAllocs;
@@ -4228,7 +4206,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   }
 
   auto iterateAndMark = [this, tid, pid, cid, batch,
-                         markMoving, lastTier, maxSearchTries,
+                         lastTier, maxSearchTries,
                          &evictionData, &mmContainer](auto&& itr) {
     unsigned int searchTries = 0;
     if (!itr) {
@@ -4294,17 +4272,10 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       }
       bool marked = false;
       //case 1: mark the item for eviction
-      if ((lastTier || candidate_->isExpired()) && markMoving) {
+      if (lastTier || candidate_->isExpired()) {
         marked = syncItem_->markForEviction();
-      } else if (markMoving) {
+      } else {
         marked = syncItem_->markMoving();
-      } else if (!markMoving) {
-        //we use item handle as sync point - for background eviction
-        auto hdl = acquire(candidate_);
-        if (hdl && hdl->getRefCount() == 1) {
-          marked = true;
-          candidateHandle_ = std::move(hdl);
-        }
       }
       if (!marked) {
         if (candidate_->hasChainedItem()) {
@@ -4379,22 +4350,20 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       if (moved) {
         (*stats_.numWritebacks)[tid][pid][cid].inc();
         XDCHECK(candidate->getKey() == newHandle->getKey());
-        if (markMoving) {
-          auto ref = candidate->unmarkMoving();
-          XDCHECK_EQ(ref,0);
-          wakeUpWaiters(candidate->getKey(), std::move(newHandle));
-          if (fromBgThread) {
-            const auto res =
-                releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
-            XDCHECK(res == ReleaseRes::kReleased);
-          }
+        auto ref = unmarkMovingAndWakeUpWaiters(*candidate,std::move(newHandle));
+        XDCHECK_EQ(ref,0);
+        if (fromBgThread) {
+          const auto res =
+              releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+          XDCHECK(res == ReleaseRes::kReleased);
         }
+        
       } else {
         typename NvmCacheT::PutToken token = std::move(evictionData[i].token);
         removeFromMMContainer(*newAllocs[i]);
-        auto ret = handleFailedMove(candidate,token,evictionData[i].expired,markMoving);
+        auto ret = handleFailedMove(candidate,token,evictionData[i].expired);
         XDCHECK(ret);
-        if (fromBgThread && markMoving) {
+        if (fromBgThread) {
           const auto res =
               releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
           XDCHECK(res == ReleaseRes::kReleased);
@@ -4407,8 +4376,8 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
     for (int i = 0; i < evictionData.size(); i++) {
       Item *candidate = evictionData[i].candidate;
       typename NvmCacheT::PutToken token = std::move(evictionData[i].token);
-      auto ret = handleFailedMove(candidate,token,evictionData[i].expired,markMoving);
-      if (fromBgThread && markMoving) {
+      auto ret = handleFailedMove(candidate,token,evictionData[i].expired);
+      if (fromBgThread) {
         const auto res =
             releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
         XDCHECK(res == ReleaseRes::kReleased);
@@ -4434,8 +4403,8 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
 template <typename CacheTrait>
 bool CacheAllocator<CacheTrait>::handleFailedMove(Item* candidate, 
                                                   typename NvmCacheT::PutToken& token, 
-                                                  bool isExpired,
-                                                  bool markMoving) {
+                                                  bool isExpired) {
+
   bool failedToReplace = !candidate->isAccessible();
   if (!token.isValid() && !failedToReplace) {
     token = createPutToken(*candidate);
@@ -4444,14 +4413,7 @@ bool CacheAllocator<CacheTrait>::handleFailedMove(Item* candidate,
   // as exclusive since we will not be moving the item to the next tier
   // but rather just evicting all together, no need to
   // markForEvictionWhenMoving
-  if (markMoving) {
-    if (!candidate->isMarkedForEviction() &&
-        candidate->isMoving()) {
-      auto ret = (isExpired) ? true : candidate->markForEvictionWhenMoving();
-      XDCHECK(ret);
-    }
-    unlinkItemForEviction(*candidate);
-  } else if (candidate->isAccessible()) {
+  if (!failedToReplace) {
     accessContainer_->remove(*candidate);
   }
  
@@ -4462,9 +4424,7 @@ bool CacheAllocator<CacheTrait>::handleFailedMove(Item* candidate,
   // wake up any readers that wait for the move to complete
   // it's safe to do now, as we have the item marked exclusive and
   // no other reader can be added to the waiters list
-  if (markMoving) {
-    wakeUpWaiters(candidate->getKey(), {});
-  }
+  wakeUpWaiters(candidate->getKey(), {});
   return true;
 }
 
@@ -4598,7 +4558,7 @@ CacheAllocator<CacheTrait>::getNextCandidate(TierId tid,
                                     //doing so recycle the child
     }
     //clean up and evict the candidate since we failed
-    auto ret = handleFailedMove(candidate,token,isExpired,true);
+    auto ret = handleFailedMove(candidate,token,isExpired);
     XDCHECK(ret);
   } else {
     XDCHECK(!evictedToNext->isMarkedForEviction() && !evictedToNext->isMoving());
