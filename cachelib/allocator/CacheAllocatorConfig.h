@@ -317,6 +317,8 @@ class CacheAllocatorConfig {
   CacheAllocatorConfig& enableInsertToFirstFreeTier();
   
   CacheAllocatorConfig& enableNoOnlineEviction();
+  
+  CacheAllocatorConfig& enableEvictContiguous();
 
   // Passes in a callback to initialize an event tracker when the allocator
   // starts
@@ -554,6 +556,8 @@ class CacheAllocatorConfig {
   // the number of tries to search for an item to evict
   // 0 means it's infinite
   unsigned int evictionSearchTries{50};
+  
+  bool evictContiguous = false;
 
   // If refcount is larger than this threshold, we will use shared_ptr
   // for handles in IOBuf chains.
@@ -694,6 +698,12 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableInsertToFirstFreeTier() 
 template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableNoOnlineEviction() {
   noOnlineEviction = true;
+  return *this;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableEvictContiguous() {
+  evictContiguous = true;
   return *this;
 }
 
@@ -1280,6 +1290,7 @@ std::map<std::string, std::string> CacheAllocatorConfig<T>::serialize() const {
       delayCacheWorkersStart ? "true" : "false";
   configMap["insertToFirstFreeTier"] = std::to_string(insertToFirstFreeTier);
   configMap["noOnlineEviction"] = std::to_string(noOnlineEviction);
+  configMap["evictContiguous"] = std::to_string(evictContiguous);
   mergeWithPrefix(configMap, throttleConfig.serialize(), "throttleConfig");
   mergeWithPrefix(configMap,
                   chainedItemAccessConfig.serialize(),

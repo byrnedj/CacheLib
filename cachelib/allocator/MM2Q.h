@@ -472,6 +472,9 @@ class MM2Q {
     //          expected nodes have been added.
     template <typename It>
     uint32_t addBatch(It begin, It end) noexcept;
+    
+    template <typename It>
+    uint32_t removeBatch(It begin, It end) noexcept;
 
     // removes the node from the lru and sets it previous and next to nullptr.
     //
@@ -939,6 +942,26 @@ uint32_t MM2Q::Container<T, HookPtr>::addBatch(It begin, It end) noexcept {
         return i;
       }
       addNodeLocked(*node,currTime);
+      i++;
+    }
+    return i;
+  });
+}
+
+template <typename T, MM2Q::Hook<T> T::*HookPtr>
+template <typename It>
+uint32_t MM2Q::Container<T, HookPtr>::removeBatch(It begin, It end) noexcept {
+  const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
+  return lruMutex_->lock_combine([this, begin, end, currTime]() {
+    uint32_t i = 0;
+    for (auto itr = begin; itr != end; itr++) {
+      T* node = *itr;
+      if (!node->isInMMContainer()) {
+        throw std::runtime_error(
+          folly::sformat("Was not able to remove all new items, failed item {}",
+                          node->toString()));
+      }
+      removeLocked(*node,currTime);
       i++;
     }
     return i;

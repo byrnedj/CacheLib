@@ -148,6 +148,8 @@ class MemoryPool {
   // @throw  std::invalid_argument if size is invalid.
   void* allocate(uint32_t size);
   void* allocateByCid(ClassId cid);
+  void* getAllocByCid(ClassId cid, unsigned int searchTries);
+  bool isAllocInSlab(void *alloc, Slab *slab);
   std::vector<void*> allocateByCidBatch(ClassId cid, uint64_t batch);
 
   // Allocate a slab with zeroed memory

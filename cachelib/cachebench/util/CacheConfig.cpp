@@ -52,6 +52,7 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   
   JSONSetVal(configJson, insertToFirstFreeTier);
   JSONSetVal(configJson, noOnlineEviction);
+  JSONSetVal(configJson, evictContiguous);
 
   JSONSetVal(configJson, lru2qHotPct);
   JSONSetVal(configJson, lru2qColdPct);

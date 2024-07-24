@@ -100,6 +100,7 @@ struct CacheConfig : public JSONConfig {
   
   bool insertToFirstFreeTier{false};
   bool noOnlineEviction{false};
+  bool evictContiguous{false};
 
   // LRU param
   uint64_t lruIpSpec{0};

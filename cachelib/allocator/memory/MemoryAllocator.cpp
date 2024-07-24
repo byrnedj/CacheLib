@@ -76,6 +76,16 @@ void* MemoryAllocator::allocateByCid(PoolId id, ClassId cid) {
   return mp.allocateByCid(cid);
 }
 
+void* MemoryAllocator::getAllocByCid(PoolId id, ClassId cid, unsigned int searchTries) {
+  auto& mp = memoryPoolManager_.getPoolById(id);
+  return mp.getAllocByCid(cid, searchTries);
+}
+
+bool MemoryAllocator::isAllocInSlab(PoolId id, void* alloc, Slab* slab) {
+  auto& mp = memoryPoolManager_.getPoolById(id);
+  return mp.isAllocInSlab(alloc,slab);
+}
+
 std::vector<void*> MemoryAllocator::allocateByCidBatch(PoolId id, ClassId cid, uint64_t batch) {
   auto& mp = memoryPoolManager_.getPoolById(id);
   return mp.allocateByCidBatch(cid, batch);

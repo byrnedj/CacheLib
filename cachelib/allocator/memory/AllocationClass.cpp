@@ -179,6 +179,18 @@ void* AllocationClass::allocate() {
   return lock_->lock_combine([this]() -> void* { return allocateLocked(); });
 }
 
+void* AllocationClass::getAlloc(unsigned int searchTries) {
+  return lock_->lock_combine([this,searchTries]() -> void* {
+    if (!allocatedSlabs_.empty()) {
+      auto idx = (searchTries > 0) ?
+          folly::Random::rand32(static_cast<uint32_t>(allocatedSlabs_.size()))
+          : 0;
+      return allocatedSlabs_[idx];
+    }
+    return nullptr;
+   });
+}
+
 std::vector<void*> AllocationClass::allocateBatch(uint64_t batch) {
   std::vector<void*> allocs;
   if (!canAllocate_) {

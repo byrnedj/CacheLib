@@ -1899,6 +1899,7 @@ class CacheAllocator : public CacheBase {
                                               PoolId pid,
                                               ClassId cid,
                                               unsigned int batch,
+                                              unsigned int& searchTries,
                                               bool fromBgThread);
   
   std::vector<Item*> getNextCandidatesPromotion(TierId tid,
@@ -2093,10 +2094,17 @@ class CacheAllocator : public CacheBase {
         return 0;
       }
     }
-    auto evictionData = getNextCandidates(tid,pid,cid,batch,true);
-    size_t evictions = evictionData.size();
-    (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
-    return evictions;
+    unsigned int searchTries = 0;
+    while (config_.evictionSearchTries == 0 ||
+           config_.evictionSearchTries > searchTries) {
+      auto evictionData = getNextCandidates(tid,pid,cid,batch,searchTries,true);
+      size_t evictions = evictionData.size();
+      if (evictions > 0) {
+        (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
+        return evictions;
+      }
+    }
+    return 0;
   }
   
   size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
@@ -4006,32 +4014,39 @@ CacheAllocator<CacheTrait>::findEvictionBatch(TierId tid,
 
   std::vector<Item*> toRecycles;
   toRecycles.reserve(batch);
-  auto evictionData = getNextCandidates(tid,pid,cid,batch,true);
-  for (int i = 0; i < evictionData.size(); i++) {
-    Item *candidate = evictionData[i].candidate;
-    Item *toRecycle = evictionData[i].toRecycle;
-    toRecycles.push_back(toRecycle);
-    // recycle the item. it's safe to do so, even if toReleaseHandle was
-    // NULL. If `ref` == 0 then it means that we are the last holder of
-    // that item.
-    if (candidate->hasChainedItem()) {
-      (*stats_.chainedItemEvictions)[tid][pid][cid].inc();
-    } else {
-      (*stats_.regularItemEvictions)[tid][pid][cid].inc();
-    }
+  unsigned int searchTries = 0;
+  while (config_.evictionSearchTries == 0 ||
+         config_.evictionSearchTries > searchTries) {
+    auto evictionData = getNextCandidates(tid,pid,cid,batch,searchTries,false);
+    if (evictionData.size() > 0) {
+      for (int i = 0; i < evictionData.size(); i++) {
+        Item *candidate = evictionData[i].candidate;
+        Item *toRecycle = evictionData[i].toRecycle;
+        toRecycles.push_back(toRecycle);
+        // recycle the item. it's safe to do so, even if toReleaseHandle was
+        // NULL. If `ref` == 0 then it means that we are the last holder of
+        // that item.
+        if (candidate->hasChainedItem()) {
+          (*stats_.chainedItemEvictions)[tid][pid][cid].inc();
+        } else {
+          (*stats_.regularItemEvictions)[tid][pid][cid].inc();
+        }
 
-    if (auto eventTracker = getEventTracker()) {
-      eventTracker->record(AllocatorApiEvent::DRAM_EVICT, candidate->getKey(),
-                           AllocatorApiResult::EVICTED, candidate->getSize(),
-                           candidate->getConfiguredTTL().count());
-    }
+        if (auto eventTracker = getEventTracker()) {
+          eventTracker->record(AllocatorApiEvent::DRAM_EVICT, candidate->getKey(),
+                               AllocatorApiResult::EVICTED, candidate->getSize(),
+                               candidate->getConfiguredTTL().count());
+        }
 
-    XDCHECK(!candidate->isChainedItem());
-    // check if by releasing the item we intend to, we actually
-    // recycle the candidate.
-    auto ret = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
-                                      /* isNascent */ false, toRecycle);
-    XDCHECK_EQ(ret,ReleaseRes::kRecycled);
+        XDCHECK(!candidate->isChainedItem());
+        // check if by releasing the item we intend to, we actually
+        // recycle the candidate.
+        auto ret = releaseBackToAllocator(*candidate, RemoveContext::kEviction,
+                                          /* isNascent */ false, toRecycle);
+        XDCHECK_EQ(ret,ReleaseRes::kRecycled);
+      }
+      break; //we are done with search try loop
+    }
   }
   return toRecycles;
 }
@@ -4061,9 +4076,8 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
   blankAllocs = allocateInternalTierByCidBatch(tid-1,pid,cid,batch);
   if (blankAllocs.empty()) {
     return candidates;  
-  } else if (blankAllocs.size() < batch) {
-    batch = blankAllocs.size();
   }
+  batch = blankAllocs.size();
   XDCHECK_EQ(blankAllocs.size(),batch);
 
   auto iterateAndMark = [this, tid, pid, cid, batch,
@@ -4181,12 +4195,20 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
                                              PoolId pid,
                                              ClassId cid,
                                              unsigned int batch,
+                                             unsigned int &searchTries,
                                              bool fromBgThread) {
 
   std::vector<void*> blankAllocs;
   std::vector<Item*> newAllocs;
   std::vector<WriteHandle> newHandles;
   std::vector<EvictionData> evictionData;
+  const auto& pool = allocator_[tid]->getPool(pid);
+  const auto& allocSizes = pool.getAllocSizes();
+  const auto& allocSize = allocSizes[cid];
+  unsigned int maxBatch = static_cast<unsigned int>(Slab::kSize / allocSize);
+  if (batch > maxBatch) {
+    batch = maxBatch;
+  }
   evictionData.reserve(batch);
   newAllocs.reserve(batch);
   newHandles.reserve(batch);
@@ -4198,7 +4220,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   if (!lastTier) {
     blankAllocs = allocateInternalTierByCidBatch(tid+1,pid,cid,batch);
     if (blankAllocs.empty()) {
-      return evictionData;  
+      lastTier = true; 
     } else if (blankAllocs.size() != batch) {
       batch = blankAllocs.size(); 
     }
@@ -4206,9 +4228,8 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   }
 
   auto iterateAndMark = [this, tid, pid, cid, batch,
-                         lastTier, maxSearchTries,
+                         lastTier, maxSearchTries, &searchTries,
                          &evictionData, &mmContainer](auto&& itr) {
-    unsigned int searchTries = 0;
     if (!itr) {
       ++searchTries;
       (*stats_.evictionAttempts)[tid][pid][cid].inc();
@@ -4297,8 +4318,54 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       evictionData.push_back(std::move(ed));
     }
   };
+ 
+  if (config_.evictContiguous) {
+    std::vector<Item*> candidates;
+    candidates.reserve(batch);
+    void *alloc = allocator_[tid]->getAllocByCid(pid,cid,searchTries);
+    unsigned int nItems = 0; 
+    while ((config_.evictionSearchTries == 0 ||
+            maxSearchTries > searchTries) && evictionData.size() < batch ) {
+      
+      Item *toRecycle_ = nullptr;
+      Item *candidate_ = nullptr;
+      ++searchTries;
+      (*stats_.evictionAttempts)[tid][pid][cid].inc();
+     
+      toRecycle_ = 
+          reinterpret_cast<Item*>(reinterpret_cast<void*>(alloc) + nItems*allocSize);
+      if (alloc == nullptr || !allocator_[tid]->isAllocInSlab(pid,toRecycle_,reinterpret_cast<Slab*>(alloc)) || 
+              toRecycle_->isChainedItem() || toRecycle_->isExpired()) {
+        break;
+      }
+      candidate_ = toRecycle_;
+      bool marked = false;
+      if (lastTier) {
+        marked = candidate_->markForEviction();
+      } else {
+        marked = candidate_->markMoving();
+      }
+      if (!marked) {
+        break;
+      }
+      const bool evictToNvmCache = lastTier && shouldWriteToNvmCache(*candidate_);
   
-  mmContainer.withEvictionIterator(iterateAndMark);
+      auto token_ = evictToNvmCache
+                        ? nvmCache_->createPutToken(candidate_->getKey())
+                        : typename NvmCacheT::PutToken{};
+      candidates.push_back(candidate_);
+      EvictionData ed(candidate_,toRecycle_, nullptr,false,
+                      false, std::move(token_), nullptr);
+      evictionData.push_back(std::move(ed));
+      nItems++;
+
+    }
+    if (candidates.size() > 0) {
+      mmContainer.removeBatch(candidates.begin(),candidates.end());
+    }
+  } else {
+    mmContainer.withEvictionIterator(iterateAndMark);
+  }
 
   if (evictionData.size() < batch) {
     if (!lastTier) {
@@ -4413,10 +4480,14 @@ bool CacheAllocator<CacheTrait>::handleFailedMove(Item* candidate,
   // as exclusive since we will not be moving the item to the next tier
   // but rather just evicting all together, no need to
   // markForEvictionWhenMoving
-  if (!failedToReplace) {
-    accessContainer_->remove(*candidate);
+  if (!candidate->isMarkedForEviction() &&
+      candidate->isMoving()) {
+    auto ret = 
+      isExpired ? true : candidate->markForEvictionWhenMoving();
+    XDCHECK(ret);
   }
- 
+  unlinkItemForEviction(*candidate); 
+
   if (token.isValid() && shouldWriteToNvmCacheExclusive(*candidate)
           && !failedToReplace) {
     nvmCache_->put(*candidate, std::move(token));

@@ -89,6 +89,8 @@ class AllocationClass {
   // returns the allocation size handled by this  allocation class.
   uint32_t getAllocSize() const noexcept { return allocationSize_; }
 
+  void* getAlloc(unsigned int searchTries);
+
   // returns the number of allocations that can be made out of a Slab.
   unsigned int getAllocsPerSlab() const noexcept {
     return static_cast<unsigned int>(Slab::kSize / allocationSize_);

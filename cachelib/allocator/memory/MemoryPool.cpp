@@ -373,6 +373,15 @@ void* MemoryPool::allocateByCid(ClassId cid) {
   return allocateForClass(ac);
 }
 
+void* MemoryPool::getAllocByCid(ClassId cid, unsigned int searchTries) {
+  auto& ac = getAllocationClassFor(cid);
+  return ac.getAlloc(searchTries);
+}
+
+bool MemoryPool::isAllocInSlab(void *alloc, Slab *slab) {
+  return slabAllocator_.isMemoryInSlab(alloc,slab);
+}
+
 std::vector<void*> MemoryPool::allocateByCidBatch(ClassId cid, uint64_t batch) {
   auto& ac = getAllocationClassFor(cid);
   return allocateForClassBatch(ac, batch);
