@@ -169,6 +169,8 @@ struct Request {
   }
   OpType getOp() const noexcept { return op.load(); }
   void setOp(OpType o) noexcept { op = o; }
+  
+  inline void updateKey(std::string_view k) { key = k; }
 
   std::string_view key;
 
