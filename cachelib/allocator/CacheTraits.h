@@ -18,6 +18,7 @@
 #include "cachelib/allocator/ChainedHashTable.h"
 #include "cachelib/allocator/MM2Q.h"
 #include "cachelib/allocator/MMLru.h"
+#include "cachelib/allocator/MMLru3.h"
 #include "cachelib/allocator/MMTinyLFU.h"
 #include "cachelib/common/Mutex.h"
 
@@ -33,6 +34,12 @@ namespace cachelib {
 // multiple locking primitives
 struct LruCacheTrait {
   using MMType = MMLru;
+  using AccessType = ChainedHashTable;
+  using AccessTypeLocks = SharedMutexBuckets;
+};
+
+struct Lru3CacheTrait {
+  using MMType = MMLru3;
   using AccessType = ChainedHashTable;
   using AccessTypeLocks = SharedMutexBuckets;
 };

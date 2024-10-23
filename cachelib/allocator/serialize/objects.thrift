@@ -90,8 +90,24 @@ struct MMLruObject {
   9: required i64 compressedInsertionPoint;
 }
 
+struct MMLru3Object {
+  1: required MMLruConfig config;
+
+  // number of evictions for this MM object.
+  5: i64 evictions = 0;
+
+  6: required i64 insertionPoint;
+  7: required i64 tailSize;
+  8: required MultiDListObject lrus;
+  9: required i64 compressedInsertionPoint;
+}
+
 struct MMLruCollection {
   1: required map<MemoryDescriptorObject, MMLruObject> containers;
+}
+
+struct MMLru3Collection {
+  1: required map<MemoryDescriptorObject, MMLru3Object> containers;
 }
 
 struct MM2QConfig {

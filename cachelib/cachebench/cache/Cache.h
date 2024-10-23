@@ -476,6 +476,19 @@ inline typename LruAllocator::MMConfig makeMMConfig(CacheConfig const& config) {
                                 config.useCombinedLockForIterators);
 }
 
+// LRU3
+template <>
+inline typename Lru3Allocator::MMConfig makeMMConfig(CacheConfig const& config) {
+  return Lru3Allocator::MMConfig(config.lruRefreshSec,
+                                config.lruRefreshRatio,
+                                config.lruUpdateOnWrite,
+                                config.lruUpdateOnRead,
+                                config.tryLockUpdate,
+                                static_cast<uint8_t>(config.lruIpSpec),
+                                0,
+                                config.useCombinedLockForIterators);
+}
+
 // LRU
 template <>
 inline typename Lru2QAllocator::MMConfig makeMMConfig(
