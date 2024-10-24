@@ -4209,7 +4209,9 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   std::vector<Item*> newAllocs;
   std::vector<WriteHandle> newHandles;
   std::vector<EvictionData> evictionData;
+  std::vector<EvictionData> removeData;
   evictionData.reserve(batch);
+  removeData.reserve(batch);
   newAllocs.reserve(batch);
   newHandles.reserve(batch);
   
@@ -4229,7 +4231,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
 
   auto iterateAndMark = [this, tid, pid, cid, batch,
                          markMoving, lastTier, maxSearchTries,
-                         &evictionData, &mmContainer](auto&& itr) {
+                         &evictionData, &mmContainer, &removeData](auto&& itr) {
     unsigned int searchTries = 0;
     if (!itr) {
       ++searchTries;
@@ -4293,8 +4295,11 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
         continue;
       }
       bool marked = false;
+      //bool move = !lastTier && 
+      //    true ? candidate_->isAccessed() : true;
+      bool move = true;
       //case 1: mark the item for eviction
-      if ((lastTier || candidate_->isExpired()) && markMoving) {
+      if ((lastTier || candidate_->isExpired()) && markMoving || !move) { 
         marked = syncItem_->markForEviction();
       } else if (markMoving) {
         marked = syncItem_->markMoving();
@@ -4323,7 +4328,11 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
       mmContainer.remove(itr);
       EvictionData ed(candidate_,toRecycle_,toRecycleParent_,chainedItem_,
                       candidate_->isExpired(), std::move(token_), std::move(candidateHandle_));
-      evictionData.push_back(std::move(ed));
+      if (move) {
+        evictionData.push_back(std::move(ed));
+      } else {
+        removeData.push_back(std::move(ed));
+      }
     }
   };
   
@@ -4337,7 +4346,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
         blankAllocs.pop_back();
       }
     }
-    if (evictionData.size() == 0) {
+    if (evictionData.size() == 0 && removeData.size() == 0) {
       return evictionData;  
     }
   }
@@ -4401,6 +4410,17 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
         }
 
       }
+    }
+    for (int i = 0; i < removeData.size(); i++) {
+      Item *candidate = removeData[i].candidate;
+      typename NvmCacheT::PutToken token = std::move(removeData[i].token);
+      auto ret = handleFailedMove(candidate,token,removeData[i].expired,markMoving);
+      if (fromBgThread && markMoving) {
+        const auto res =
+            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+        XDCHECK(res == ReleaseRes::kReleased);
+      }
+      evictionData.push_back(std::move(removeData[i]));
     }
   } else {
     //we are the last tier - just remove

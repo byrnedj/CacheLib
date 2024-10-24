@@ -406,6 +406,7 @@ class FOLLY_PACK_ATTR RefcountWithFlags {
   void markHasChainedItem() noexcept { setFlag<kHasChainedItem>(); }
   void unmarkHasChainedItem() noexcept { unSetFlag<kHasChainedItem>(); }
   bool hasChainedItem() const noexcept { return isFlagSet<kHasChainedItem>(); }
+  bool isAccessed() const noexcept { return isFlagSet<kMMFlag1>(); }
 
   /**
    * Keep track of whether the item was modified while in ram cache
