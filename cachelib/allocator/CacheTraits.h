@@ -19,6 +19,7 @@
 #include "cachelib/allocator/MM2Q.h"
 #include "cachelib/allocator/MMLru.h"
 #include "cachelib/allocator/MMLru3.h"
+#include "cachelib/allocator/MMLru2.h"
 #include "cachelib/allocator/MMTinyLFU.h"
 #include "cachelib/common/Mutex.h"
 
@@ -39,7 +40,7 @@ struct LruCacheTrait {
 };
 
 struct Lru3CacheTrait {
-  using MMType = MMLru3;
+  using MMType = MMLru2;
   using AccessType = ChainedHashTable;
   using AccessTypeLocks = SharedMutexBuckets;
 };
