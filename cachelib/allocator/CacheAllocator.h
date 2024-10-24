@@ -2993,12 +2993,12 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
 
   void* memory = allocator_[tid]->allocate(pid, requiredSize);
 
-  if (backgroundEvictor_.size() &&
-      (memory == nullptr || shouldWakeupBgEvictor(tid, pid, cid))) {
-    backgroundEvictor_[BackgroundMover<CacheT>::workerId(
-                         tid, pid, cid, backgroundEvictor_.size())]
-        ->wakeUp();
-  }
+  //if (backgroundEvictor_.size() &&
+  //    (memory == nullptr || shouldWakeupBgEvictor(tid, pid, cid))) {
+  //  backgroundEvictor_[BackgroundMover<CacheT>::workerId(
+  //                       tid, pid, cid, backgroundEvictor_.size())]
+  //      ->wakeUp();
+  //}
 
   if (memory == nullptr) {
     if (!evict || config_.noOnlineEviction) {
@@ -5551,11 +5551,17 @@ PoolId CacheAllocator<CacheTrait>::addPool(
   setResizeStrategy(pid, std::move(resizeStrategy));
 
   if (backgroundEvictor_.size()) {
-    auto memoryAssignments =
-        createBgWorkerMemoryAssignments(backgroundEvictor_.size(), 0);
-    for (size_t id = 0; id < backgroundEvictor_.size(); id++)
-      backgroundEvictor_[id]->setAssignedMemory(
-          std::move(memoryAssignments[id]));
+    auto nTiers = getNumTiers();
+    unsigned int bgId = 0;
+    for (TierId tid = 0; tid < nTiers; tid++) {
+      auto memoryAssignments =
+          createBgWorkerMemoryAssignments(backgroundEvictor_.size()/nTiers, tid);
+      for (size_t i = 0; i < backgroundEvictor_.size()/nTiers; i++) {
+        backgroundEvictor_[bgId]->setAssignedMemory(
+            std::move(memoryAssignments[i]));
+        bgId++;
+      }
+    }
   }
 
   if (backgroundPromoter_.size()) {
