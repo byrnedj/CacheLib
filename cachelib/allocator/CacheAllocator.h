@@ -4219,15 +4219,6 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   bool lastTier = tid+1 >= getNumTiers();
   unsigned int maxSearchTries = std::max(config_.evictionSearchTries,
                                             batch*4);
-  if (!lastTier) {
-    blankAllocs = allocateInternalTierByCidBatch(tid+1,pid,cid,batch);
-    if (blankAllocs.empty()) {
-      return evictionData;  
-    } else if (blankAllocs.size() != batch) {
-      batch = blankAllocs.size(); 
-    }
-    XDCHECK_EQ(blankAllocs.size(),batch);
-  }
 
   auto iterateAndMark = [this, tid, pid, cid, batch,
                          markMoving, lastTier, maxSearchTries,
@@ -4241,7 +4232,7 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
 
     while ((config_.evictionSearchTries == 0 ||
             maxSearchTries > searchTries) &&
-           itr && evictionData.size() < batch) {
+           itr && (evictionData.size() + removeData.size()) < batch) {
       ++searchTries;
       (*stats_.evictionAttempts)[tid][pid][cid].inc();
 
@@ -4295,9 +4286,9 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
         continue;
       }
       bool marked = false;
-      //bool move = !lastTier && 
-      //    true ? candidate_->isAccessed() : true;
-      bool move = true;
+      bool move = !lastTier && 
+          true ? candidate_->isAccessed() : true;
+      //bool move = true;
       //case 1: mark the item for eviction
       if ((lastTier || candidate_->isExpired()) && markMoving || !move) { 
         marked = syncItem_->markForEviction();
@@ -4338,16 +4329,31 @@ CacheAllocator<CacheTrait>::getNextCandidates(TierId tid,
   
   mmContainer.withEvictionIterator(iterateAndMark);
 
-  if (evictionData.size() < batch) {
-    if (!lastTier) {
-      unsigned int toErase = batch - evictionData.size();
-      for (int i = 0; i < toErase; i++) {
-        allocator_[tid+1]->free(blankAllocs.back());
-        blankAllocs.pop_back();
+  //if (evictionData.size() < batch) {
+  //  if (!lastTier) {
+  //    unsigned int toErase = batch - evictionData.size();
+  //    for (int i = 0; i < toErase; i++) {
+  //      allocator_[tid+1]->free(blankAllocs.back());
+  //      blankAllocs.pop_back();
+  //    }
+  //    if (evictionData.size() == 0 && removeData.size() == 0) {
+  //      return evictionData;
+  //    }
+  //  } else {
+  //    if (evictionData.size() == 0) {
+  //      return evictionData;  
+  //    }
+  //  }
+  //}
+  
+  if (!lastTier && evictionData.size() > 0) {
+    blankAllocs = allocateInternalTierByCidBatch(tid+1,pid,cid,evictionData.size());
+    if (blankAllocs.size() < evictionData.size()) {
+      auto toRemove = evictionData.size() - blankAllocs.size();
+      for (int i = 0; i < toRemove; i++) {
+        removeData.push_back(std::move(evictionData.back()));
+        evictionData.pop_back();
       }
-    }
-    if (evictionData.size() == 0 && removeData.size() == 0) {
-      return evictionData;  
     }
   }
   

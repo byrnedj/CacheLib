@@ -623,16 +623,19 @@ bool MMLru2::Container<T, HookPtr>::add(T& node) noexcept {
   if (num != LruType::NumTypes) {
     return false;
   }
-  //num = lruIndex_++ % LruType::NumTypes; //or we can use a random number
   num = folly::Random::rand32() % LruType::NumTypes; //or we can use a random number
-  return lruMutex_[num]->lock_combine([this, &node, currTime, num]() {
-    if (node.isInMMContainer() || 
-        getLRUNum(node) != LruType::NumTypes) {
-      return false;
-    }
-    addNodeLocked(node,currTime,num);
-    return true;
-  });
+  auto lck = LockHolder{*lruMutex_[num], std::try_to_lock};
+  while (!lck.owns_lock()) {
+    num = (num + 1) % LruType::NumTypes;
+    lck = LockHolder{*lruMutex_[num], std::try_to_lock};
+  }
+  if (node.isInMMContainer() || 
+      getLRUNum(node) != LruType::NumTypes) {
+    return false;
+  }
+  addNodeLocked(node,currTime,num);
+  return true;
+
 }
 
 template <typename T, MMLru2::Hook<T> T::*HookPtr>

@@ -271,6 +271,8 @@ class CACHELIB_PACKED_ATTR CacheItem {
 
   // Returns true if the item is in access container, false otherwise
   bool isAccessible() const noexcept;
+  
+  bool isAccessed() const noexcept;
 
  protected:
   // construct an item without expiry timestamp.
@@ -771,6 +773,11 @@ void CacheItem<CacheTrait>::markInMMContainer() noexcept {
 template <typename CacheTrait>
 void CacheItem<CacheTrait>::unmarkInMMContainer() noexcept {
   ref_.unmarkInMMContainer();
+}
+
+template <typename CacheTrait>
+bool CacheItem<CacheTrait>::isAccessed() const noexcept {
+  return ref_.isAccessed();
 }
 
 template <typename CacheTrait>
