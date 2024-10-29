@@ -167,6 +167,19 @@ class MemoryPool {
   // @throw std::invalid_argument if the memory does not belong to this pool.
   // @throw std::run_time_error if the slab class information is corrupted.
   void free(void* memory);
+  
+  // frees a batch of memory batch to the pool. throws an exception if the
+  // memory does not belong to this pool.
+  //
+  // @param  begin  iterator to the start of the batch
+  // @param  end    iterator to the end of the batch
+  // @param  cid    the allocation class id of the batch
+  template <typename It>
+  void freeBatch(It begin, It end, ClassId cid) {
+    auto& ac = getAllocationClassFor(cid);
+    auto freed = ac.freeBatch(begin, end);
+    currAllocSize_ -= ac.getAllocSize() * freed;
+  }
 
   // resize the memory pool. This only adjusts the Pool size. It does not
   // release the slabs back to the SlabAllocator if the new size is less than

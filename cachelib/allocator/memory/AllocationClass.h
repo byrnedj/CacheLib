@@ -219,6 +219,54 @@ class AllocationClass {
   // @throws std::invalid_argument if the memory does not belong to a slab of
   // this slab class.
   void free(void* memory);
+  
+  // release the memory back to the class in batch
+  // avoids the overhead of locking for each free
+  template <typename It>
+  uint32_t freeBatch(It begin, It end) {
+    return lock_->lock_combine([this, begin, end]() -> uint32_t {
+      uint32_t i = 0;
+      for (auto itr = begin; itr != end; ++itr) {
+        void* memory = *itr;
+        const auto* header = slabAlloc_.getSlabHeader(memory);
+        auto* slab = slabAlloc_.getSlabForMemory(memory);
+        if (header == nullptr || header->classId != classId_) {
+          throw std::invalid_argument(folly::sformat(
+              "trying to free memory {} (with ClassId {}), not belonging to this "
+              "AllocationClass (ClassId {})",
+              memory, header ? header->classId : Slab::kInvalidClassId, classId_));
+        }
+
+        const auto slabPtrVal = getSlabPtrValue(slab);
+        i++;
+        // check under the lock we actually add the allocation back to the free list
+        if (header->isMarkedForRelease()) {
+          auto it = slabReleaseAllocMap_.find(slabPtrVal);
+
+          // this should not happen.
+          if (it == slabReleaseAllocMap_.end()) {
+            throw std::runtime_error(folly::sformat(
+                "Invalid slabReleaseAllocMap "
+                "state when attempting to free an allocation. Memory: {}",
+                memory));
+          }
+
+          auto& allocState = it->second;
+          const auto idx = getAllocIdx(slab, memory);
+          if (allocState[idx]) {
+            throw std::invalid_argument(
+                folly::sformat("Allocation {} is already marked as free", memory));
+          }
+          allocState[idx] = true;
+        }
+
+        // TODO add checks here to ensure that we dont double free in debug mode.
+        freedAllocations_.insert(*reinterpret_cast<FreeAlloc*>(memory));
+        canAllocate_ = true;
+      }
+      return i;
+    });
+  }
 
   // acquires a new slab for this allocation class.
   // @param slab    a new slab to be added. This can NOT be nullptr.

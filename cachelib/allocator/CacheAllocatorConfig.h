@@ -313,6 +313,8 @@ class CacheAllocatorConfig {
   // Insert items to first free memory tier
   CacheAllocatorConfig& enableInsertToFirstFreeTier();
   
+  CacheAllocatorConfig& enableEvictIfNotAccessed();
+  
   CacheAllocatorConfig& enableNoOnlineEviction();
 
   // Passes in a callback to initialize an event tracker when the allocator
@@ -526,7 +528,11 @@ class CacheAllocatorConfig {
   // if turned on, insert new element to first free memory tier or evict memory
   // from the bottom one if memory cache is full
   bool insertToFirstFreeTier = false;
+  
+  // Only move items to the next tier if they are have been accessed
+  bool evictIfNotAccessed = false;
 
+  // Disable findEviction on request hot path
   bool noOnlineEviction = false;
 
   // the number of tries to search for an item to evict
@@ -653,6 +659,12 @@ class CacheAllocatorConfig {
 template <typename T>
 CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableInsertToFirstFreeTier() {
   insertToFirstFreeTier = true;
+  return *this;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableEvictIfNotAccessed() {
+  evictIfNotAccessed = true;
   return *this;
 }
 
@@ -1237,6 +1249,7 @@ std::map<std::string, std::string> CacheAllocatorConfig<T>::serialize() const {
   configMap["delayCacheWorkersStart"] =
       delayCacheWorkersStart ? "true" : "false";
   configMap["insertToFirstFreeTier"] = std::to_string(insertToFirstFreeTier);
+  configMap["evictIfNotAccessed"] = std::to_string(evictIfNotAccessed);
   configMap["noOnlineEviction"] = std::to_string(noOnlineEviction);
   mergeWithPrefix(configMap, throttleConfig.serialize(), "throttleConfig");
   mergeWithPrefix(configMap,

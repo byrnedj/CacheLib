@@ -590,6 +590,7 @@ Cache<Allocator>::Cache(const CacheConfig& config,
   }
 
   allocatorConfig_.insertToFirstFreeTier = config_.insertToFirstFreeTier;
+  allocatorConfig_.evictIfNotAccessed = config_.evictIfNotAccessed;
   allocatorConfig_.noOnlineEviction = config_.noOnlineEviction;
 
   auto cleanupGuard = folly::makeGuard([&] {

@@ -96,6 +96,7 @@ struct CacheConfig : public JSONConfig {
   bool useCombinedLockForIterators{true};
   
   bool insertToFirstFreeTier{false};
+  bool evictIfNotAccessed{false};
   bool noOnlineEviction{false};
 
   // LRU param

@@ -188,6 +188,14 @@ class MemoryAllocator {
   //        allocation handed out by this allocator.
   void free(void* memory);
 
+  // frees a list of items back to the class
+  // avoids locking the AC for each free
+  template <typename It>
+  void freeBatch(It begin, It end, PoolId pid, ClassId cid) {
+    auto& mp = memoryPoolManager_.getPoolById(pid);
+    mp.freeBatch(begin, end, cid);
+  }
+
   // Memory pool interface. The memory pools must be established before the
   // first allocation happens. Currently we dont support adding / removing
   // pools dynamically.
