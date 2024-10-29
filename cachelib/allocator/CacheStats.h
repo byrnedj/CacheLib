@@ -321,8 +321,9 @@ struct RebalancerStats {
 // Mover Stats
 struct BackgroundMoverStats {
   // the number of items this worker moved by looking at pools/classes stats
-  uint64_t numMovedItems{0};
-  
+  uint64_t numEvictedItems{0};
+  uint64_t numPromotedItems{0};
+
   // number of times we went executed the thread (by periodic worker)
   uint64_t runCount{0};
 
@@ -331,12 +332,6 @@ struct BackgroundMoverStats {
 
   // number of times we actually traversed the mmContainer
   uint64_t numTraversals{0};
-
-  // number of classes traversed
-  uint64_t totalClasses{0};
-
-  // total bytes moved
-  uint64_t totalBytesMoved{0};
   
   // indicates the time in ns for the last iteration
   uint64_t lastTraversalTimeNs{0};
@@ -372,10 +367,8 @@ struct Stats;
 // Stats that apply globally in cache and
 // the ones that are aggregated over all pools
 struct GlobalCacheStats {
-  // background eviction stats
-  std::vector<BackgroundMoverStats> evictionStats;
-  
-  std::vector<BackgroundMoverStats> promotionStats;
+  // background mover stats
+  std::vector<BackgroundMoverStats> moverStats;
 
   // number of calls to CacheAllocator::find
   uint64_t numCacheGets{0};

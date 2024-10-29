@@ -40,14 +40,19 @@ class PromotionStrategy : public BackgroundMoverStrategy {
       XDCHECK(tid > 0);
       const auto& pool = cache.getPoolByTid(pid, tid-1);
       double usage = pool.getApproxUsage(cid);
-      if ((1-usage)*100 <= promotionAcWatermark)
+      if (usage >= 1.0) {
         batches.push_back(0);
-      else {
-        auto maxPossibleItemsToPromote = static_cast<size_t>(
-            ( (promotionAcWatermark - (1-usage*100) ) *
-              (pool.getApproxSlabs(cid) * pool.getPerSlab(cid)) ) );
-        batches.push_back(maxPossibleItemsToPromote);
+      } else {
+        batches.push_back(maxPromotionBatch);
       }
+      //if ((1-usage)*100 <= promotionAcWatermark)
+      //  batches.push_back(0);
+      //else {
+      //  auto maxPossibleItemsToPromote = static_cast<size_t>(
+      //      ( (promotionAcWatermark - (1-usage*100) ) *
+      //        (pool.getApproxSlabs(cid) * pool.getPerSlab(cid)) ) );
+      //  batches.push_back(maxPossibleItemsToPromote);
+      //}
     }
 
     if (batches.size() == 0) {

@@ -29,8 +29,7 @@ namespace cachebench {
 
 
 struct Stats {
-  std::vector<BackgroundMoverStats> backgroundEvictorStats;
-  std::vector<BackgroundMoverStats> backgroundPromoStats;
+  std::vector<BackgroundMoverStats> backgroundMoverStats;
   ReaperStats reaperStats;
 
   std::vector<uint64_t> numEvictions;
@@ -118,10 +117,9 @@ struct Stats {
   // cachebench.
   std::unordered_map<std::string, double> nvmCounters;
   
-  using ClassBgStatsType = std::map<MemoryDescriptorType,uint64_t>;
+  using ClassBgStatsType = std::map<MemoryDescriptorType,std::pair<size_t,size_t>>;
 
-  ClassBgStatsType backgroundEvictionClasses;
-  ClassBgStatsType backgroundPromotionClasses;
+  ClassBgStatsType backgroundMoverClasses;
 
   // errors from the nvm engine.
   std::unordered_map<std::string, double> nvmErrors;
@@ -229,44 +227,32 @@ struct Stats {
       });
     }
 
-    int bgId = 1;
-    for (auto &bgWorkerStats : backgroundEvictorStats) {
-        if (bgWorkerStats.numMovedItems > 0) {
-          out << folly::sformat(" == Background Evictor Threads ==") << std::endl;
-          out << folly::sformat("Background Evictor Thread {} Evicted Items: {:,}\n"
-                                "Background Evictor Thread {} Traversals: {:,}\n"
-                                "Background Evictor Thread {} Run Count: {:,}\n"
-                                "Background Evictor Thread {} Avg Time Per Traversal in ns: {:,}\n"
-                                "Background Evictor Thread {} Avg Items Evicted: {:.2f}",
-                                bgId, bgWorkerStats.numMovedItems,
+    size_t bgId = 1;
+    size_t totalBgEvicted = 0;
+    size_t totalBgPromoted = 0;
+    for (auto &bgWorkerStats : backgroundMoverStats) {
+        if (bgWorkerStats.numEvictedItems > 0 || bgWorkerStats.numPromotedItems > 0) {
+          out << folly::sformat(" == Background Mover Threads ==") << std::endl;
+          out << folly::sformat("Background Mover Thread {} Evicted Items: {:,}\n"
+                                "Background Mover Thread {} Promoted: {:,}\n"
+                                "Background Mover Thread {} Traversals: {:,}\n"
+                                "Background Mover Thread {} Run Count: {:,}\n"
+                                "Background Mover Thread {} Avg Time Per Traversal in ns: {:,}\n"
+                                "Background Mover Thread {} Avg Items Evicted: {:.2f}",
+                                bgId, bgWorkerStats.numEvictedItems,
+                                bgId, bgWorkerStats.numPromotedItems,
                                 bgId, bgWorkerStats.numTraversals,
                                 bgId, bgWorkerStats.runCount,
                                 bgId, bgWorkerStats.avgTraversalTimeNs,
-                                bgId, (double)bgWorkerStats.numMovedItems/(double)bgWorkerStats.numTraversals)
+                                bgId, (double)bgWorkerStats.numEvictedItems/(double)bgWorkerStats.numTraversals)
               << std::endl;
+          totalBgEvicted += bgWorkerStats.numEvictedItems;
+          totalBgPromoted += bgWorkerStats.numPromotedItems;
+
         }
         bgId++;
-
     }
-    bgId = 1;
-    for (auto &bgWorkerStats : backgroundPromoStats) {
-        if (bgWorkerStats.numMovedItems > 0) {
-          out << folly::sformat(" == Background Promoter Threads ==") << std::endl;
-          out << folly::sformat("Background Promoter Thread {} Promoted Items: {:,}\n"
-                                "Background Promoter Thread {} Traversals: {:,}\n"
-                                "Background Promoter Thread {} Run Count: {:,}\n"
-                                "Background Promoter Thread {} Avg Time Per Traversal in ns: {:,}\n"
-                                "Background Promoter Thread {} Avg Items Promoted: {:.2f}",
-                                bgId, bgWorkerStats.numMovedItems,
-                                bgId, bgWorkerStats.numTraversals,
-                                bgId, bgWorkerStats.runCount,
-                                bgId, bgWorkerStats.avgTraversalTimeNs,
-                                bgId, (double)bgWorkerStats.numMovedItems/(double)bgWorkerStats.numTraversals)
-              << std::endl;
-        }
-        bgId++;
 
-    }
     if (numCacheGets > 0) {
       out << folly::sformat("Cache Gets    : {:,}", numCacheGets) << std::endl;
       out << folly::sformat("Hit Ratio     : {:6.2f}%", overallHitRatio)
@@ -297,39 +283,19 @@ struct Stats {
 
         printLatencies("Cache Find API latency", cacheFindLatencyNs);
         printLatencies("Cache Allocate API latency", cacheAllocateLatencyNs);
-        printLatencies("Cache Background Eviction API latency", cacheBgEvictLatencyNs);
-        printLatencies("Cache Background Promotion API latency", cacheBgPromoteLatencyNs);
       }
     }
 
-    uint64_t totalbgevicted = 0;
-    uint64_t totalpromoted = 0;
-    for (int i = 0; i < backgroundEvictorStats.size(); i++) {
-        totalbgevicted += backgroundEvictorStats[i].numMovedItems;
-    }
-    for (int i = 0; i < backgroundPromoStats.size(); i++) {
-        totalpromoted += backgroundPromoStats[i].numMovedItems;
-    }
-    if (!backgroundEvictionClasses.empty() && totalbgevicted > 0 ) {
-      out << "== Class Background Eviction Counters Map ==" << std::endl;
-      foreachAC(backgroundEvictionClasses, [&](auto tid, auto pid, auto cid, auto evicted){
-        if (evicted > 0) {
-          out << folly::sformat("tid{:2} pid{:2} cid{:4} evicted: {:4}",
-            tid, pid, cid, evicted) << std::endl;
+    if (!backgroundMoverClasses.empty() && (totalBgEvicted || totalBgPromoted)) {
+      out << "== Per Class Background Movers Counters ==" << std::endl;
+      foreachAC(backgroundMoverClasses, [&](auto tid, auto pid, auto cid, auto pair){
+        if (pair.first > 0 || pair.second > 0) {
+          out << folly::sformat("tid{:2} pid{:2} cid{:4} evicted: {:4} promoted: {:4}",
+            tid, pid, cid, pair.first, pair.second) << std::endl;
         }
       });
     }
     
-    if (!backgroundPromotionClasses.empty() && totalpromoted) {
-      out << "== Class Background Promotion Counters Map ==" << std::endl;
-      foreachAC(backgroundPromotionClasses, [&](auto tid, auto pid, auto cid, auto promoted){
-        if (promoted > 0) {
-          out << folly::sformat("tid{:2} pid{:2} cid{:4} promoted: {:4}",
-            tid, pid, cid, promoted) << std::endl;
-        }
-      });
-    }
-
     if (reaperStats.numReapedItems > 0) {
 
       out << folly::sformat("Reaper reaped: {:,} visited: {:,} traversals: {:,} avg traversal time: {:,}",
@@ -470,11 +436,11 @@ struct Stats {
     if (numCacheEvictions > 0) {
       out << folly::sformat("Total evictions executed  : {:10,}", numCacheEvictions)
               << std::endl;
-      out << folly::sformat("Total background evictions: {:10,}", totalbgevicted)
+      out << folly::sformat("Total background evictions: {:10,}", totalBgEvicted)
               << std::endl;
     }
-    if (totalpromoted > 0) {
-      out << folly::sformat("Total promotions          : {:10,}", totalpromoted) << std::endl;
+    if (totalBgPromoted > 0) {
+      out << folly::sformat("Total promotions          : {:10,}", totalBgPromoted) << std::endl;
     }
   }
 

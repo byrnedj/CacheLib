@@ -222,7 +222,7 @@ class CacheAllocator : public CacheBase {
   using PoolIds = std::set<PoolId>;
 
   using EventTracker = EventInterface<Key>;
-  using ClassBgStatsType = std::map<MemoryDescriptorType,uint64_t>;
+  using ClassBgStatsType = std::map<MemoryDescriptorType,std::pair<size_t,size_t>>;
   // SampleItem is a wrapper for the CacheItem which is provided as the sample
   // for uploading to Scuba (see ItemStatsExporter). It is guaranteed that the
   // CacheItem is accessible as long as the SampleItem is around since the
@@ -385,6 +385,9 @@ class CacheAllocator : public CacheBase {
     typename NvmCacheT::PutToken token; //put token for NVM cache
     WriteHandle candidateHandle; //hande in case we don't use moving bit
   };
+
+
+
 
   using AccessContainer = typename Item::AccessContainer;
   using MMContainer = typename Item::MMContainer;
@@ -747,9 +750,6 @@ class CacheAllocator : public CacheBase {
   // create memory assignment to bg workers
   auto createBgWorkerMemoryAssignments(size_t numWorkers, TierId tid);
 
-  // whether bg worker should be woken
-  bool shouldWakeupBgEvictor(TierId tid, PoolId pid, ClassId cid);
-
   // Get a random item from memory
   // This is useful for profiling and sampling cachelib managed memory
   //
@@ -1096,25 +1096,12 @@ class CacheAllocator : public CacheBase {
   bool startNewReaper(std::chrono::milliseconds interval,
                       util::Throttler::Config reaperThrottleConfig);
 
-  // start background promoter, starting/stopping of this worker
-  // should not be done concurrently with addPool
-  // @param interval                the period this worker fires
-  // @param strategy                strategy to promote items
-  // @param threads                 number of threads used by the worker
-  bool startNewBackgroundPromoter(
-      std::chrono::milliseconds interval,
-      std::shared_ptr<BackgroundMoverStrategy> strategy,
-      size_t threads);
-
-  // start background evictor, starting/stopping of this worker
-  // should not be done concurrently with addPool
-  // @param interval                the period this worker fires
-  // @param strategy                strategy to evict items
-  // @param threads                 number of threads used by the worker
-  bool startNewBackgroundEvictor(
-      std::chrono::milliseconds interval,
-      std::shared_ptr<BackgroundMoverStrategy> strategy,
-      size_t threads);
+  // start background mover
+  bool startNewBackgroundMover(std::chrono::milliseconds interval,
+                               size_t evictionBatch,
+                               size_t promotionBatch,
+                               double targetFree,
+                               size_t threads);
 
   // Stop existing workers with a timeout
   bool stopPoolRebalancer(std::chrono::seconds timeout = std::chrono::seconds{
@@ -1124,11 +1111,8 @@ class CacheAllocator : public CacheBase {
                              0});
   bool stopMemMonitor(std::chrono::seconds timeout = std::chrono::seconds{0});
   bool stopReaper(std::chrono::seconds timeout = std::chrono::seconds{0});
-  bool stopBackgroundEvictor(
+  bool stopBackgroundMover(
       std::chrono::seconds timeout = std::chrono::seconds{0});
-  bool stopBackgroundPromoter(
-      std::chrono::seconds timeout = std::chrono::seconds{0});
-
   // Set pool optimization to either true or false
   //
   // @param poolId The ID of the pool to optimize
@@ -1219,39 +1203,27 @@ class CacheAllocator : public CacheBase {
   }
 
   // returns the background mover stats per thread
-  std::vector<BackgroundMoverStats> getBackgroundMoverStats(MoverDir direction) const {
+  std::vector<BackgroundMoverStats> getBackgroundMoverStats() const {
     auto stats = std::vector<BackgroundMoverStats>();
-    if (direction == MoverDir::Evict) {
-      for (auto& bg : backgroundEvictor_)
-        stats.push_back(bg->getStats());
-    } else if (direction == MoverDir::Promote) {
-      for (auto& bg : backgroundPromoter_)
-        stats.push_back(bg->getStats());
+    for (auto& bg : backgroundMover_) {
+      stats.push_back(bg->getStats());
     }
     return stats;
   }
 
   ClassBgStatsType
-  getBackgroundMoverClassStats(MoverDir direction) const {
+  getBackgroundMoverClassStats() const {
     ClassBgStatsType stats;
     auto record = [&](auto &bg) {
       //gives a unique descriptor
-      auto classStats = bg->getClassStats();
+      auto classStats = bg->getPerClassStats();
       for (const auto& [key,value] : classStats) {
-          stats[key] = value;
+        stats[key] = value;
       }
     };
-
-    if (direction == MoverDir::Evict) {
-      for (auto& bg : backgroundEvictor_) {
-          record(bg);
-      }
-    } else if (direction == MoverDir::Promote) {
-      for (auto& bg : backgroundPromoter_) {
-          record(bg);
-      }
+    for (auto& bg : backgroundMover_) {
+      record(bg);
     }
-
     return stats;
   }
 
@@ -2109,6 +2081,28 @@ class CacheAllocator : public CacheBase {
                                      true,true);
     return candidates.size();
   }
+  
+  // exposed for the background evictor to iterate through the memory and evict
+  // in batch. This should improve insertion path for tiered memory config
+  std::pair<size_t,size_t> traverseAndMoveItems(unsigned int tid,
+                              unsigned int pid,
+                              unsigned int cid,
+                              size_t evictionBatch,
+                              size_t promotionBatch) {
+    auto& mmContainer = getMMContainer(tid, pid, cid);
+    uint32_t currItems = mmContainer.size();
+    if (currItems < evictionBatch) {
+      evictionBatch = currItems;
+      if (evictionBatch == 0) {
+        return {0,0};
+      }
+    }
+    auto evictionData = getNextCandidates(tid,pid,cid,evictionBatch,
+                                     true,true);
+    size_t evictions = evictionData.size();
+    (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
+    return {evictions,0};
+  }
 
   // returns true if nvmcache is enabled and we should write this item to
   // nvmcache.
@@ -2438,8 +2432,7 @@ class CacheAllocator : public CacheBase {
   std::unique_ptr<MemoryMonitor> memMonitor_;
 
   // background data movement
-  std::vector<std::unique_ptr<BackgroundMover<CacheT>>> backgroundEvictor_;
-  std::vector<std::unique_ptr<BackgroundMover<CacheT>>> backgroundPromoter_;
+  std::vector<std::unique_ptr<BackgroundMover<CacheT>>> backgroundMover_;
 
   // check whether a pool is a slabs pool
   std::array<bool, MemoryPoolManager::kMaxPools> isCompactCachePool_{};
@@ -2838,16 +2831,12 @@ void CacheAllocator<CacheTrait>::initWorkers() {
                           config_.ccacheOptimizeStepSizePercent);
   }
 
-  if (config_.backgroundEvictorEnabled()) {
-    startNewBackgroundEvictor(config_.backgroundEvictorInterval,
-                              config_.backgroundEvictorStrategy,
-                              config_.backgroundEvictorThreads);
-  }
-
-  if (config_.backgroundPromoterEnabled()) {
-    startNewBackgroundPromoter(config_.backgroundPromoterInterval,
-                               config_.backgroundPromoterStrategy,
-                               config_.backgroundPromoterThreads);
+  if (config_.backgroundMoverEnabled()) {
+    startNewBackgroundMover(config_.backgroundMoverInterval,
+                            config_.backgroundEvictionBatch,
+                            config_.backgroundPromotionBatch,
+                            config_.backgroundTargetFree,
+                            config_.backgroundMoverThreads);
   }
 }
 
@@ -2928,17 +2917,6 @@ CacheAllocator<CacheTrait>::allocate(PoolId poolId,
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::shouldWakeupBgEvictor(TierId tid, PoolId pid, ClassId cid) {
-  // TODO: should we also work on lower tiers? should we have separate set of params?
-  if (tid == 1) return false;
-  double usage = getPoolByTid(pid, tid).getApproxUsage(cid);
-  if (((1-usage)*100) <= config_.lowEvictionAcWatermark) {
-    return true;
-  }
-  return false;
-}
-
-template <typename CacheTrait>
 std::vector<void*> CacheAllocator<CacheTrait>::allocateInternalTierByCidBatch(TierId tid,
                                                  PoolId pid,
                                                  ClassId cid, uint64_t batch) {
@@ -2992,13 +2970,6 @@ CacheAllocator<CacheTrait>::allocateInternalTier(TierId tid,
   (*stats_.allocAttempts)[tid][pid][cid].inc();
 
   void* memory = allocator_[tid]->allocate(pid, requiredSize);
-
-  //if (backgroundEvictor_.size() &&
-  //    (memory == nullptr || shouldWakeupBgEvictor(tid, pid, cid))) {
-  //  backgroundEvictor_[BackgroundMover<CacheT>::workerId(
-  //                       tid, pid, cid, backgroundEvictor_.size())]
-  //      ->wakeUp();
-  //}
 
   if (memory == nullptr) {
     if (!evict || config_.noOnlineEviction) {
@@ -5556,26 +5527,18 @@ PoolId CacheAllocator<CacheTrait>::addPool(
   setRebalanceStrategy(pid, std::move(rebalanceStrategy));
   setResizeStrategy(pid, std::move(resizeStrategy));
 
-  if (backgroundEvictor_.size()) {
+  if (backgroundMover_.size()) {
     auto nTiers = getNumTiers();
     unsigned int bgId = 0;
     for (TierId tid = 0; tid < nTiers; tid++) {
       auto memoryAssignments =
-          createBgWorkerMemoryAssignments(backgroundEvictor_.size()/nTiers, tid);
-      for (size_t i = 0; i < backgroundEvictor_.size()/nTiers; i++) {
-        backgroundEvictor_[bgId]->setAssignedMemory(
+          createBgWorkerMemoryAssignments(backgroundMover_.size()/nTiers, tid);
+      for (size_t i = 0; i < backgroundMover_.size()/nTiers; i++) {
+        backgroundMover_[bgId]->setAssignedMemory(
             std::move(memoryAssignments[i]));
         bgId++;
       }
     }
-  }
-
-  if (backgroundPromoter_.size()) {
-    auto memoryAssignments =
-        createBgWorkerMemoryAssignments(backgroundPromoter_.size(), 1);
-    for (size_t id = 0; id < backgroundPromoter_.size(); id++)
-      backgroundPromoter_[id]->setAssignedMemory(
-          std::move(memoryAssignments[id]));
   }
 
   return pid;
@@ -6508,8 +6471,7 @@ bool CacheAllocator<CacheTrait>::stopWorkers(std::chrono::seconds timeout) {
   success &= stopPoolResizer(timeout);
   success &= stopMemMonitor(timeout);
   success &= stopReaper(timeout);
-  success &= stopBackgroundEvictor(timeout);
-  success &= stopBackgroundPromoter(timeout);
+  success &= stopBackgroundMover(timeout);
   return success;
 }
 
@@ -6783,8 +6745,7 @@ GlobalCacheStats CacheAllocator<CacheTrait>::getGlobalCacheStats() const {
   ret.nvmCacheEnabled = nvmCache_ ? nvmCache_->isEnabled() : false;
   ret.reaperStats = getReaperStats();
   ret.rebalancerStats = getRebalancerStats();
-  ret.evictionStats = getBackgroundMoverStats(MoverDir::Evict);
-  ret.promotionStats = getBackgroundMoverStats(MoverDir::Promote);
+  ret.moverStats = getBackgroundMoverStats();
   ret.numActiveHandles = getNumActiveHandles();
 
   ret.isNewRamCache = cacheCreationTime_ == cacheInstanceCreationTime_;
@@ -6973,47 +6934,26 @@ auto CacheAllocator<CacheTrait>::createBgWorkerMemoryAssignments(
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::startNewBackgroundEvictor(
+bool CacheAllocator<CacheTrait>::startNewBackgroundMover(
     std::chrono::milliseconds interval,
-    std::shared_ptr<BackgroundMoverStrategy> strategy,
+    size_t evictionBatch,
+    size_t promotionBatch,
+    double targetFree,
     size_t threads) {
   XDCHECK(threads > 0);
-  backgroundEvictor_.resize(threads);
+  backgroundMover_.resize(threads);
   bool result = true;
 
+  //initially assume single tier for the assignments
   auto memoryAssignments = createBgWorkerMemoryAssignments(threads, 0);
   for (size_t i = 0; i < threads; i++) {
-    auto ret = startNewWorker("BackgroundEvictor" + std::to_string(i),
-                              backgroundEvictor_[i], interval, *this, strategy,
-                              MoverDir::Evict);
+    auto ret = startNewWorker("BackgroundMover" + std::to_string(i),
+                              backgroundMover_[i], interval, *this,
+                              evictionBatch, promotionBatch, targetFree);
     result = result && ret;
 
     if (result) {
-      backgroundEvictor_[i]->setAssignedMemory(std::move(memoryAssignments[i]));
-    }
-  }
-  return result;
-}
-
-template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::startNewBackgroundPromoter(
-    std::chrono::milliseconds interval,
-    std::shared_ptr<BackgroundMoverStrategy> strategy,
-    size_t threads) {
-  XDCHECK(threads > 0);
-  backgroundPromoter_.resize(threads);
-  bool result = true;
-
-  auto memoryAssignments = createBgWorkerMemoryAssignments(threads, 1);
-  for (size_t i = 0; i < threads; i++) {
-    auto ret = startNewWorker("BackgroundPromoter" + std::to_string(i),
-                              backgroundPromoter_[i], interval, *this, strategy,
-                              MoverDir::Promote);
-    result = result && ret;
-
-    if (result) {
-      backgroundPromoter_[i]->setAssignedMemory(
-          std::move(memoryAssignments[i]));
+      backgroundMover_[i]->setAssignedMemory(std::move(memoryAssignments[i]));
     }
   }
   return result;
@@ -7068,23 +7008,11 @@ bool CacheAllocator<CacheTrait>::stopReaper(std::chrono::seconds timeout) {
 }
 
 template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::stopBackgroundEvictor(
+bool CacheAllocator<CacheTrait>::stopBackgroundMover(
     std::chrono::seconds timeout) {
   bool result = true;
-  for (size_t i = 0; i < backgroundEvictor_.size(); i++) {
-    auto ret = stopWorker("BackgroundEvictor", backgroundEvictor_[i], timeout);
-    result = result && ret;
-  }
-  return result;
-}
-
-template <typename CacheTrait>
-bool CacheAllocator<CacheTrait>::stopBackgroundPromoter(
-    std::chrono::seconds timeout) {
-  bool result = true;
-  for (size_t i = 0; i < backgroundPromoter_.size(); i++) {
-    auto ret =
-        stopWorker("BackgroundPromoter", backgroundPromoter_[i], timeout);
+  for (size_t i = 0; i < backgroundMover_.size(); i++) {
+    auto ret = stopWorker("BackgroundMover", backgroundMover_[i], timeout);
     result = result && ret;
   }
   return result;

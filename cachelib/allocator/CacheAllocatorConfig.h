@@ -269,16 +269,13 @@ class CacheAllocatorConfig {
       std::chrono::seconds ccacheInterval,
       uint32_t ccacheStepSizePercent);
 
-  // Enable the background evictor - scans a tier to look for objects
-  // to evict to the next tier
-  CacheAllocatorConfig& enableBackgroundEvictor(
-      std::shared_ptr<BackgroundMoverStrategy> backgroundMoverStrategy,
+  // Enable the background mover - scans a tier to look for objects
+  // to evict to the next tier or promote to next tier
+  CacheAllocatorConfig& enableBackgroundMover(
       std::chrono::milliseconds regularInterval,
-      size_t threads);
-
-  CacheAllocatorConfig& enableBackgroundPromoter(
-      std::shared_ptr<BackgroundMoverStrategy> backgroundMoverStrategy,
-      std::chrono::milliseconds regularInterval,
+      size_t evictionBatch,
+      size_t promotionBatch,
+      double targetFree,
       size_t threads);
 
   // This enables an optimization for Pool rebalancing and resizing.
@@ -360,15 +357,9 @@ class CacheAllocatorConfig {
            poolOptimizeStrategy != nullptr;
   }
 
-  // @return whether background evictor thread is enabled
-  bool backgroundEvictorEnabled() const noexcept {
-    return backgroundEvictorInterval.count() > 0 &&
-           backgroundEvictorStrategy != nullptr;
-  }
-
-  bool backgroundPromoterEnabled() const noexcept {
-    return backgroundPromoterInterval.count() > 0 &&
-           backgroundPromoterStrategy != nullptr;
+  // @return whether background mover thread is enabled
+  bool backgroundMoverEnabled() const noexcept {
+    return backgroundMoverThreads > 0;
   }
 
   // @return whether memory monitor is enabled
@@ -485,25 +476,12 @@ class CacheAllocatorConfig {
   // make any progress for the below threshold
   std::chrono::milliseconds slabReleaseStuckThreshold{std::chrono::seconds(60)};
 
-  // the background eviction strategy to be used
-  std::shared_ptr<BackgroundMoverStrategy> backgroundEvictorStrategy{nullptr};
-
-  // the background promotion strategy to be used
-  std::shared_ptr<BackgroundMoverStrategy> backgroundPromoterStrategy{nullptr};
-
   // time interval to sleep between runs of the background evictor
-  std::chrono::milliseconds backgroundEvictorInterval{
-      std::chrono::milliseconds{1000}};
-
-  // time interval to sleep between runs of the background promoter
-  std::chrono::milliseconds backgroundPromoterInterval{
-      std::chrono::milliseconds{1000}};
+  std::chrono::milliseconds backgroundMoverInterval{
+      std::chrono::milliseconds{100}};
 
   // number of thread used by background evictor
-  size_t backgroundEvictorThreads{1};
-
-  // number of thread used by background promoter
-  size_t backgroundPromoterThreads{1};
+  size_t backgroundMoverThreads{0};
 
   // time interval to sleep between iterations of pool size optimization,
   // for regular pools and compact caches
@@ -652,22 +630,9 @@ class CacheAllocatorConfig {
   bool delayCacheWorkersStart{false};
 
   // see MultiTierDataMovement.md
-  double promotionAcWatermark{4.0}; 
-  double lowEvictionAcWatermark{2.0};
-  double highEvictionAcWatermark{5.0};
-  double numDuplicateElements{0.0}; // inclusivness of the cache
-  double syncPromotion{0.0}; // can promotion be done synchronously in user thread
-  
-  uint64_t evictorThreads{1};
-  uint64_t promoterThreads{1};
-
-  uint64_t maxEvictionBatch{40};
-  uint64_t maxPromotionBatch{10};
-
-  uint64_t minEvictionBatch{1};
-  uint64_t minPromotionBatch{1};
-
-  uint64_t maxEvictionPromotionHotness{60};
+  double   backgroundTargetFree{0.05}; 
+  uint64_t backgroundEvictionBatch{20};
+  uint64_t backgroundPromotionBatch{10};
 
   friend CacheT;
 
@@ -1020,24 +985,17 @@ CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enablePoolRebalancing(
 }
 
 template <typename T>
-CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundEvictor(
-    std::shared_ptr<BackgroundMoverStrategy> strategy,
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundMover(
     std::chrono::milliseconds interval,
-    size_t evictorThreads) {
-  backgroundEvictorStrategy = strategy;
-  backgroundEvictorInterval = interval;
-  backgroundEvictorThreads = evictorThreads;
-  return *this;
-}
-
-template <typename T>
-CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::enableBackgroundPromoter(
-    std::shared_ptr<BackgroundMoverStrategy> strategy,
-    std::chrono::milliseconds interval,
-    size_t promoterThreads) {
-  backgroundPromoterStrategy = strategy;
-  backgroundPromoterInterval = interval;
-  backgroundPromoterThreads = promoterThreads;
+    size_t evictionBatch,
+    size_t promotionBatch,
+    double targetFree,
+    size_t moverThreads) {
+  backgroundEvictionBatch = evictionBatch;
+  backgroundPromotionBatch = promotionBatch;
+  backgroundTargetFree = targetFree;
+  backgroundMoverInterval = interval;
+  backgroundMoverThreads = moverThreads;
   return *this;
 }
 

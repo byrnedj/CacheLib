@@ -534,15 +534,13 @@ Cache<Allocator>::Cache(const CacheConfig& config,
       config_.getRebalanceStrategy(),
       std::chrono::seconds(config_.poolRebalanceIntervalSec));
 
-  allocatorConfig_.enableBackgroundEvictor(
-      config_.getBackgroundEvictorStrategy(),
-      std::chrono::milliseconds(config_.backgroundEvictorIntervalMilSec),
-      config_.evictorThreads);
+  allocatorConfig_.enableBackgroundMover(
+      std::chrono::milliseconds(config_.backgroundMoverIntervalMilSec),
+      config_.backgroundEvictionBatch,
+      config_.backgroundPromotionBatch,
+      config_.backgroundTargetFree,
+      config_.backgroundMoverThreads);
 
-  allocatorConfig_.enableBackgroundPromoter(
-      config_.getBackgroundPromoterStrategy(),
-      std::chrono::milliseconds(config_.backgroundPromoterIntervalMilSec),
-      config_.promoterThreads);
   if (config_.moveOnSlabRelease && movingSync != nullptr) {
     allocatorConfig_.enableMovingOnSlabRelease(
         [](Item& oldItem, Item& newItem, Item* parentPtr) {
@@ -600,11 +598,10 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     }
   });
 
-  allocatorConfig_.maxEvictionBatch = config_.maxEvictionBatch;
-  allocatorConfig_.maxPromotionBatch = config_.maxPromotionBatch;
-  allocatorConfig_.minEvictionBatch = config_.minEvictionBatch;
-  allocatorConfig_.minPromotionBatch = config_.minPromotionBatch;
-  allocatorConfig_.maxEvictionPromotionHotness = config_.maxEvictionPromotionHotness;
+  allocatorConfig_.backgroundEvictionBatch = config_.backgroundEvictionBatch;
+  allocatorConfig_.backgroundPromotionBatch = config_.backgroundPromotionBatch;
+  allocatorConfig_.backgroundTargetFree = config_.backgroundTargetFree;
+  allocatorConfig_.backgroundMoverThreads = config_.backgroundMoverThreads;
 
   if (config_.enableItemDestructorCheck) {
     auto removeCB = [&](const typename Allocator::DestructorData& data) {
@@ -1185,8 +1182,7 @@ Stats Cache<Allocator>::getStats() const {
 
   ret.allocationClassStats = allocationClassStats;
 
-  ret.backgroundEvictorStats = cacheStats.evictionStats;
-  ret.backgroundPromoStats = cacheStats.promotionStats;
+  ret.backgroundMoverStats = cacheStats.moverStats;
 
   ret.evictAttempts = cacheStats.evictionAttempts;
   ret.allocAttempts = cacheStats.allocAttempts;
@@ -1241,10 +1237,8 @@ Stats Cache<Allocator>::getStats() const {
     ret.nvmCounters = cache_->getNvmCacheStatsMap().toMap();
   }
 
-  ret.backgroundEvictionClasses =
-      cache_->getBackgroundMoverClassStats(MoverDir::Evict);
-  ret.backgroundPromotionClasses =
-      cache_->getBackgroundMoverClassStats(MoverDir::Promote);
+  ret.backgroundMoverClasses =
+      cache_->getBackgroundMoverClassStats();
 
   // nvm stats from navy
   if (!isRamOnly() && !navyStats.empty()) {
