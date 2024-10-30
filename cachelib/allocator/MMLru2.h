@@ -22,6 +22,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion"
 #include <folly/Format.h>
+#include <folly/system/ThreadId.h>
 #pragma GCC diagnostic pop
 #include <folly/container/Array.h>
 #include <folly/lang/Aligned.h>
@@ -41,7 +42,7 @@ namespace facebook::cachelib {
 // Items are inserted to the head of the queue and removed from the tail of the
 // queue. Items accessed (used) are moved (promoted) to the head of the queue.
 //
-// In MMLru2, we have 2 LRU queues. Items are shared among these 2 queues randomly 
+// In MMLru2, we have 2 LRU queues. Items are shared among these 2 queues (among the threads) 
 // for now. This allows us to have one thread inserting and another thread evicting
 // from the class at the same time.
 class MMLru2 {
@@ -231,6 +232,7 @@ class MMLru2 {
 
     // Whether to use combined locking for withEvictionIterator.
     bool useCombinedLockForIterators{true};
+
   };
 
   // The container object which can be used to keep track of objects of type
@@ -623,6 +625,7 @@ bool MMLru2::Container<T, HookPtr>::add(T& node) noexcept {
   if (num != LruType::NumTypes) {
     return false;
   }
+  /*
   num = folly::Random::rand32() % LruType::NumTypes; //or we can use a random number
   auto lck = LockHolder{*lruMutex_[num], std::try_to_lock};
   while (!lck.owns_lock()) {
@@ -634,6 +637,15 @@ bool MMLru2::Container<T, HookPtr>::add(T& node) noexcept {
     return false;
   }
   addNodeLocked(node,currTime,num);
+  */
+  num = folly::getCurrentThreadID() % LruType::NumTypes;
+  lruMutex_[num]->lock_combine([this, num, &node, currTime]() {
+    if (node.isInMMContainer() || getLRUNum(node) != LruType::NumTypes) {
+      throw std::runtime_error(
+          folly::sformat("Was not able to add item {}", node.toString()));
+    }
+    addNodeLocked(node, currTime, num);
+  });
   return true;
 
 }
@@ -659,7 +671,8 @@ template <typename T, MMLru2::Hook<T> T::*HookPtr>
 template <typename It>
 uint32_t MMLru2::Container<T, HookPtr>::addBatch(It begin, It end) noexcept {
   //auto num = lruIndex_++ % LruType::NumTypes;
-  auto num = folly::Random::rand32() % LruType::NumTypes; //or we can use a random number
+  //auto num = folly::Random::rand32() % LruType::NumTypes; //or we can use a random number
+  auto num = folly::getCurrentThreadID() % LruType::NumTypes;
   const auto currTime = static_cast<Time>(util::getCurrentTimeSec());
   return lruMutex_[num]->lock_combine([this, begin, end, currTime, num]() {
     uint32_t i = 0;
@@ -681,7 +694,8 @@ uint32_t MMLru2::Container<T, HookPtr>::addBatch(It begin, It end) noexcept {
 template <typename T, MMLru2::Hook<T> T::*HookPtr>
 typename MMLru2::Container<T, HookPtr>::LockedIterator
 MMLru2::Container<T, HookPtr>::getEvictionIterator() const noexcept {
-  auto num = (folly::Random::rand32() % LruType::NumTypes);
+  //auto num = (folly::Random::rand32() % LruType::NumTypes);
+  auto num = folly::getCurrentThreadID() % LruType::NumTypes;
   LockHolder l(*lruMutex_[num]);
   return LockedIterator{std::move(l), lru_.getList(num).rbegin()};
 }
@@ -689,6 +703,7 @@ MMLru2::Container<T, HookPtr>::getEvictionIterator() const noexcept {
 template <typename T, MMLru2::Hook<T> T::*HookPtr>
 template <typename F>
 void MMLru2::Container<T, HookPtr>::withEvictionIterator(F&& fun) {
+  /*
   //pick a random list to lock
   auto num = (folly::Random::rand32() % LruType::NumTypes);
   // this is actually faster than combined locking, probably
@@ -700,12 +715,23 @@ void MMLru2::Container<T, HookPtr>::withEvictionIterator(F&& fun) {
     lck = LockHolder{*lruMutex_[num], std::try_to_lock};
   }
   fun(Iterator{lru_.getList(num).rbegin()});
+  */
+  auto num = folly::getCurrentThreadID() % LruType::NumTypes;
+  if (config_.useCombinedLockForIterators) {
+    lruMutex_[num]->lock_combine([this, num, &fun]() {
+      fun(Iterator{lru_.getList(num).rbegin()});
+    });
+  } else {
+    LockHolder l(*lruMutex_[num]);
+    fun(Iterator{lru_.getList(num).rbegin()});
+  }
 }
 
 template <typename T, MMLru2::Hook<T> T::*HookPtr>
 template <typename F>
 void
 MMLru2::Container<T, HookPtr>::withPromotionIterator(F&& fun) {
+  /*
   // same as eviction
   auto num = (folly::Random::rand32() % LruType::NumTypes);
   auto lck = LockHolder{*lruMutex_[num], std::try_to_lock};
@@ -714,6 +740,16 @@ MMLru2::Container<T, HookPtr>::withPromotionIterator(F&& fun) {
     lck = LockHolder{*lruMutex_[num], std::try_to_lock};
   }
   fun(Iterator{lru_.getList(num).begin()});
+  */
+  auto num = folly::getCurrentThreadID() % LruType::NumTypes;
+  if (config_.useCombinedLockForIterators) {
+    lruMutex_[num]->lock_combine([this, num, &fun]() {
+      fun(Iterator{lru_.getList(num).begin()});
+    });
+  } else {
+    LockHolder l(*lruMutex_[num]);
+    fun(Iterator{lru_.getList(num).begin()});
+  }
 }
 
 // TODO: we could use the specific lruMutex for the node we are working on
