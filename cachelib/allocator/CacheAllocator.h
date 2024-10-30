@@ -1872,12 +1872,11 @@ class CacheAllocator : public CacheBase {
                                               ClassId cid,
                                               unsigned int batch);
   
-  std::vector<Item*> getNextCandidatesPromotion(TierId tid,
-                                       PoolId pid,
-                                       ClassId cid,
-                                       unsigned int batch,
-                                       bool markMoving,
-                                       bool fromBgThread);
+  size_t getNextCandidatesPromotion(TierId tid,
+                                    PoolId pid,
+                                    ClassId cid,
+                                    unsigned int batch,
+                                    std::vector<Item*>& blankAllocs);
 
   // 
   // Common function in case move among tiers fails during eviction
@@ -2050,33 +2049,6 @@ class CacheAllocator : public CacheBase {
     stats().numReaperSkippedSlabs.add(slabsSkipped);
   }
 
-  // exposed for the background evictor to iterate through the memory and evict
-  // in batch. This should improve insertion path for tiered memory config
-  size_t traverseAndEvictItems(unsigned int tid,
-                               unsigned int pid,
-                               unsigned int cid,
-                               size_t batch) {
-    util::LatencyTracker tracker{stats().bgEvictLatency_, batch};
-    auto& mmContainer = getMMContainer(tid, pid, cid);
-    uint32_t currItems = mmContainer.size();
-    if (currItems < batch) {
-      batch = currItems;
-      if (batch == 0) {
-        return 0;
-      }
-    }
-    auto evictionData = getNextCandidates(tid,pid,cid,batch);
-    size_t evictions = evictionData.size();
-    (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
-    return evictions;
-  }
-  
-  size_t traverseAndPromoteItems(unsigned int tid, unsigned int pid, unsigned int cid, size_t batch) {
-    util::LatencyTracker tracker{stats().bgPromoteLatency_, batch};
-    auto candidates = getNextCandidatesPromotion(tid,pid,cid,batch,
-                                     true,true);
-    return candidates.size();
-  }
   
   // exposed for the background evictor to iterate through the memory and evict
   // in batch. This should improve insertion path for tiered memory config
@@ -2089,23 +2061,27 @@ class CacheAllocator : public CacheBase {
     uint32_t currItems = mmContainer.size();
     if (currItems < evictionBatch) {
       evictionBatch = currItems;
-      if (evictionBatch == 0) {
-        return {0,0};
-      }
     }
-    auto evictionData = getNextCandidates(tid,pid,cid,evictionBatch);
+    if (evictionBatch == 0) {
+      return {0,0};
+    }
+    auto evictionData = getNextCandidates(tid, pid, cid, evictionBatch);
     //we now have a list of candidates and toRecycles, they should go back
     //to the allocator and we will do this in batch to avoid AC lock contention
     //note - for chained items - we can't do this in bulk
     std::vector<size_t> chainedIdx;
     std::vector<Item*> toRecycles;
-    toRecycles.reserve(evictionData.size());
+    std::vector<Item*> blankAllocs; //for promotion
     size_t idx = 0;
     for (auto& data : evictionData) {
       if (data.chainedItem) {
         chainedIdx.push_back(idx);
       } else {
-        toRecycles.push_back(data.toRecycle);
+        if (idx < promotionBatch) {
+          blankAllocs.push_back(data.candidate);
+        } else {
+          toRecycles.push_back(data.candidate);
+        }
       }
       idx++;
     }
@@ -2115,9 +2091,15 @@ class CacheAllocator : public CacheBase {
       evictionData.erase(evictionData.begin() + chainedIdx[i]);
     }
     allocator_[tid]->freeBatch(toRecycles.begin(), toRecycles.end(), pid, cid);
-    size_t evictions = evictionData.size();
+    size_t evictions = toRecycles.size();
     (*stats_.regularItemEvictions)[tid][pid][cid].add(evictions);
-    return {evictions,0};
+   
+    size_t promotions = 0;
+    promotionBatch = std::min(promotionBatch, blankAllocs.size());
+    if (promotionBatch > 0) {
+      promotions = getNextCandidatesPromotion(tid, pid, cid, promotionBatch, blankAllocs);
+    }
+    return {evictions,promotions};
   }
 
   // returns true if nvmcache is enabled and we should write this item to
@@ -4028,40 +4010,31 @@ CacheAllocator<CacheTrait>::findEvictionBatch(TierId tid,
   return toRecycles;
 }
 
+
+// Returns a set of candidates to promote - with active handles
+// the candidates have been removed from the memory container
 template <typename CacheTrait>
-std::vector<typename CacheAllocator<CacheTrait>::Item*>
-CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
+size_t CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
                                              PoolId pid,
                                              ClassId cid,
                                              unsigned int batch,
-                                             bool markMoving,
-                                             bool fromBgThread) {
-  std::vector<Item*> newAllocs;
-  std::vector<void*> blankAllocs;
-  std::vector<WriteHandle> newHandles;
-  std::vector<WriteHandle> candidateHandles;
+                                             std::vector<Item*>& blankAllocs) {
   std::vector<Item*> candidates;
-  candidates.reserve(batch);
-  candidateHandles.reserve(batch);
-  newAllocs.reserve(batch);
+  std::vector<Item*> newAllocs;
+  std::vector<WriteHandle> newHandles;
   newHandles.reserve(batch);
+  newAllocs.reserve(batch);
+  candidates.reserve(batch);
 
-  auto& mmContainer = getMMContainer(tid, pid, cid);
-  unsigned int maxSearchTries = std::max(config_.evictionSearchTries,
-                                            batch*4);
-
-  // first try and get allocations in the next tier
-  blankAllocs = allocateInternalTierByCidBatch(tid-1,pid,cid,batch);
-  if (blankAllocs.empty()) {
-    return candidates;  
-  } else if (blankAllocs.size() < batch) {
-    batch = blankAllocs.size();
+  auto& mmContainer = getMMContainer(tid+1, pid, cid);
+  if (mmContainer.size() < batch) {
+    return 0;
   }
-  XDCHECK_EQ(blankAllocs.size(),batch);
+  unsigned int maxSearchTries = batch*4;
 
-  auto iterateAndMark = [this, tid, pid, cid, batch,
-                         markMoving, maxSearchTries,
-                         &candidates, &candidateHandles,
+  auto iterateAndMark = [this, batch,
+                         maxSearchTries,
+                         &candidates,
                          &mmContainer](auto&& itr) {
 
     unsigned int searchTries = 0;
@@ -4074,39 +4047,14 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
             maxSearchTries > searchTries) &&
            itr && candidates.size() < batch) {
       ++searchTries;
-      auto* toRecycle_ = itr.get();
-      bool chainedItem_ = toRecycle_->isChainedItem();
-
-      if (chainedItem_) {
-          ++itr;
-          continue;
+      auto* candidate = itr.get();
+      if (!candidate->isChainedItem() && 
+          candidate->isAccessed() && //only promote accessed items
+          candidate->markMoving()) {
+        mmContainer.remove(itr);
+        candidates.push_back(candidate);
       }
-      Item* candidate_;
-      WriteHandle candidateHandle_;
-      Item* syncItem_;
-      //sync on the parent item for chained items to move to next tier
-      candidate_ = toRecycle_;
-      syncItem_ = toRecycle_;
-      
-      bool marked = false;
-      if (markMoving) {
-        marked = syncItem_->markMoving();
-      } else if (!markMoving) {
-        //we use item handle as sync point - for background eviction
-        auto hdl = acquire(candidate_);
-        if (hdl && hdl->getRefCount() == 1) {
-          marked = true;
-          candidateHandle_ = std::move(hdl);
-        }
-      }
-      if (!marked) {
-        ++itr;
-        continue;
-      }
-      XDCHECK(!chainedItem_); 
-      mmContainer.remove(itr);
-      candidates.push_back(candidate_);
-      candidateHandles.push_back(std::move(candidateHandle_));
+      ++itr;
     }
   };
   
@@ -4114,12 +4062,11 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
 
   if (candidates.size() < batch) {
     unsigned int toErase = batch - candidates.size();
-    for (int i = 0; i < toErase; i++) {
-      allocator_[tid-1]->free(blankAllocs.back());
-      blankAllocs.pop_back();
-    }
+    (*stats_.regularItemEvictions)[tid][pid][cid].add(toErase);
+    allocator_[tid]->freeBatch(blankAllocs.end()-toErase, blankAllocs.end(), pid, cid);
+    blankAllocs.erase(blankAllocs.end()-toErase, blankAllocs.end());
     if (candidates.size() == 0) {
-      return candidates;  
+      return 0;  
     }
   }
   
@@ -4143,7 +4090,7 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
     }
   }
   //2. add in batch to mmContainer
-  auto& newMMContainer = getMMContainer(tid-1, pid, cid);
+  auto& newMMContainer = getMMContainer(tid, pid, cid);
   uint32_t added = newMMContainer.addBatch(newAllocs.begin(), newAllocs.end());
   XDCHECK_EQ(added,newAllocs.size());
   if (added != newAllocs.size()) {
@@ -4158,29 +4105,26 @@ CacheAllocator<CacheTrait>::getNextCandidatesPromotion(TierId tid,
     bool moved = moveRegularItem(*candidate,newHandle, true, true);
     if (moved) {
       XDCHECK(candidate->getKey() == newHandle->getKey());
-      if (markMoving) {
-        auto ref = candidate->unmarkMoving();
-        XDCHECK_EQ(ref,0);
-        wakeUpWaiters(candidate->getKey(), std::move(newHandle));
-        const auto res =
-            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
-        XDCHECK(res == ReleaseRes::kReleased);
-      }
+      auto ref = candidate->unmarkMoving();
+      XDCHECK_EQ(ref,0);
+      wakeUpWaiters(candidate->getKey(), std::move(newHandle));
+      const auto res =
+          releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+      XDCHECK(res == ReleaseRes::kReleased);
+      
     } else {
       typename NvmCacheT::PutToken token{};
       
       removeFromMMContainer(*newAllocs[i]);
       auto ret = handleFailedMove(candidate, token, false);
       XDCHECK(ret);
-      if (markMoving && candidate->getRefCountAndFlagsRaw() == 0) {
-        const auto res =
-            releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
-        XDCHECK(res == ReleaseRes::kReleased);
-      }
-
+      XDCHECK_EQ(candidate->getRefCountAndFlagsRaw(),0);
+      const auto res =
+          releaseBackToAllocator(*candidate, RemoveContext::kNormal, false);
+      XDCHECK(res == ReleaseRes::kReleased);
     }
   }
-  return candidates;
+  return candidates.size();
 }
 
 template <typename CacheTrait>
