@@ -18,6 +18,7 @@
 #include "cachelib/allocator/ChainedHashTable.h"
 #include "cachelib/allocator/MM2Q.h"
 #include "cachelib/allocator/MMLru.h"
+#include "cachelib/allocator/MMLru2.h"
 #include "cachelib/allocator/MMTinyLFU.h"
 #include "cachelib/allocator/MMWTinyLFU.h"
 #include "cachelib/allocator/memory/CompressedPtr.h"
@@ -35,6 +36,13 @@ namespace cachelib {
 // memory.
 struct LruCacheTrait {
   using MMType = MMLru;
+  using AccessType = ChainedHashTable;
+  using AccessTypeLocks = SharedMutexBuckets;
+  using CompressedPtrType = CompressedPtr4B;
+};
+
+struct Lru2CacheTrait {
+  using MMType = MMLru2;
   using AccessType = ChainedHashTable;
   using AccessTypeLocks = SharedMutexBuckets;
   using CompressedPtrType = CompressedPtr4B;

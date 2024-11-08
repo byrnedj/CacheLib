@@ -38,6 +38,7 @@ class CacheMonitorFactory {
  public:
   virtual ~CacheMonitorFactory() = default;
   virtual std::unique_ptr<CacheMonitor> create(LruAllocator& cache) = 0;
+  virtual std::unique_ptr<CacheMonitor> create(Lru2Allocator& cache) = 0;
   virtual std::unique_ptr<CacheMonitor> create(Lru2QAllocator& cache) = 0;
 };
 
