@@ -36,6 +36,8 @@
 #include "cachelib/common/CompilerUtils.h"
 #include "cachelib/common/Mutex.h"
 
+#define MAX_THREADS 1024
+
 namespace facebook::cachelib {
 // CacheLib's other modified LRU policy.
 // In classic LRU, the items form a queue according to the last access time.
@@ -243,6 +245,7 @@ class MMLru2 {
   struct Container {
    private:
     using LruList = MultiDList<T, HookPtr>;
+    using NodeList = DList<T, HookPtr>;
     using Mutex = folly::DistributedMutex;
     using LockHolder = std::unique_lock<Mutex>;
     using PtrCompressor = typename T::PtrCompressor;
@@ -339,6 +342,7 @@ class MMLru2 {
 
     // helper function to add the node under the container lock
     void addNodeLocked(T& node, const Time& currTime, uint8_t num);
+    void addThreadLocalListLocked(std::vector<T*>& list, const Time& currTime, uint8_t num);
 
     // adds the given nodes into the container and marks each as being present
     // in the container. The nodes are added to the head of the lru.
@@ -513,6 +517,8 @@ class MMLru2 {
     // the lru
     LruList lru_{LruType::NumTypes, PtrCompressor{}};
 
+    std::map<size_t,std::vector<T*>> threadLocalLRU_;
+
     // The next time to reconfigure the container.
     std::atomic<Time> nextReconfigureTime_{};
 
@@ -555,6 +561,15 @@ bool MMLru2::Container<T, HookPtr>::recordAccess(T& node,
     return false;
   }
   const auto curr = static_cast<Time>(util::getCurrentTimeSec());
+   
+  auto numT = folly::getCurrentThreadID() % LruType::NumTypes;
+  auto num = getLRUNum(node);
+  //auto& list = threadLocalLRU_[folly::getCurrentThreadID()];
+  //if (list.size() > 200) {
+  //  lruMutex_[num]->lock_combine([this, num, curr, &list]() {
+  //    addThreadLocalListLocked(list, curr, num);
+  //  });
+  //}
   // check if the node is still being memory managed
   if (node.isInMMContainer() &&
           ((curr >= getUpdateTime(node) +
@@ -563,24 +578,25 @@ bool MMLru2::Container<T, HookPtr>::recordAccess(T& node,
     if (!isAccessed(node)) {
       markAccessed(node);
     }
-    auto num = getLRUNum(node);
-    return lruMutex_[num]->lock_combine([this, num, &node, curr]() -> bool {
-      switch (num) {
-      case LruType::Lru1:
-        if (!isLRU1(node))
-          return false;
-        XDCHECK(isLRU1(node));
-        break;
-      case LruType::Lru2:
-        if (!isLRU2(node))
-          return false;
-        XDCHECK(isLRU2(node));
-        break;
-      }
-      lru_.getList(num).moveToHead(node);
-      setUpdateTime(node, curr);
-      return true;
-    });
+    if (node.isInMMContainer() && num == numT) {
+      return lruMutex_[num]->lock_combine([this, num, &node, curr]() -> bool {
+        switch (num) {
+        case LruType::Lru1:
+          if (!isLRU1(node))
+            return false;
+          XDCHECK(isLRU1(node));
+          break;
+        case LruType::Lru2:
+          if (!isLRU2(node))
+            return false;
+          XDCHECK(isLRU2(node));
+          break;
+        }
+        lru_.getList(num).moveToHead(node);
+        setUpdateTime(node, curr);
+        return true;
+      });
+    }
   }
   return false;
 }
@@ -629,6 +645,7 @@ bool MMLru2::Container<T, HookPtr>::add(T& node) noexcept {
   }
   addNodeLocked(node,currTime,num);
   */
+  //threadLocalLRU_[folly::getCurrentThreadID()].push_back(&node);
   num = folly::getCurrentThreadID() % LruType::NumTypes;
   lruMutex_[num]->lock_combine([this, num, &node, currTime]() {
     if (node.isInMMContainer() || getLRUNum(node) != LruType::NumTypes) {
@@ -638,6 +655,21 @@ bool MMLru2::Container<T, HookPtr>::add(T& node) noexcept {
     addNodeLocked(node, currTime, num);
   });
   return true;
+}
+
+template <typename T, MMLru2::Hook<T> T::*HookPtr>
+void MMLru2::Container<T, HookPtr>::addThreadLocalListLocked(std::vector<T*>& list, const Time& currTime, uint8_t num) {
+  for (auto itr = list.begin(); itr != list.end(); ) {
+    T* node = (*itr);
+    XDCHECK(!node->isInMMContainer());
+    if (node->isInMMContainer() || getLRUNum(*node) != LruType::NumTypes) {
+      throw std::runtime_error(
+          folly::sformat("Was not able to add all new items, failed item {}",
+                         node->toString()));
+    }
+    addNodeLocked(*node, currTime, num);
+    list.erase(itr);
+  }
 }
 
 template <typename T, MMLru2::Hook<T> T::*HookPtr>
@@ -710,11 +742,16 @@ void MMLru2::Container<T, HookPtr>::withEvictionIterator(F&& fun) {
   fun(Iterator{lru_.getList(num).rbegin()});
   */
   auto num = folly::getCurrentThreadID() % LruType::NumTypes;
+  auto& list = threadLocalLRU_[folly::getCurrentThreadID()];
+  const auto curr = static_cast<Time>(util::getCurrentTimeSec());
   if (config_.useCombinedLockForIterators) {
-    lruMutex_[num]->lock_combine(
-        [this, num, &fun]() { fun(Iterator{lru_.getList(num).rbegin()}); });
+    lruMutex_[num]->lock_combine([this, num, curr, &list, &fun]() { 
+        addThreadLocalListLocked(list, curr, num);
+        fun(Iterator{lru_.getList(num).rbegin()}); 
+    });
   } else {
     LockHolder l(*lruMutex_[num]);
+    addThreadLocalListLocked(list, curr, num);
     fun(Iterator{lru_.getList(num).rbegin()});
   }
 }
