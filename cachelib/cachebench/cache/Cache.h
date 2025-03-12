@@ -1330,7 +1330,7 @@ void Cache<Allocator>::setStringItem(WriteHandle& handle,
     return;
 
   auto ptr = reinterpret_cast<char*>(getMemory(handle));
-  std::strncpy(ptr, str.c_str(), dataSize);
+  std::memmove(ptr, str.c_str(), dataSize);
 
   // Make sure the copied string ends with null char
   if (str.size() + 1 > dataSize) {
