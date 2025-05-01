@@ -501,14 +501,19 @@ class CacheStressor : public Stressor {
       return OpResultType::kSetFailure;
     } else {
       if (config_.useDTOAsync && size > 32*1024) {
+        std::string_view value = itemValue;
+        if (itemValue.empty()) {
+            value = hardcodedString_;
+        }
+        
         //it->markMoving();
         auto insertToCache = [&] {
             cache_->insertOrReplace(it);
         };
-                  
+                 
         std::function<void(void)> fn = insertToCache;
         dto_memcpy_async(
-            it->getMemory(), itemValue.data(), size, &async_memcpy_callback, &insertToCache);
+            it->getMemory(), value.data(), size, &async_memcpy_callback, &fn);
         //it->unmarkMoving();
       } else {
         populateItem(it, itemValue);
