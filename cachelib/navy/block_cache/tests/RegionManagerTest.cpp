@@ -163,6 +163,71 @@ TEST(RegionManager, Recovery) {
   }
 }
 
+TEST(RegionManager, ReadWrite64K) {
+  constexpr uint64_t kBaseOffset = 0;
+  constexpr uint32_t kNumRegions = 16;
+  constexpr uint32_t kRegionSize = 256 * 1024 * 1024;
+
+  auto device = createMemoryDevice(kBaseOffset + kNumRegions * kRegionSize,
+                                   nullptr /* encryption */);
+  auto devicePtr = device.get();
+  RegionEvictCallback evictCb{[](RegionId, BufferView) { return 0; }};
+  RegionCleanupCallback cleanupCb{[](RegionId, BufferView) {}};
+  auto rm = std::make_unique<RegionManager>(
+      kNumRegions, kRegionSize, kBaseOffset, *device, 1, 1, 0,
+      std::move(evictCb), std::move(cleanupCb), std::make_unique<LruPolicy>(4),
+      kNumRegions /* numInMemBuffers */, 0, kFlushRetryLimit);
+
+  ENABLE_INJECT_PAUSE_IN_SCOPE();
+
+  injectPauseSet("pause_reclaim_done");
+
+  uint32_t kLocalOffset = 0 * 1024;
+  uint32_t kSize = 64*1024;
+  BufferGen bg;
+  RegionId rid;
+  // do reclaim couple of times to get RegionId of 1
+  rm->startReclaim();
+  EXPECT_TRUE(injectPauseWait("pause_reclaim_done"));
+  ASSERT_EQ(OpenStatus::Ready, rm->getCleanRegion(rid, false).first);
+  ASSERT_EQ(0, rid.index());
+  rm->startReclaim();
+  EXPECT_TRUE(injectPauseWait("pause_reclaim_done"));
+  ASSERT_EQ(OpenStatus::Ready, rm->getCleanRegion(rid, false).first);
+  ASSERT_EQ(1, rid.index());
+
+  auto& region = rm->getRegion(rid);
+  auto [wDesc, addr] = region.openAndAllocate(kRegionSize);
+  EXPECT_EQ(OpenStatus::Ready, wDesc.status());
+  auto wAddrBase = RelAddress{rid, kLocalOffset};
+  auto wAddr = wAddrBase;
+  const unsigned char *data = (const unsigned char*)malloc(kRegionSize); 
+
+  while (kLocalOffset < kRegionSize - kSize*2) {
+    auto view = BufferView{kSize, data + kLocalOffset};
+    rm->write(wAddr, std::move(Buffer{view}));
+    kLocalOffset += kSize;
+    wAddr = RelAddress{rid, kLocalOffset};
+  }
+  auto rDesc = rm->openForRead(rid, 1);
+  while (kLocalOffset >= kSize*2) {
+    auto bufRead = rm->read(rDesc, wAddr, kSize);
+    kLocalOffset -= kSize;
+    wAddr = RelAddress{rid, kLocalOffset};
+    //EXPECT_TRUE(bufRead.size() == kSize);
+    //EXPECT_EQ(buf.view(), bufRead.view());
+  }
+
+  // flush buffer
+  //region.close(std::move(wDesc));
+  //EXPECT_EQ(Region::FlushRes::kSuccess, rm->flushBuffer(rid));
+  //// Check device directly at the offset we expect data to be written
+  //auto expectedOfs = kBaseOffset + kRegionSize + kLocalOffset;
+  //Buffer bufReadDirect{kSize};
+  //EXPECT_TRUE(devicePtr->read(expectedOfs, kSize, bufReadDirect.data()));
+  //EXPECT_EQ(buf.view(), bufReadDirect.view());
+}
+
 TEST(RegionManager, ReadWrite) {
   constexpr uint64_t kBaseOffset = 1024;
   constexpr uint32_t kNumRegions = 4;

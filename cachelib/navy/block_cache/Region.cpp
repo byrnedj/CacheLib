@@ -18,6 +18,61 @@
 
 #include "cachelib/navy/common/NavyThread.h"
 
+#include <openssl/evp.h>
+#include <openssl/err.h>
+// ────────────────────────────────────────────────────────────────────
+//   Global AES-256-CTR test key + IV (in an anonymous namespace)
+// ────────────────────────────────────────────────────────────────────
+namespace {
+
+
+/** 
+ * AES-256-CTR “test” key (32 bytes). 
+ * In production, you must generate a fresh random key and never hard-code it. 
+ */
+static const unsigned char kAesKey[32] = {
+    0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe,
+    0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+    0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7,
+    0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4
+};
+
+/**
+ * AES-CTR IV (nonce). Always use a unique IV per encryption in production.
+ * Here we use a fixed IV for demonstration only.
+ */
+static const unsigned char kAesIv[16] = {
+    0x00, 0x01, 0x02, 0x03,
+    0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b,
+    0x0c, 0x0d, 0x0e, 0x0f
+};
+// In an anonymous namespace (Region.cpp)
+thread_local EVP_CIPHER_CTX* tlsEncCtx = nullptr;
+thread_local EVP_CIPHER_CTX* tlsDecCtx = nullptr;
+
+void initTlsEncCtx() {
+  if (!tlsEncCtx) {
+    tlsEncCtx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit_ex(tlsEncCtx, EVP_aes_256_ctr(), nullptr, kAesKey, kAesIv);
+  }
+}
+void resetTlsEncCtx() {
+  EVP_EncryptInit_ex(tlsEncCtx, EVP_aes_256_ctr(), nullptr, kAesKey, kAesIv);
+}
+
+void initTlsDecCtx() {
+  if (!tlsDecCtx) {
+    tlsDecCtx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit_ex(tlsDecCtx, EVP_aes_256_ctr(), nullptr, kAesKey, kAesIv);
+  }
+}
+void resetTlsDecCtx() {
+  EVP_DecryptInit_ex(tlsDecCtx, EVP_aes_256_ctr(), nullptr, kAesKey, kAesIv);
+}
+
+} // anonymous namespace
+
 namespace facebook::cachelib::navy {
 
 bool Region::readyForReclaim(bool wait) {
@@ -167,18 +222,45 @@ RelAddress Region::allocateLocked(uint32_t size) {
 
 void Region::writeToBuffer(uint32_t offset, BufferView buf) {
   std::lock_guard l{lock_};
+
   XDCHECK_NE(buffer_, nullptr);
   auto size = buf.size();
   XDCHECK_LE(offset + size, buffer_->size());
-  memcpy(buffer_->data() + offset, buf.data(), size);
+  initTlsEncCtx();
+  resetTlsEncCtx();
+  int outLen = 0, finalLen = 0;
+  EVP_EncryptUpdate(tlsEncCtx, buffer_->data() + offset, &outLen, buf.data(), size);
+  EVP_EncryptFinal_ex(tlsEncCtx, buffer_->data() + offset + outLen, &finalLen);
+  XDCHECK_EQ(static_cast<size_t>(outLen + finalLen), size);
+  //memcpy(buffer_->data() + offset, coalseced->data(), size);
 }
 
 void Region::readFromBuffer(uint32_t fromOffset,
                             MutableBufferView outBuf) const {
   std::lock_guard l{lock_};
+ 
   XDCHECK_NE(buffer_, nullptr);
   XDCHECK_LE(fromOffset + outBuf.size(), buffer_->size());
-  memcpy(outBuf.data(), buffer_->data() + fromOffset, outBuf.size());
+  
+  initTlsDecCtx();
+  resetTlsDecCtx();
+  int outLen = 0, finalLen = 0;
+  const size_t cipherLen = outBuf.size();
+  const unsigned char* inPtr = buffer_->data() + fromOffset;
+  unsigned char* outPtr = outBuf.data();
+  int res = EVP_DecryptUpdate(tlsDecCtx, outPtr , &outLen, inPtr, cipherLen);
+  if (res != 1) {
+    unsigned long err = ERR_get_error();
+    XDCHECK_EQ(err, 0UL) << "Decryption failed with error: " << ERR_reason_error_string(err);
+  }
+
+  res = EVP_DecryptFinal_ex(tlsDecCtx, outPtr, &finalLen);
+  if (res != 1) {
+    unsigned long err = ERR_get_error();
+    XDCHECK_EQ(err, 0UL) << "Final decryption failed with error: " << ERR_reason_error_string(err);
+  }
+  XDCHECK_EQ(static_cast<size_t>(outLen + finalLen), outBuf.size());
+  //memcpy(outBuf.data(), buffer_->data() + fromOffset, outBuf.size());
 }
 
 } // namespace facebook::cachelib::navy
