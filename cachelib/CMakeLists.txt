@@ -134,7 +134,7 @@ function (GENERIC_ADD_TEST TEST_PREFIX SOURCE_FILE)
   #" source: ${SOURCE_FILE} additional libraries: ${ARGN}")
 
   add_executable("${TEST_PREFIX}-${TEST_NAME}" "${SOURCE_FILE}")
-  target_link_libraries("${TEST_PREFIX}-${TEST_NAME}" "${ARGN}")
+  target_link_libraries("${TEST_PREFIX}-${TEST_NAME}" "${ARGN}" "atomic")
 
   install(
     TARGETS "${TEST_PREFIX}-${TEST_NAME}"
