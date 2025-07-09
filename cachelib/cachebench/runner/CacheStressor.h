@@ -16,6 +16,11 @@
 
 #pragma once
 
+//#ifdef BUILD_WITH_DTO
+#define WITH_DTO 1
+#include <dto.h>
+//#endif
+
 #include <folly/Random.h>
 #include <folly/TokenBucket.h>
 #include <folly/system/ThreadName.h>
@@ -28,7 +33,6 @@
 #include <thread>
 #include <unordered_set>
 
-#include <dto.h>
 
 #include "cachelib/cachebench/cache/Cache.h"
 #include "cachelib/cachebench/cache/TimeStampTicker.h"
@@ -505,7 +509,7 @@ class CacheStressor : public Stressor {
         if (itemValue.empty()) {
             value = hardcodedString_;
         }
-        
+#ifdef WITH_DTO
         //it->markMoving();
         auto insertToCache = [&] {
             cache_->insertOrReplace(it);
@@ -514,6 +518,11 @@ class CacheStressor : public Stressor {
         std::function<void(void)> fn = insertToCache;
         dto_memcpy_async(
             it->getMemory(), value.data(), size, &async_memcpy_callback, &fn);
+#else 
+        // if we are not using dto, we can just populate the item
+        populateItem(it, itemValue);
+        cache_->insertOrReplace(it);
+#endif
         //it->unmarkMoving();
       } else {
         populateItem(it, itemValue);

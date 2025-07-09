@@ -17,9 +17,11 @@
 #pragma once
 
 #include <cstdint>
-
 #include "cachelib/common/Hash.h"
 #include "cachelib/navy/common/Buffer.h"
+//#ifdef BUILD_WITH_DTO
+//#define WITH_DTO 1
+//#endif
 
 namespace facebook {
 namespace cachelib {

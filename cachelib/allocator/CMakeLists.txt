@@ -70,6 +70,7 @@ add_library (cachelib_allocator
 )
 add_dependencies(cachelib_allocator thrift_generated_files)
 target_link_libraries(cachelib_allocator PUBLIC
+  atomic
   cachelib_navy
   cachelib_common
   cachelib_shm

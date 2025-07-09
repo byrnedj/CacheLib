@@ -23,6 +23,7 @@
 #include <cstring>
 #include <numeric>
 #include <utility>
+#include <dto.h>
 
 #include "cachelib/common/inject_pause.h"
 #include "cachelib/navy/common/Hash.h"
@@ -30,6 +31,11 @@
 #include "folly/Range.h"
 
 namespace facebook::cachelib::navy {
+
+void async_memcpy_crc_cb(void *arg) {
+    auto &fn = *reinterpret_cast<std::function<void(void)>*>(arg);
+    fn();
+}
 
 constexpr uint32_t BlockCache::kMinAllocAlignSize;
 constexpr uint32_t BlockCache::kMaxItemSize;
@@ -671,11 +677,32 @@ Status BlockCache::writeEntry(RelAddress addr,
   auto desc = new (buffer.data() + descOffset)
       EntryDesc(hk.key().size(), value.size(), hk.keyHash());
   if (checksumData_) {
+#if WITH_DTO
+    auto keyCopy = [hk, descOffset, &buffer]() {
+      // Copy the key to the buffer at the end
+      buffer.copyFrom(descOffset - hk.key().size(), makeView(hk.key()));
+    };
+    std::function<void(void)> fn = keyCopy;
+    //buffer data is dest, value is src, keyCopy is function to execute while waiting
+    desc->cs = dto_memcpy_crc_async(buffer.data(), static_cast<const void*>(value.data()),  value.size(), &async_memcpy_crc_cb, &fn);
+#else
     desc->cs = checksum(value);
+    buffer.copyFrom(descOffset - hk.key().size(), makeView(hk.key()));
+    buffer.copyFrom(0, value);
+#endif
+    //uint64_t cs2 = checksum(value);
+    //uint64_t cs3 = dto_crc(static_cast<const void*>(value.data()), value.size(), &async_memcpy_crc_cb, &fn);
+    //XDCHECK_EQ(cs, cs2) << folly::sformat(
+    //    "cs: {}, cs2: {}, cs3: {}, value size: {}", cs, cs2, cs3, value.size());
+    //XDCHECK_EQ(cs, cs3) << folly::sformat(
+    //    "cs: {}, cs2: {}, cs3: {}, value size: {}", cs, cs2, cs3, value.size());
+    //buffer.copyFrom(descOffset - hk.key().size(), makeView(hk.key()));
+    //desc->cs = dto_memcpy_crc_async(buffer.data(), static_cast<const void*>(value.data()), , buffer.size(), NULL, NULL);
+  } else {
+    buffer.copyFrom(descOffset - hk.key().size(), makeView(hk.key()));
+    buffer.copyFrom(0, value);
   }
 
-  buffer.copyFrom(descOffset - hk.key().size(), makeView(hk.key()));
-  buffer.copyFrom(0, value);
 
   regionManager_.write(addr, std::move(buffer));
   logicalWrittenCount_.add(hk.key().size() + value.size());
