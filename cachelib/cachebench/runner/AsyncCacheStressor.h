@@ -224,6 +224,12 @@ class AsyncCacheStressor : public Stressor {
                 folly::EventBase* evb,
                 const std::string_view key) {
     ++stats.get;
+    ++stats.outstandingRequests;
+    uint64_t tid = folly::getCurrentThreadID();
+    while (stats.outstandingRequests >
+        10) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     auto lock = chainedItemAcquireSharedLock(key);
 
     if (ticker_) {
@@ -233,9 +239,9 @@ class AsyncCacheStressor : public Stressor {
     // add a distribution over sequences of requests/access patterns
     // e.g. get-no-set and set-no-get
 
-    auto onReadyFn = [&, req, key, l = std::move(lock)](auto hdl) mutable {
+    auto onReadyFn = [&, req, tid, key, l = std::move(lock)](auto hdl) mutable {
       auto result = OpResultType::kGetMiss;
-
+      --stats.outstandingRequests;
       if (hdl == nullptr) {
         ++stats.getMiss;
         result = OpResultType::kGetMiss;
@@ -255,7 +261,7 @@ class AsyncCacheStressor : public Stressor {
 
       if (req->requestId) {
         // req might be deleted after calling notifyResult()
-        wg_->notifyResult(*req->requestId, result);
+        wg_->notifyResult(*req->requestId, result); //, tid);
       }
     };
 
@@ -413,7 +419,7 @@ class AsyncCacheStressor : public Stressor {
     const uint64_t opDelayNs = config_.opDelayNs;
     const std::chrono::nanoseconds opDelay(opDelayNs);
 
-    const bool needDelay = opDelayBatch != 0 && opDelayNs != 0;
+    const bool needDelay = (opDelayBatch != 0 && opDelayNs != 0);
     uint64_t opCounter = 0;
     auto throttleFn = [&] {
       if (needDelay && ++opCounter == opDelayBatch) {

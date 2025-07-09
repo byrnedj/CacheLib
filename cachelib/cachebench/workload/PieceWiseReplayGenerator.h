@@ -17,7 +17,10 @@
 #pragma once
 
 #include <folly/ProducerConsumerQueue.h>
+#include <folly/concurrency/ConcurrentHashMap.h>
 #include <folly/ThreadLocal.h>
+#include <folly/synchronization/Latch.h>
+#include <folly/system/ThreadName.h>
 
 #include "cachelib/cachebench/workload/PieceWiseCache.h"
 #include "cachelib/cachebench/workload/ReplayGeneratorBase.h"
@@ -28,7 +31,7 @@ namespace cachebench {
 
 class PieceWiseReplayGenerator : public ReplayGeneratorBase {
  public:
-  static constexpr uint32_t kMaxRequestQueueSize = 10000;
+  static constexpr uint32_t kMaxRequestQueueSize = 1 << 21;
 
   explicit PieceWiseReplayGenerator(const StressorConfig& config)
       : ReplayGeneratorBase(config),
@@ -45,10 +48,17 @@ class PieceWiseReplayGenerator : public ReplayGeneratorBase {
       threadFinished_[i].store(false, std::memory_order_relaxed);
     }
 
-    traceGenThread_ = std::thread([this]() {
+    folly::Latch latch(1);
+    traceGenThread_ = std::thread([this, &latch]() {
+      folly::setThreadName("cb_replay_gen");
       traceStream_.fastForwardTrace(fastForwardCount_);
-      getReqFromTrace();
+      getReqFromTrace(latch);
     });
+    latch.wait();
+    XLOGF(INFO,
+          "Started PieceWiseReplayGenerator (amp factor {}, # of stressor threads {}, "
+          "fast forward {}, preload count {})",
+          ampFactor_, numShards_, fastForwardCount_, preLoadReqs_);
   }
 
   virtual ~PieceWiseReplayGenerator() {
@@ -99,7 +109,7 @@ class PieceWiseReplayGenerator : public ReplayGeneratorBase {
   }
 
  private:
-  void getReqFromTrace();
+  void getReqFromTrace(folly::Latch& latch);
 
   folly::ProducerConsumerQueue<PieceWiseReqWrapper>& getTLReqQueue() {
     if (!tlStickyIdx_.get()) {
@@ -156,6 +166,9 @@ class PieceWiseReplayGenerator : public ReplayGeneratorBase {
   std::vector<
       std::unique_ptr<folly::ProducerConsumerQueue<PieceWiseReqWrapper>>>
       activeReqQ_;
+
+  std::mutex mapMutex_;
+  std::unordered_map<uint64_t, std::unique_ptr<PieceWiseReqWrapper>> map_;
 
   // Thread that finish its operations mark it here, so we will skip
   // further request on its shard

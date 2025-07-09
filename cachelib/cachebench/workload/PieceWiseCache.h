@@ -321,6 +321,8 @@ struct PieceWiseReqWrapper {
       size_t metadataSize = 0);
 
   PieceWiseReqWrapper(const PieceWiseReqWrapper& other);
+  PieceWiseReqWrapper(PieceWiseReqWrapper&&) noexcept = default;
+  PieceWiseReqWrapper& operator=(PieceWiseReqWrapper&&) noexcept = default;
 };
 
 // The class adapts/updates the PieceWiseReqWrapper to its next operation and/or

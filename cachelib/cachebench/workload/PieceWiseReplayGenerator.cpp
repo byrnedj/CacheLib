@@ -54,26 +54,46 @@ const Request& PieceWiseReplayGenerator::getReq(
 
   // Record the byte wise and object wise stats that we will fetch
   // when it's a new request
+
+  //auto uptr = std::make_unique<PieceWiseReqWrapper>(*reqWrapper);
+  uint64_t requestId = reqWrapper->req.requestId.value();
   if (isNewReq) {
+    //pieceCacheAdapter_.recordNewReq(*uptr);
     pieceCacheAdapter_.recordNewReq(*reqWrapper);
   }
-
-  return reqWrapper->req;
+  //mapMutex_.lock();
+  //auto [iter, inserted] = map_.emplace(requestId, std::move(uptr));
+  //activeReqQ.popFront();
+  Request& req =  reqWrapper->req;
+  //mapMutex_.unlock();
+  return req;
 }
 
 void PieceWiseReplayGenerator::notifyResult(uint64_t requestId,
                                             OpResultType result) {
   auto& activeReqQ = getTLReqQueue();
   auto& rw = *(activeReqQ.frontPtr());
-  XCHECK_EQ(rw.req.requestId.value(), requestId);
+  //mapMutex_.lock();
+  //auto it = map_.find(requestId);
+  //XCHECK(it != map_.end())
+  //    << "Request with id " << requestId << " not found in the map";
 
+  //XCHECK_EQ((it->second)->req.requestId.value(), requestId);
+
+  //auto done = pieceCacheAdapter_.processReq(*it->second, result);
   auto done = pieceCacheAdapter_.processReq(rw, result);
   if (done) {
     activeReqQ.popFront();
+    // Remove the request from the map
+   // map_.erase(it);
   }
+  //m//apMutex_.unlock();
 }
 
-void PieceWiseReplayGenerator::getReqFromTrace() {
+void PieceWiseReplayGenerator::getReqFromTrace(folly::Latch& latch) {
+  bool init = true;
+  uint64_t nreqs = 0;
+  auto begin = util::getCurrentTimeSec();
   std::string line;
   auto partialFieldCount = SampleFields::TOTAL_DEFINED_FIELDS +
                            config_.replayGeneratorConfig.numAggregationFields;
@@ -263,6 +283,9 @@ void PieceWiseReplayGenerator::getReqFromTrace() {
         while (true) {
           if (shouldShutdown()) {
             XLOG(INFO) << "Forced to stop, terminate reading trace file!";
+            if (init) {
+              latch.count_down();
+            }
             return;
           }
 
@@ -291,7 +314,22 @@ void PieceWiseReplayGenerator::getReqFromTrace() {
                                           cacheHit,
                                           itemValue);
             XCHECK(status);
+            nreqs++;
+            if (nreqs >= preLoadReqs_ && init) {
+              auto end = util::getCurrentTimeSec();
+              double reqsPerSec = nreqs / (double)(end - begin);
+              XLOGF(INFO, "Parse rate: {:.2f} reqs/sec", reqsPerSec);
+              latch.count_down();
+              init = false;
+            }
             break;
+          } else if (init) {
+            auto end = util::getCurrentTimeSec();
+            double reqsPerSec = nreqs / (double)(end - begin);
+            XLOGF(INFO, "Parse rate queue full (nreqs) {}: {:.2f} reqs/sec",nreqs, reqsPerSec);
+            init = false;
+            latch.count_down();
+            
           }
 
           // Spin until the queue has room

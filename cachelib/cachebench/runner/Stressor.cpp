@@ -177,14 +177,14 @@ std::unique_ptr<Stressor> Stressor::makeStressor(
     return std::make_unique<FastShutdownStressor>(cacheConfig,
                                                   stressorConfig.numOps);
   } else if (stressorConfig.name == "async") {
-    if (stressorConfig.generator != "workload" &&
-        !stressorConfig.generator.empty()) {
-      // async model has not been tested with other generators
-      throw std::invalid_argument(folly::sformat(
-          "Async cache stressor only works with workload generator currently. "
-          "generator: {}",
-          stressorConfig.generator));
-    }
+    //if (stressorConfig.generator != "workload" &&
+    //    !stressorConfig.generator.empty()) {
+    //  // async model has not been tested with other generators
+    //  throw std::invalid_argument(folly::sformat(
+    //      "Async cache stressor only works with workload generator currently. "
+    //      "generator: {}",
+    //      stressorConfig.generator));
+    //}
 
     auto generator = makeGenerator(stressorConfig);
     if (cacheConfig.allocator == "LRU") {
