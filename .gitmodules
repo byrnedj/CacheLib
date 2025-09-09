@@ -13,6 +13,3 @@
 [submodule "mvfst"]
        path = cachelib/external/mvfst
        url = https://github.com/facebook/mvfst
-[submodule "DTO"]
-	path = cachelib/external/DTO
-	url = https://github.com/intel/DTO
