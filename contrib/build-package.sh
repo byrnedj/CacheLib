@@ -195,6 +195,16 @@ case "$1" in
     SRCDIR=$REPODIR
     external_git_clone=yes
     ;;
+  
+  DTO)
+    NAME=DTO
+    REPO=https://github.com/intel/DTO.git
+    REPODIR=cachelib/external/$NAME
+    SRCDIR=$REPODIR
+    external_git_clone=yes
+    external_git_branch=cachelib
+    ;;
+
 
   folly)
     NAME=folly
@@ -244,15 +254,6 @@ case "$1" in
     SRCDIR=cachelib/external/$NAME
     update_submodules=yes
     cmake_custom_params="-DBUILD_SHARED_LIBS=ON"
-    ;;
-
-  DTO)
-    NAME=DTO
-    REPO=https://github.com/intel/DTO
-    REPODIR=cachelib/external/$NAME
-    SRCDIR=$REPODIR
-    external_git_clone=yes
-    external_git_branch=cachelib
     ;;
 
   cachelib)
