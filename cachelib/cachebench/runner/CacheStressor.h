@@ -28,7 +28,9 @@
 #include <thread>
 #include <unordered_set>
 
+#ifdef HAVE_DTO
 #include <dto.h>
+#endif
 
 #include "cachelib/cachebench/cache/Cache.h"
 #include "cachelib/cachebench/cache/TimeStampTicker.h"
@@ -44,6 +46,8 @@ namespace cachelib {
 namespace cachebench {
 
 constexpr uint32_t kNvmCacheWarmUpCheckRate = 1000;
+
+#define DSA_MEMCPY_THRESHOLD 32*1024
 
 void async_memcpy_callback(void *arg) {
     auto &fn = *reinterpret_cast<std::function<void(void)>*>(arg);
@@ -500,20 +504,20 @@ class CacheStressor : public Stressor {
       ++stats.setFailure;
       return OpResultType::kSetFailure;
     } else {
-      if (config_.useDTOAsync && size > 32*1024) {
-        //it->markMoving();
+#ifdef HAVE_DTO
+      if (config_.useDTOAsync && size >= DSA_MEMCPY_THRESHOLD) {
         auto insertToCache = [&] {
             cache_->insertOrReplace(it);
         };
-                  
         std::function<void(void)> fn = insertToCache;
         dto_memcpy_async(
             it->getMemory(), itemValue.data(), size, &async_memcpy_callback, &insertToCache);
-        //it->unmarkMoving();
-      } else {
-        populateItem(it, itemValue);
-        cache_->insertOrReplace(it);
+        return OpResultType::kSetSuccess;
       }
+#endif
+      populateItem(it, itemValue);
+      cache_->insertOrReplace(it);
+      
       return OpResultType::kSetSuccess;
     }
   }

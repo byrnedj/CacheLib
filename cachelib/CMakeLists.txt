@@ -46,6 +46,10 @@ option(BUILD_TESTS "If enabled, compile the tests." ON)
 
 option(BUILD_WITH_DTO "If enabled, build with the DTO library for DSA support." ON)
 
+if (BUILD_WITH_DTO)
+  add_compile_definitions(HAVE_DTO)
+endif ()
+
 set(BIN_INSTALL_DIR bin CACHE STRING
     "The subdirectory where binaries should be installed")
 set(TESTS_INSTALL_DIR tests CACHE STRING

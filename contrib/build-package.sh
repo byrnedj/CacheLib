@@ -249,7 +249,8 @@ case "$1" in
   DTO)
     NAME=DTO
     REPO=https://github.com/intel/DTO
-    SRCDIR=cachelib/external/$NAME
+    REPODIR=cachelib/external/$NAME
+    SRCDIR=$REPODIR
     external_git_clone=yes
     external_git_branch=cachelib
     ;;
