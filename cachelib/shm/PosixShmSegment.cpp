@@ -359,6 +359,11 @@ static void forcePageAllocation(void* addr, size_t size, size_t pageSize) {
 
 void PosixShmSegment::memBind(void* addr) const {
   if (opts_.memBindNumaNodes.empty()) {
+    // Even without NUMA binding, prefault all pages to ensure:
+    // 1. Huge pages are allocated immediately (not on first access)
+    // 2. We fail early if insufficient huge pages are available
+    // 3. Avoid page faults during normal cache operation
+    forcePageAllocation(addr, getSize(), detail::getPageSize(opts_.pageSize));
     return;
   }
 

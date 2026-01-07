@@ -2489,6 +2489,7 @@ ShmSegmentOpts CacheAllocator<CacheTrait>::createShmCacheOpts() {
     throw std::invalid_argument("CacheLib only supports a single memory tier");
   }
   opts.memBindNumaNodes = config_.memoryTierConfigs[0].getMemBind();
+  opts.pageSize = config_.memoryTierConfigs[0].getPageSize();
   return opts;
 }
 

@@ -23,7 +23,7 @@
 #include <numaif.h>
 #include <sys/mman.h>
 #include <sys/shm.h>
-
+#include <dto.h>
 #include <cstring>
 
 #include "cachelib/common/Utils.h"
@@ -298,11 +298,38 @@ void* SysVShmSegment::mapAddress(void* addr) const {
 
 void SysVShmSegment::unMap(void* addr) const { detail::shmDtImpl(addr); }
 
+static void forcePageAllocation(void* addr, size_t size, size_t pageSize) {
+  // Touch every page to force allocation. This is critical for huge pages
+  // because they are allocated on first touch, not at mmap/shmat time.
+  // By prefaulting here, we:
+  // 1. Ensure huge pages are allocated immediately
+  // 2. Fail early if insufficient huge pages are available
+  // 3. Avoid page faults during cache operation
+  char* startAddr = reinterpret_cast<char*>(addr);
+  char* endAddr = startAddr + size;
+  dto_memset_pages(startAddr, endAddr, pageSize);
+  //for (volatile char* curAddr = startAddr; curAddr < endAddr;
+  //     curAddr += pageSize) {
+  //  *curAddr = *curAddr;
+  //}
+}
+
 void SysVShmSegment::memBind(void* addr) const {
+  const size_t pageSize = detail::getPageSize(opts_.pageSize);
+
   if (opts_.memBindNumaNodes.empty()) {
+    // Even without NUMA binding, prefault all pages to ensure:
+    // 1. Huge pages are allocated immediately (not on first access)
+    // 2. We fail early if insufficient huge pages are available
+    // 3. Avoid page faults during normal cache operation
+    forcePageAllocation(addr, getSize(), pageSize);
     return;
   }
+
+  // mbind() will set the NUMA policy and can trigger page allocation,
+  // but we explicitly prefault afterwards to guarantee all pages are allocated
   detail::mbindImpl(addr, getSize(), MPOL_BIND, opts_.memBindNumaNodes, 0);
+  forcePageAllocation(addr, getSize(), pageSize);
 }
 
 void SysVShmSegment::markForRemoval() {

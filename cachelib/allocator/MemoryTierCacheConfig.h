@@ -46,6 +46,14 @@ class MemoryTierCacheConfig {
 
   const NumaBitMask& getMemBind() const noexcept { return numaNodes; }
 
+  // Set page size for this memory tier
+  MemoryTierCacheConfig& setPageSize(PageSizeT _pageSize) {
+    pageSize = _pageSize;
+    return *this;
+  }
+
+  PageSizeT getPageSize() const noexcept { return pageSize; }
+
   size_t calculateTierSize(size_t totalCacheSize, size_t partitionNum) const {
     // TODO: Call this method when tiers are enabled in allocator
     // to calculate tier sizes in bytes.
@@ -72,6 +80,9 @@ class MemoryTierCacheConfig {
 
   // Numa node(s) to bind the tier
   NumaBitMask numaNodes;
+
+  // Page size for this memory tier (NORMAL, TWO_MB, ONE_GB)
+  PageSizeT pageSize{PageSizeT::NORMAL};
 
   // TODO: introduce a container for tier settings when adding support for
   // file-mapped memory

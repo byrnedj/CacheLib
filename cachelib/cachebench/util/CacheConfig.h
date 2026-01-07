@@ -52,13 +52,26 @@ struct MemoryTierConfig : public JSONConfig {
     MemoryTierCacheConfig config = MemoryTierCacheConfig::fromShm();
     config.setRatio(ratio);
     config.setMemBind(NumaBitMask(memBindNodes));
+    config.setPageSize(getPageSizeT());
     return config;
+  }
+
+  // Convert string page size to PageSizeT enum
+  PageSizeT getPageSizeT() const {
+    if (pageSize == "TWO_MB" || pageSize == "2MB") {
+      return PageSizeT::TWO_MB;
+    } else if (pageSize == "ONE_GB" || pageSize == "1GB") {
+      return PageSizeT::ONE_GB;
+    }
+    return PageSizeT::NORMAL;
   }
 
   // Specifies ratio of this memory tier to other tiers
   size_t ratio{0};
   // Allocate memory only from specified NUMA nodes
   std::string memBindNodes{""};
+  // Page size: "NORMAL", "TWO_MB" (or "2MB"), "ONE_GB" (or "1GB")
+  std::string pageSize{"NORMAL"};
 };
 
 struct CacheConfig : public JSONConfig {
