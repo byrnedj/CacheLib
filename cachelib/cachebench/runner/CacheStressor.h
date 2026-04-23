@@ -28,7 +28,9 @@
 #include <thread>
 #include <unordered_set>
 
+#ifdef CACHELIB_BUILD_WITH_DTO
 #include <dto.h>
+#endif
 
 #include "cachelib/cachebench/cache/Cache.h"
 #include "cachelib/cachebench/cache/TimeStampTicker.h"
@@ -45,10 +47,12 @@ namespace cachebench {
 
 constexpr uint32_t kNvmCacheWarmUpCheckRate = 1000;
 
+#ifdef CACHELIB_BUILD_WITH_DTO
 void async_memcpy_callback(void *arg) {
     auto &fn = *reinterpret_cast<std::function<void(void)>*>(arg);
     fn();
 }
+#endif
 
 // Implementation of stressor that uses a workload generator to stress an
 // instance of the cache.  All item's value in CacheStressor follows CacheValue
@@ -500,17 +504,18 @@ class CacheStressor : public Stressor {
       ++stats.setFailure;
       return OpResultType::kSetFailure;
     } else {
+#ifdef CACHELIB_BUILD_WITH_DTO
       if (config_.useDTOAsync && size > 32*1024) {
         std::string_view value = itemValue;
         if (itemValue.empty()) {
             value = hardcodedString_;
         }
-        
+
         //it->markMoving();
         auto insertToCache = [&] {
             cache_->insertOrReplace(it);
         };
-                 
+
         std::function<void(void)> fn = insertToCache;
         dto_memcpy_async(
             it->getMemory(), value.data(), size, &async_memcpy_callback, &fn);
@@ -519,6 +524,10 @@ class CacheStressor : public Stressor {
         populateItem(it, itemValue);
         cache_->insertOrReplace(it);
       }
+#else
+      populateItem(it, itemValue);
+      cache_->insertOrReplace(it);
+#endif
       return OpResultType::kSetSuccess;
     }
   }

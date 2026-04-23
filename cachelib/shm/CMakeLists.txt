@@ -27,6 +27,10 @@ target_link_libraries(cachelib_shm PUBLIC
   numa
 )
 
+if (BUILD_WITH_DTO)
+  target_link_libraries(cachelib_shm PUBLIC dto accel-config)
+endif ()
+
 install(TARGETS cachelib_shm
         EXPORT cachelib-exports
         DESTINATION ${LIB_INSTALL_DIR} )

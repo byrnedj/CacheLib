@@ -23,7 +23,9 @@
 #include <numaif.h>
 #include <sys/mman.h>
 #include <sys/shm.h>
+#ifdef CACHELIB_BUILD_WITH_DTO
 #include <dto.h>
+#endif
 #include <cstring>
 
 #include "cachelib/common/Utils.h"
@@ -307,11 +309,14 @@ static void forcePageAllocation(void* addr, size_t size, size_t pageSize) {
   // 3. Avoid page faults during cache operation
   char* startAddr = reinterpret_cast<char*>(addr);
   char* endAddr = startAddr + size;
+#ifdef CACHELIB_BUILD_WITH_DTO
   dto_memset_pages(startAddr, endAddr, pageSize);
-  //for (volatile char* curAddr = startAddr; curAddr < endAddr;
-  //     curAddr += pageSize) {
-  //  *curAddr = *curAddr;
-  //}
+#else
+  for (volatile char* curAddr = startAddr; curAddr < endAddr;
+       curAddr += pageSize) {
+    *curAddr = *curAddr;
+  }
+#endif
 }
 
 void SysVShmSegment::memBind(void* addr) const {
