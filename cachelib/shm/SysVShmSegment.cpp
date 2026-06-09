@@ -208,6 +208,108 @@ void mbindImpl(void* addr,
   }
 }
 
+// Distribute the already-faulted pages of [addr, addr+size) across the bound
+// NUMA nodes in proportion to `weights`, using a weighted round-robin over
+// page-sized chunks. Placement is done with move_pages() rather than per-page
+// mbind() for two reasons:
+//   1. move_pages() does not split the VMA, so a large segment (e.g. 150GB of
+//      2MB pages => 75k pages) does not blow past vm.max_map_count.
+//   2. per-page mbind() on a single huge-page range is rejected with EINVAL on
+//      this kernel, whereas move_pages() migrates huge pages correctly.
+// Because cache items are hashed uniformly across the whole slab, the access
+// stream hits every node in proportion to its page count regardless of the
+// interleave granularity, so this yields the intended bandwidth split.
+void weightedInterleavePages(void* addr,
+                             size_t size,
+                             size_t pageSize,
+                             const NumaBitMask& memBindNumaNodes,
+                             const std::vector<unsigned int>& weights) {
+  const auto nodes = memBindNumaNodes.getSetNodes();
+  if (nodes.size() != weights.size()) {
+    util::throwSystemError(
+        EINVAL,
+        folly::sformat("numaBindWeights size ({}) must match the number of "
+                       "bound NUMA nodes ({})",
+                       weights.size(), nodes.size()));
+  }
+  for (auto w : weights) {
+    if (w == 0) {
+      util::throwSystemError(EINVAL,
+                             "numaBindWeights entries must be >= 1");
+    }
+  }
+
+  char* const startAddr = reinterpret_cast<char*>(addr);
+  char* const endAddr = startAddr + size;
+
+  // Migrate in batches to bound the temporary arrays passed to move_pages().
+  constexpr size_t kBatch = 4096;
+  std::vector<void*> pages;
+  std::vector<int> targetNodes;
+  std::vector<int> status;
+  pages.reserve(kBatch);
+  targetNodes.reserve(kBatch);
+  status.resize(kBatch);
+
+  size_t migrated = 0;
+  size_t failed = 0;
+  int firstErr = 0;
+  auto flush = [&]() {
+    if (pages.empty()) {
+      return;
+    }
+    long ret = move_pages(/*pid=*/0, pages.size(), pages.data(),
+                          targetNodes.data(), status.data(), MPOL_MF_MOVE);
+    if (ret < 0) {
+      util::throwSystemError(
+          errno,
+          folly::sformat("move_pages() failed: {}", std::strerror(errno)));
+    }
+    for (size_t i = 0; i < pages.size(); ++i) {
+      if (status[i] == targetNodes[i]) {
+        ++migrated;
+      } else {
+        ++failed;
+        if (firstErr == 0) {
+          firstErr = status[i];
+        }
+      }
+    }
+    pages.clear();
+    targetNodes.clear();
+  };
+
+  // Weighted round-robin: emit weights[i] consecutive pages on nodes[i],
+  // then advance to the next bound node, cycling for the whole segment.
+  size_t idx = 0;
+  size_t remaining = weights[0];
+  for (char* curAddr = startAddr; curAddr < endAddr; curAddr += pageSize) {
+    if (remaining == 0) {
+      idx = (idx + 1) % nodes.size();
+      remaining = weights[idx];
+    }
+    pages.push_back(curAddr);
+    targetNodes.push_back(static_cast<int>(nodes[idx]));
+    --remaining;
+    if (pages.size() == kBatch) {
+      flush();
+    }
+  }
+  flush();
+  XLOGF(INFO,
+        "Weighted NUMA interleave: placed {} pages across nodes=[{}] "
+        "weights=[{}] ({} migrated, {} not migrated)",
+        migrated + failed, folly::join(",", nodes), folly::join(",", weights),
+        migrated, failed);
+  if (failed > 0) {
+    XLOGF(WARN,
+          "Weighted NUMA interleave: {} pages could not be migrated to their "
+          "target node (first status={}); page distribution may not match the "
+          "requested weights",
+          failed, firstErr);
+  }
+}
+
 } // namespace detail
 
 void ensureSizeforHugePage(size_t size) {
@@ -328,6 +430,20 @@ void SysVShmSegment::memBind(void* addr) const {
     // 2. We fail early if insufficient huge pages are available
     // 3. Avoid page faults during normal cache operation
     forcePageAllocation(addr, getSize(), pageSize);
+    return;
+  }
+
+  if (!opts_.numaBindWeights.empty()) {
+    // Application-level weighted interleave. Prefault every page first (this
+    // lands them on some node under whatever policy is in effect), then
+    // explicitly migrate each page to its target node following the weighted
+    // round-robin. This bypasses any kernel mempolicy restriction (e.g. the
+    // HMSDK package-locality clamp on MPOL_WEIGHTED_INTERLEAVE) and lets us
+    // place pages on nodes in different packages with an arbitrary ratio.
+    forcePageAllocation(addr, getSize(), pageSize);
+    detail::weightedInterleavePages(addr, getSize(), pageSize,
+                                    opts_.memBindNumaNodes,
+                                    opts_.numaBindWeights);
     return;
   }
 

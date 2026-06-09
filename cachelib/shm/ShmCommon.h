@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 
 #include <system_error>
+#include <vector>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion"
@@ -119,6 +120,18 @@ class NumaBitMask {
     return numa_bitmask_equal(numa_no_nodes_ptr, nodesMask) == 1;
   }
 
+  // Returns the indices of the set bits (bound NUMA nodes) in ascending order.
+  std::vector<unsigned int> getSetNodes() const {
+    std::vector<unsigned int> nodes;
+    const int maxNode = numa_max_node();
+    for (int i = 0; i <= maxNode; ++i) {
+      if (numa_bitmask_isbitset(nodesMask, i)) {
+        nodes.push_back(static_cast<unsigned int>(i));
+      }
+    }
+    return nodes;
+  }
+
  protected:
   native_bitmask_type nodesMask = nullptr;
 };
@@ -128,6 +141,12 @@ struct ShmSegmentOpts {
   bool readOnly{false};
   size_t alignment{1}; // alignment for mapping.
   NumaBitMask memBindNumaNodes;
+  // Per-node weights for application-level weighted interleave across
+  // memBindNumaNodes. When non-empty, its size must equal the number of
+  // bound nodes; pages are distributed across the bound nodes in proportion
+  // to these weights (see SysVShmSegment::memBind). When empty, the segment
+  // is bound with plain MPOL_BIND.
+  std::vector<unsigned int> numaBindWeights;
 
   explicit ShmSegmentOpts(PageSizeT p) : pageSize(p) {}
   explicit ShmSegmentOpts(PageSizeT p, bool ro) : pageSize(p), readOnly(ro) {}

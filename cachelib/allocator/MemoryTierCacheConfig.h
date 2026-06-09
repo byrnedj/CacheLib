@@ -46,6 +46,19 @@ class MemoryTierCacheConfig {
 
   const NumaBitMask& getMemBind() const noexcept { return numaNodes; }
 
+  // Distribute pages across the bound NUMA nodes (see setMemBind) in
+  // proportion to these weights. The number of weights must equal the number
+  // of bound nodes. When empty (default), plain MPOL_BIND is used.
+  MemoryTierCacheConfig& setMemBindWeights(
+      const std::vector<unsigned int>& _weights) {
+    numaBindWeights = _weights;
+    return *this;
+  }
+
+  const std::vector<unsigned int>& getMemBindWeights() const noexcept {
+    return numaBindWeights;
+  }
+
   // Set page size for this memory tier
   MemoryTierCacheConfig& setPageSize(PageSizeT _pageSize) {
     pageSize = _pageSize;
@@ -80,6 +93,9 @@ class MemoryTierCacheConfig {
 
   // Numa node(s) to bind the tier
   NumaBitMask numaNodes;
+
+  // Optional per-node weights for weighted interleave across numaNodes.
+  std::vector<unsigned int> numaBindWeights;
 
   // Page size for this memory tier (NORMAL, TWO_MB, ONE_GB)
   PageSizeT pageSize{PageSizeT::NORMAL};

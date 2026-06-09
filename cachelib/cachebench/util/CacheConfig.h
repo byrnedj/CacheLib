@@ -52,6 +52,11 @@ struct MemoryTierConfig : public JSONConfig {
     MemoryTierCacheConfig config = MemoryTierCacheConfig::fromShm();
     config.setRatio(ratio);
     config.setMemBind(NumaBitMask(memBindNodes));
+    if (!memBindWeights.empty()) {
+      config.setMemBindWeights(
+          std::vector<unsigned int>(memBindWeights.begin(),
+                                    memBindWeights.end()));
+    }
     config.setPageSize(getPageSizeT());
     return config;
   }
@@ -70,6 +75,12 @@ struct MemoryTierConfig : public JSONConfig {
   size_t ratio{0};
   // Allocate memory only from specified NUMA nodes
   std::string memBindNodes{""};
+  // Optional per-node weights for weighted interleave across memBindNodes.
+  // When set, the number of weights must equal the number of bound nodes and
+  // pages are distributed across them in proportion to these weights. E.g.
+  // memBindNodes="0,1" with memBindWeights=[3,1] places 75% of pages on node 0
+  // and 25% on node 1.
+  std::vector<uint64_t> memBindWeights{};
   // Page size: "NORMAL", "TWO_MB" (or "2MB"), "ONE_GB" (or "1GB")
   std::string pageSize{"NORMAL"};
 };
