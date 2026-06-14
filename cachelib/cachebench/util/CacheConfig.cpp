@@ -101,6 +101,16 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
     }
   }
 
+  // Optional per-pool NUMA bindings, indexed by pool.
+  if (configJson.count("poolNumaBindings")) {
+    for (auto& it : configJson["poolNumaBindings"]) {
+      poolNumaBindings.push_back(
+          PoolNumaBindingConfig(it).getPoolNumaBinding());
+    }
+  }
+
+  JSONSetVal(configJson, poolThreadAffinity);
+
   JSONSetVal(configJson, useTraceTimeStamp);
   JSONSetVal(configJson, printNvmCounters);
   JSONSetVal(configJson, tickerSynchingSeconds);
@@ -112,7 +122,7 @@ CacheConfig::CacheConfig(const folly::dynamic& configJson) {
   // if you added new fields to the configuration, update the JSONSetVal
   // to make them available for the json configs and increment the size
   // below
-  checkCorrectSize<CacheConfig, 760>();
+  checkCorrectSize<CacheConfig, 784>();
 
   if (numPools != poolSizes.size()) {
     throw std::invalid_argument(folly::sformat(
@@ -149,6 +159,13 @@ MemoryTierConfig::MemoryTierConfig(const folly::dynamic& configJson) {
   JSONSetVal(configJson, pageSize);
 
   checkCorrectSize<MemoryTierConfig, 96>();
+}
+
+PoolNumaBindingConfig::PoolNumaBindingConfig(const folly::dynamic& configJson) {
+  JSONSetVal(configJson, nodes);
+  JSONSetVal(configJson, weights);
+
+  checkCorrectSize<PoolNumaBindingConfig, 56>();
 }
 } // namespace cachebench
 } // namespace cachelib

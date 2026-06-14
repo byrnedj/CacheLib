@@ -24,6 +24,7 @@
 #include <sys/types.h>
 
 #include <chrono>
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 
@@ -116,6 +117,8 @@ SlabAllocator::SlabAllocator(void* memoryStart,
       memorySize_(roundDownToSlabSize(memorySize)),
       slabMemoryStart_(computeSlabMemoryStart(memoryStart_, memorySize_)),
       nextSlabAllocation_(slabMemoryStart_),
+      poolNumaBindings_(config.poolNumaBindings),
+      pageSize_(config.pageSize),
       ownsMemory_(ownsMemory) {
   checkState();
 
@@ -124,6 +127,17 @@ SlabAllocator::SlabAllocator(void* memoryStart,
 
   if (config.excludeFromCoredump) {
     excludeMemoryFromCoredump();
+  }
+
+  // If per-pool NUMA bindings AND per-pool size fractions are both configured,
+  // eagerly partition the slab region into per-pool sub-regions and place each
+  // sub-region's pages on its pool's nodes up front. This removes the warmup
+  // ramp and the cross-socket stranding caused by lazy per-slab migration. On
+  // success, makeNewSlab() hands slabs from each pool's own pre-placed region.
+  // When this is not set up (no bindings, no fractions, or failure), we fall
+  // back to the lazy per-slab path in makeNewSlab()/applyPoolNumaBinding().
+  if (!poolNumaBindings_.empty() && !config.poolSizeFractions.empty()) {
+    setupEagerPoolPlacement(config.poolSizeFractions);
   }
 
   if (config.lockMemory) {
@@ -145,6 +159,8 @@ SlabAllocator::SlabAllocator(const serialization::SlabAllocatorObject& object,
       memorySize_(*object.memorySize()),
       slabMemoryStart_(computeSlabMemoryStart(memoryStart_, memorySize_)),
       nextSlabAllocation_(getSlabForIdx(*object.nextSlabIdx())),
+      poolNumaBindings_(config.poolNumaBindings),
+      pageSize_(config.pageSize),
       canAllocate_(*object.canAllocate()),
       ownsMemory_(false) {
   if (Slab::kSize != *object.slabSize()) {
@@ -355,8 +371,215 @@ void SlabAllocator::initializeHeader(Slab* slab, PoolId id) {
   header = new (header) SlabHeader(id);
 }
 
+void SlabAllocator::applyPoolNumaBinding(Slab* slab, PoolId id) {
+  // Fast no-op path: nothing configured.
+  if (poolNumaBindings_.empty()) {
+    return;
+  }
+  if (id < 0 || static_cast<size_t>(id) >= poolNumaBindings_.size()) {
+    return;
+  }
+  const auto& binding = poolNumaBindings_[id];
+  if (binding.empty()) {
+    return;
+  }
+  if (pageSize_ == 0) {
+    XLOGF(WARN,
+          "Per-pool NUMA binding configured for pool {} but page size is "
+          "unknown; skipping placement",
+          static_cast<int>(id));
+    return;
+  }
+  // The slab memory is already faulted in (shm segment prefaults at attach
+  // time), so we can migrate its pages directly to the pool's nodes. A single
+  // slab is only a couple of huge pages, far smaller than a weighted cycle, so
+  // we keep a persistent per-pool cursor: successive slabs of the same pool
+  // resume the same weighted round-robin, which is what actually realizes the
+  // requested ratio (otherwise every slab would restart on the highest-weight
+  // node and the low-weight nodes would never receive pages).
+  InterleaveCursor* cursor = nullptr;
+  std::unique_lock<std::mutex> cursorLock(numaCursorLock_);
+  if (poolNumaCursors_.size() <= static_cast<size_t>(id)) {
+    poolNumaCursors_.resize(static_cast<size_t>(id) + 1);
+  }
+  cursor = &poolNumaCursors_[id];
+  // Hold the cursor lock across the migration so the per-pool round-robin
+  // position stays consistent under concurrent makeNewSlab() calls. Slab
+  // creation is comparatively rare so this serialization is acceptable.
+  weightedInterleavePages(slab, Slab::kSize, pageSize_, binding.nodes,
+                          binding.weights, cursor);
+}
+
+void SlabAllocator::setupEagerPoolPlacement(
+    const std::vector<double>& poolSizeFractions) {
+  if (pageSize_ == 0) {
+    XLOG(WARN,
+         "Eager per-pool NUMA placement requested but page size is unknown; "
+         "falling back to lazy per-slab migration");
+    return;
+  }
+
+  // The number of pools we can place is bounded by how many of each vector we
+  // have. Pools created beyond this set (or pools whose binding is empty) are
+  // left to the global/lazy path.
+  const size_t numPools =
+      std::min(poolNumaBindings_.size(), poolSizeFractions.size());
+  if (numPools == 0) {
+    return;
+  }
+
+  // Total usable slabs in [slabMemoryStart_, slabMemoryEnd).
+  const auto* const slabEnd = getSlabMemoryEnd();
+  const size_t totalSlabs =
+      static_cast<size_t>(slabEnd - slabMemoryStart_);
+  if (totalSlabs == 0) {
+    return;
+  }
+
+  poolRegionNext_.assign(numPools, nullptr);
+  poolRegionEnd_.assign(numPools, nullptr);
+  poolRegionStart_.assign(numPools, nullptr);
+  poolFreeSlabs_.assign(numPools, {});
+
+  // Carve contiguous sub-regions sized by the fractions. We round each pool's
+  // slab count and let the last region absorb any rounding remainder so the
+  // whole region is covered exactly. Pools are handed slabs from their own
+  // sub-region by makeNewSlab(); the cache's per-pool sizing (driven by the
+  // same fractions) keeps demand within each sub-region.
+  Slab* cursor = slabMemoryStart_;
+  for (size_t id = 0; id < numPools; ++id) {
+    size_t poolSlabs;
+    if (id + 1 == numPools) {
+      // Last pool takes everything remaining (covers rounding remainder).
+      poolSlabs = static_cast<size_t>(slabEnd - cursor);
+    } else {
+      poolSlabs = static_cast<size_t>(
+          static_cast<double>(totalSlabs) * poolSizeFractions[id] + 0.5);
+      const size_t remaining = static_cast<size_t>(slabEnd - cursor);
+      if (poolSlabs > remaining) {
+        poolSlabs = remaining;
+      }
+    }
+
+    Slab* regionStart = cursor;
+    Slab* regionEnd = cursor + poolSlabs;
+    poolRegionStart_[id] = regionStart;
+    poolRegionNext_[id] = regionStart;
+    poolRegionEnd_[id] = regionEnd;
+    cursor = regionEnd;
+
+    // Mark every slab header in this sub-region as invalid (poolId/classId =
+    // kInvalid) up front. nextSlabAllocation_ is pinned to the end of the
+    // region below so isValidSlab() returns true for the whole region; the
+    // reaper and other slab walkers (forEachAllocation) therefore visit these
+    // slabs but must skip any that have not yet been handed out. makeNewSlab()
+    // re-initializes the header with the real poolId when it hands a slab out.
+    for (Slab* s = regionStart; s < regionEnd; ++s) {
+      const auto idx = static_cast<SlabIdx>(s - slabMemoryStart_);
+      auto* header = getSlabHeader(static_cast<unsigned int>(idx));
+      new (header) SlabHeader();
+    }
+
+    // Place this sub-region's pages on the pool's nodes (weighted), if the pool
+    // has a binding. A pool without a binding still gets its own contiguous
+    // sub-region but is left where it was prefaulted (global behavior for that
+    // pool). The pages are already faulted (the shm segment prefaults at attach
+    // time), so a single weighted move_pages() over the whole region places
+    // them up front. No per-pool cursor is needed: the region is far larger
+    // than one weighted cycle, so the round-robin realizes the ratio within it.
+    if (poolSlabs > 0 && static_cast<size_t>(id) < poolNumaBindings_.size()) {
+      const auto& binding = poolNumaBindings_[id];
+      if (!binding.empty()) {
+        weightedInterleavePages(regionStart, poolSlabs * sizeof(Slab),
+                                pageSize_, binding.nodes, binding.weights,
+                                /*cursor=*/nullptr);
+      }
+    }
+
+    XLOGF(INFO,
+          "Eager per-pool placement: pool {} -> [{}, {}) ({} slabs, {:.1f} GB) "
+          "placed on bound nodes",
+          static_cast<int>(id), static_cast<void*>(regionStart),
+          static_cast<void*>(regionEnd), poolSlabs,
+          poolSlabs * sizeof(Slab) / static_cast<double>(1ULL << 30));
+  }
+
+  // The whole slab region is now partitioned and placed; every slab belongs to
+  // some pool's sub-region. Pin nextSlabAllocation_ to the end of the region so
+  // isValidSlab() treats every (placed) slab as valid regardless of which
+  // per-pool bump pointer it came from. Slabs are still handed out lazily via
+  // the per-pool bump pointers, and a slab pointer is only ever derived from a
+  // real allocation, so marking a not-yet-handed-out slab valid is benign (its
+  // header allocSize is 0, which getRandomAlloc()/lookups treat as empty).
+  nextSlabAllocation_ = const_cast<Slab*>(slabEnd);
+
+  eagerPlacement_ = true;
+}
+
+Slab* SlabAllocator::makeNewSlabFromPoolRegion(PoolId id) {
+  // Caller must hold lock_.
+  if (id < 0 || static_cast<size_t>(id) >= poolRegionNext_.size()) {
+    // Pool outside the eagerly-partitioned set. The whole slab region is owned
+    // by pools [0, numPools), so there is no spare memory: report exhaustion.
+    // (With poolThreadAffinity, bindings/fractions cover every pool, so this
+    // path is not hit in practice.)
+    return nullptr;
+  }
+  Slab*& next = poolRegionNext_[id];
+  Slab* const end = poolRegionEnd_[id];
+  if (next >= end) {
+    // This pool's sub-region is exhausted; the pool is full.
+    return nullptr;
+  }
+  return next++;
+}
+
+PoolId SlabAllocator::poolForEagerSlab(const Slab* slab) const noexcept {
+  if (!eagerPlacement_) {
+    return -1;
+  }
+  for (size_t id = 0; id < poolRegionStart_.size(); ++id) {
+    if (slab >= poolRegionStart_[id] && slab < poolRegionEnd_[id]) {
+      return static_cast<PoolId>(id);
+    }
+  }
+  return -1;
+}
+
 Slab* SlabAllocator::makeNewSlab(PoolId id) {
-  Slab* slab = makeNewSlabImpl();
+  Slab* slab = nullptr;
+  if (eagerPlacement_) {
+    // Eager path: hand a slab from this pool's pre-placed sub-region. No
+    // per-slab migration happens; pages are already on the pool's nodes.
+    if (!canAllocate_) {
+      return nullptr;
+    }
+    LockHolder l(lock_);
+    // Prefer a previously-freed slab from this pool's own sub-region so its
+    // NUMA placement is preserved on reuse.
+    if (static_cast<size_t>(id) < poolFreeSlabs_.size() &&
+        !poolFreeSlabs_[id].empty()) {
+      slab = poolFreeSlabs_[id].back();
+      poolFreeSlabs_[id].pop_back();
+    } else {
+      slab = makeNewSlabFromPoolRegion(id);
+      if (slab == nullptr) {
+        // This pool's sub-region is exhausted. Do NOT clear the global
+        // canAllocate_ flag here: other pools may still have free slabs in
+        // their own sub-regions. Returning nullptr signals only this pool is
+        // full (the cache treats it like an out-of-memory pool).
+        return nullptr;
+      }
+      // nextSlabAllocation_ is pinned at the end of the slab region in eager
+      // mode (see setupEagerPoolPlacement), so the whole partitioned region is
+      // already considered valid by isValidSlab(); we hand slabs out of the
+      // per-pool bump pointers rather than advancing it here. A slab pointer is
+      // only ever derived from a real allocation, so marking not-yet-handed-out
+      // slabs valid is benign.
+    }
+  } else {
+    slab = makeNewSlabImpl();
+  }
   if (slab == nullptr) {
     return nullptr;
   }
@@ -364,6 +587,11 @@ Slab* SlabAllocator::makeNewSlab(PoolId id) {
   memoryPoolSize_[id] += sizeof(Slab);
   // initialize the header for the slab.
   initializeHeader(slab, id);
+  // On the lazy fallback path, migrate the slab's pages onto the pool's nodes.
+  // On the eager path this is a no-op (pages were placed up front at init).
+  if (!eagerPlacement_) {
+    applyPoolNumaBinding(slab, id);
+  }
   return slab;
 }
 
@@ -378,7 +606,19 @@ void SlabAllocator::freeSlab(Slab* slab) {
   memoryPoolSize_[header->poolId] -= sizeof(Slab);
   // grab the lock
   LockHolder l(lock_);
-  freeSlabs_.push_back(slab);
+  if (eagerPlacement_) {
+    // Route the slab back to the free list of the pool whose sub-region
+    // physically owns it, so on reuse it keeps its NUMA placement. (Use the
+    // owning region rather than the header's poolId in case of rebalancing.)
+    const PoolId owner = poolForEagerSlab(slab);
+    if (owner >= 0 && static_cast<size_t>(owner) < poolFreeSlabs_.size()) {
+      poolFreeSlabs_[owner].push_back(slab);
+    } else {
+      freeSlabs_.push_back(slab);
+    }
+  } else {
+    freeSlabs_.push_back(slab);
+  }
   canAllocate_ = true;
   header->resetAllocInfo();
 }

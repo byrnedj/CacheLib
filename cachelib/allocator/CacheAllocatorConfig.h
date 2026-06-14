@@ -37,6 +37,7 @@
 #include "cachelib/allocator/RebalanceStrategy.h"
 #include "cachelib/allocator/Util.h"
 #include "cachelib/common/EventInterface.h"
+#include "cachelib/common/NumaPlacement.h"
 #include "cachelib/common/Throttler.h"
 
 namespace facebook {
@@ -231,6 +232,20 @@ class CacheAllocatorConfig {
 
   // Return reference to MemoryTierCacheConfigs.
   const MemoryTierConfigs& getMemoryTierConfigs() const noexcept;
+
+  // Set optional per-pool NUMA bindings (indexed by PoolId). Pools with a
+  // non-empty binding have their slabs placed across the bound nodes using a
+  // weighted round-robin; other pools use the global memory-tier binding.
+  CacheAllocatorConfig& setPoolNumaBindings(
+      std::vector<PoolNumaBinding> bindings);
+
+  // Set the per-pool size fractions (indexed by PoolId, must sum to ~1.0).
+  // Used together with setPoolNumaBindings to eagerly partition the slab
+  // region into per-pool sub-regions at init and place each sub-region's
+  // pages on that pool's nodes up front (no per-slab migration during the
+  // run). Optional; when empty, per-pool placement falls back to the lazy
+  // per-slab migration path.
+  CacheAllocatorConfig& setPoolSizeFractions(std::vector<double> fractions);
 
   // This turns on a background worker that periodically scans through the
   // access container and look for expired items and remove them.
@@ -637,6 +652,19 @@ class CacheAllocatorConfig {
   // This option has no effect when attaching to existing cache.
   bool lockMemory{false};
 
+  // Optional per-pool NUMA bindings, indexed by PoolId. When set for a pool,
+  // each slab handed to that pool has its pages placed across the pool's nodes
+  // using a weighted round-robin. Pools without a binding fall back to the
+  // global memory-tier NUMA binding. Empty by default (no per-pool placement).
+  std::vector<PoolNumaBinding> poolNumaBindings{};
+
+  // Optional per-pool size fractions (indexed by PoolId, summing to ~1.0).
+  // When set alongside poolNumaBindings, the SlabAllocator carves its slab
+  // region into per-pool contiguous sub-regions sized by these fractions and
+  // places each sub-region's pages on that pool's nodes eagerly at init.
+  // Empty by default (lazy per-slab migration fallback).
+  std::vector<double> poolSizeFractions{};
+
   // These configs configure how MemoryAllocator will be generating
   // allocation class sizes for each pool by default
   double allocationClassSizeFactor{1.25};
@@ -968,6 +996,20 @@ template <typename T>
 const typename CacheAllocatorConfig<T>::MemoryTierConfigs&
 CacheAllocatorConfig<T>::getMemoryTierConfigs() const noexcept {
   return memoryTierConfigs;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setPoolNumaBindings(
+    std::vector<PoolNumaBinding> bindings) {
+  poolNumaBindings = std::move(bindings);
+  return *this;
+}
+
+template <typename T>
+CacheAllocatorConfig<T>& CacheAllocatorConfig<T>::setPoolSizeFractions(
+    std::vector<double> fractions) {
+  poolSizeFractions = std::move(fractions);
+  return *this;
 }
 
 template <typename T>

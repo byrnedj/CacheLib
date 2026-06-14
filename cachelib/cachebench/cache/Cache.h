@@ -566,6 +566,16 @@ Cache<Allocator>::Cache(const CacheConfig& config,
     allocatorConfig_.configureMemoryTiers(config_.memoryTierConfigs);
   }
 
+  if (!config_.poolNumaBindings.empty()) {
+    allocatorConfig_.setPoolNumaBindings(config_.poolNumaBindings);
+    // Forward the per-pool size fractions so the SlabAllocator can eagerly
+    // partition the slab region per pool and place each pool's pages on its
+    // nodes up front (no per-slab migration during the run). The pools are
+    // created in PoolId order (0..numPools-1) with these exact fractions in
+    // Cache::initializeCache(), so the index alignment is preserved.
+    allocatorConfig_.setPoolSizeFractions(config_.poolSizes);
+  }
+
   auto cleanupGuard = folly::makeGuard([&] {
     if (!nvmCacheFilePath_.empty()) {
       util::removePath(nvmCacheFilePath_);

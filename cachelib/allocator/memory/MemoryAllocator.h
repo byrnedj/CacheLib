@@ -109,6 +109,21 @@ class MemoryAllocator {
     // allocator is not shared, user needs to ensure there are appropriate
     // rlimits setup to lock the memory.
     bool lockMemory{false};
+
+    // Optional per-pool NUMA bindings, indexed by PoolId. Forwarded to the
+    // SlabAllocator so that slabs handed to a bound pool have their pages
+    // placed across that pool's nodes (weighted). Empty by default (no per-pool
+    // placement, preserving global behavior).
+    std::vector<PoolNumaBinding> poolNumaBindings;
+
+    // Page size (in bytes) of the backing memory, forwarded to the
+    // SlabAllocator for per-pool page migration. 0 means unspecified.
+    size_t pageSize{0};
+
+    // Optional per-pool size fractions (indexed by PoolId). Forwarded to the
+    // SlabAllocator to eagerly partition the slab region into per-pool
+    // sub-regions placed up front. Empty by default.
+    std::vector<double> poolSizeFractions;
   };
 
   // Creates a memory allocator out of the caller allocated memory region. The

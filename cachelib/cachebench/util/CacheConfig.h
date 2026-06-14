@@ -85,6 +85,31 @@ struct MemoryTierConfig : public JSONConfig {
   std::string pageSize{"NORMAL"};
 };
 
+// Parse a single per-pool NUMA binding from JSON, e.g.
+// {"nodes":"0,2", "weights":[21,1]}. `nodes` is a comma-separated node list
+// (same syntax as memBindNodes) and `weights` is a per-node weight list.
+struct PoolNumaBindingConfig : public JSONConfig {
+  PoolNumaBindingConfig() {}
+
+  explicit PoolNumaBindingConfig(const folly::dynamic& configJson);
+
+  // Convert to the allocator's PoolNumaBinding type.
+  PoolNumaBinding getPoolNumaBinding() const {
+    PoolNumaBinding binding;
+    if (!nodes.empty()) {
+      binding.nodes = NumaBitMask(nodes).getSetNodes();
+    }
+    binding.weights =
+        std::vector<unsigned int>(weights.begin(), weights.end());
+    return binding;
+  }
+
+  // Comma-separated list of NUMA nodes for this pool, e.g. "0,2".
+  std::string nodes{""};
+  // Per-node weights; size must equal the number of nodes.
+  std::vector<uint64_t> weights{};
+};
+
 struct CacheConfig : public JSONConfig {
   // by defaullt, lru allocator. can be set to LRU-2Q.
   std::string allocator{"LRU"};
@@ -266,6 +291,19 @@ struct CacheConfig : public JSONConfig {
 
   // Memory tiers configs
   std::vector<MemoryTierCacheConfig> memoryTierConfigs{};
+
+  // Optional per-pool NUMA bindings, indexed by pool. When present, each pool's
+  // slabs are placed across the pool's nodes with the given weights. Parsed
+  // from the "poolNumaBindings" JSON array. Empty by default (no per-pool
+  // placement, behavior identical to global memory-tier binding).
+  std::vector<PoolNumaBinding> poolNumaBindings{};
+
+  // If enabled (and poolNumaBindings is configured), each cachebench worker
+  // thread is assigned to exactly one pool and pinned to that pool's local
+  // socket CPUs, and only issues operations against (and accesses keys of)
+  // that pool. This keeps all access NUMA-local so both sockets work their
+  // local memory in parallel. Default false => behavior identical to before.
+  bool poolThreadAffinity{false};
 
   // If enabled, we will use the timestamps from the trace file in the ticker
   // so that the cachebench will observe time based on timestamps from the trace

@@ -22,6 +22,7 @@ add_library (cachelib_common
   ${BLOOM_THRIFT_FILES}
   hothash/HotHashDetector.cpp
   inject_pause.cpp
+  NumaPlacement.cpp
   PercentileStats.cpp
   PeriodicWorker.cpp
   piecewise/GenericPieces.cpp
@@ -40,6 +41,7 @@ target_link_libraries(cachelib_common PUBLIC
   Folly::folly_exception_tracer
   Folly::folly_exception_tracer_base
   Folly::folly_exception_counter
+  numa
 )
 
 install(TARGETS cachelib_common

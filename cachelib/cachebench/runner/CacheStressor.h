@@ -28,6 +28,10 @@
 #include <thread>
 #include <unordered_set>
 
+#include <numa.h>
+#include <pthread.h>
+#include <sched.h>
+
 #ifdef CACHELIB_BUILD_WITH_DTO
 #include <dto.h>
 #endif
@@ -130,6 +134,30 @@ class CacheStressor : public Stressor {
           config_.keyPoolDistribution.size(), cache_->numPools()));
     }
 
+    // --- Component B: per-pool thread affinity ---
+    poolThreadAffinity_ = cacheConfig.poolThreadAffinity;
+    poolNumaBindings_ = cacheConfig.poolNumaBindings;
+    if (poolThreadAffinity_) {
+      const uint64_t numPools = cache_->numPools();
+      if (poolNumaBindings_.size() < numPools) {
+        throw std::invalid_argument(folly::sformat(
+            "poolThreadAffinity requires poolNumaBindings for every pool. "
+            "numPools: {}, poolNumaBindings.size(): {}",
+            numPools, poolNumaBindings_.size()));
+      }
+      if (config_.numThreads < numPools) {
+        throw std::invalid_argument(folly::sformat(
+            "poolThreadAffinity requires numThreads >= numPools so every pool "
+            "gets at least one worker. numThreads: {}, numPools: {}",
+            config_.numThreads, numPools));
+      }
+      if (numa_available() < 0) {
+        throw std::runtime_error(
+            "poolThreadAffinity is enabled but libnuma reports NUMA is not "
+            "available on this system");
+      }
+    }
+
     if (config_.checkConsistency) {
       cache_->enableConsistencyCheck(wg_->getAllKeys());
     }
@@ -160,10 +188,16 @@ class CacheStressor : public Stressor {
 
       for (uint64_t i = 0; i < config_.numThreads; ++i) {
         workers.push_back(
-            std::thread([this, throughputStats = &throughputStats_.at(i),
+            std::thread([this, i, throughputStats = &throughputStats_.at(i),
                          threadName = folly::sformat("cb_stressor_{}", i)]() {
               folly::setThreadName(threadName);
-              stressByDiscreteDistribution(*throughputStats);
+              if (poolThreadAffinity_) {
+                PoolId pid = poolForThread(i);
+                pinThreadToPool(i, pid);
+                stressByDiscreteDistribution(*throughputStats, pid);
+              } else {
+                stressByDiscreteDistribution(*throughputStats);
+              }
             }));
       }
       for (auto& worker : workers) {
@@ -243,6 +277,80 @@ class CacheStressor : public Stressor {
     return val;
   }
 
+  // --- Component B: per-pool thread affinity helpers ---
+
+  // Evenly distribute numThreads across numPools: thread i -> pool
+  // floor(i * numPools / numThreads). Contiguous blocks per pool.
+  PoolId poolForThread(uint64_t threadIdx) const {
+    const uint64_t numPools = cache_->numPools();
+    return static_cast<PoolId>((threadIdx * numPools) / config_.numThreads);
+  }
+
+  // For a pool, return its CPU-bearing (DDR) NUMA node: the node in the pool's
+  // binding for which numa_node_to_cpus() yields a non-empty CPU set. CXL nodes
+  // have no CPUs and are skipped. Returns -1 if none found.
+  int cpuBearingNodeForPool(PoolId pid) const {
+    const auto& binding = poolNumaBindings_.at(pid);
+    struct bitmask* cpus = numa_allocate_cpumask();
+    int found = -1;
+    for (unsigned int node : binding.nodes) {
+      if (numa_node_to_cpus(static_cast<int>(node), cpus) != 0) {
+        continue;
+      }
+      if (numa_bitmask_weight(cpus) > 0) {
+        found = static_cast<int>(node);
+        break;
+      }
+    }
+    numa_free_cpumask(cpus);
+    return found;
+  }
+
+  // Pin the calling thread to the CPUs of the given pool's local socket and
+  // log the binding. No-op (with a warning) if the pool has no CPU-bearing
+  // node. Returns the node it pinned to, or -1.
+  int pinThreadToPool(uint64_t threadIdx, PoolId pid) {
+    int node = cpuBearingNodeForPool(pid);
+    if (node < 0) {
+      XLOGF(WARN,
+            "poolThreadAffinity: pool {} (thread {}) has no CPU-bearing NUMA "
+            "node in its binding; leaving thread unpinned",
+            static_cast<int>(pid), threadIdx);
+      return -1;
+    }
+    struct bitmask* cpus = numa_allocate_cpumask();
+    if (numa_node_to_cpus(node, cpus) != 0) {
+      numa_free_cpumask(cpus);
+      XLOGF(WARN, "poolThreadAffinity: numa_node_to_cpus({}) failed", node);
+      return -1;
+    }
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    unsigned int nCpus = numa_num_configured_cpus();
+    int count = 0;
+    for (unsigned int cpu = 0; cpu < nCpus; ++cpu) {
+      if (numa_bitmask_isbitset(cpus, cpu)) {
+        CPU_SET(cpu, &cpuset);
+        ++count;
+      }
+    }
+    numa_free_cpumask(cpus);
+    int rc =
+        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (rc != 0) {
+      XLOGF(ERR,
+            "poolThreadAffinity: pthread_setaffinity_np failed for thread {} "
+            "pool {} node {} rc {}",
+            threadIdx, static_cast<int>(pid), node, rc);
+      return -1;
+    }
+    XLOGF(INFO,
+          "poolThreadAffinity: thread {} -> pool {} pinned to NUMA node {} "
+          "({} CPUs)",
+          threadIdx, static_cast<int>(pid), node, count);
+    return node;
+  }
+
   folly::SharedMutex& getLock(Key key) {
     auto bucket = MurmurHash2{}(key.data(), key.size()) % locks_.size();
     return locks_[bucket];
@@ -284,7 +392,9 @@ class CacheStressor : public Stressor {
   // Throughput and Hit/Miss rates are tracked here as well
   //
   // @param stats       Throughput stats
-  void stressByDiscreteDistribution(ThroughputStats& stats) {
+  void stressByDiscreteDistribution(
+      ThroughputStats& stats,
+      std::optional<PoolId> forcedPool = std::nullopt) {
     std::mt19937_64 gen(folly::Random::rand64());
     std::discrete_distribution<> opPoolDist(config_.opPoolDistribution.begin(),
                                             config_.opPoolDistribution.end());
@@ -329,7 +439,13 @@ class CacheStressor : public Stressor {
 #endif
         ++stats.ops;
 
-        const auto pid = static_cast<PoolId>(opPoolDist(gen));
+        // When per-pool thread affinity is on, force this thread's stream to
+        // its assigned pool: getReq(pid, ...) draws keys only from that pool's
+        // key range, and allocate(pid, ...) places the value in that pool, so
+        // there is no cross-pool (cross-socket) access.
+        const auto pid = forcedPool.has_value()
+                             ? forcedPool.value()
+                             : static_cast<PoolId>(opPoolDist(gen));
         const Request& req(getReq(pid, gen, lastRequestId));
         OpType op = req.getOp();
         std::string_view key = req.key;
@@ -624,6 +740,13 @@ class CacheStressor : public Stressor {
 
   // Whether flash cache has been warmed up
   bool hasNvmCacheWarmedUp_{false};
+
+  // --- Component B: per-pool thread affinity ---
+  // When true, each worker thread is bound to a single pool, pinned to that
+  // pool's local-socket CPUs, and only issues ops/keys for that pool.
+  bool poolThreadAffinity_{false};
+  // Per-pool NUMA bindings copied from CacheConfig (indexed by PoolId).
+  std::vector<PoolNumaBinding> poolNumaBindings_;
 };
 } // namespace cachebench
 } // namespace cachelib

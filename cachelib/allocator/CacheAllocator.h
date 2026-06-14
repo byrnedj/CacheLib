@@ -1927,7 +1927,7 @@ class CacheAllocator : public CacheBase {
 
   static typename MemoryAllocator::Config getAllocatorConfig(
       const Config& config) {
-    return MemoryAllocator::Config{
+    typename MemoryAllocator::Config allocatorConfig{
         config.defaultAllocSizes.empty()
             ? util::generateAllocSizes(
                   config.allocationClassSizeFactor,
@@ -1937,6 +1937,19 @@ class CacheAllocator : public CacheBase {
             : config.defaultAllocSizes,
         config.enableZeroedSlabAllocs, config.disableFullCoredump,
         config.lockMemory};
+    // Forward optional per-pool NUMA bindings down to the SlabAllocator so that
+    // slabs handed to bound pools get placed across their nodes. The page size
+    // is taken from the (single) memory tier config and is needed to migrate
+    // page-by-page. Both are no-ops when poolNumaBindings is empty.
+    allocatorConfig.poolNumaBindings = config.poolNumaBindings;
+    // Per-pool size fractions enable eager partitioning of the slab region
+    // into per-pool sub-regions placed up front (no per-slab migration).
+    allocatorConfig.poolSizeFractions = config.poolSizeFractions;
+    if (!config.memoryTierConfigs.empty()) {
+      allocatorConfig.pageSize =
+          detail::getPageSize(config.memoryTierConfigs[0].getPageSize());
+    }
+    return allocatorConfig;
   }
 
   // starts one of the cache workers passing the current instance and the args

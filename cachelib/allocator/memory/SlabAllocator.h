@@ -35,6 +35,7 @@
 
 #include "cachelib/allocator/memory/CompressedPtr.h"
 #include "cachelib/allocator/memory/Slab.h"
+#include "cachelib/common/NumaPlacement.h"
 #include "cachelib/common/Utils.h"
 
 namespace facebook {
@@ -54,12 +55,43 @@ class SlabAllocator {
     Config() {}
     Config(bool _excludeFromCoreDump, bool _lockMemory)
         : excludeFromCoredump(_excludeFromCoreDump), lockMemory(_lockMemory) {}
+    Config(bool _excludeFromCoreDump,
+           bool _lockMemory,
+           std::vector<PoolNumaBinding> _poolNumaBindings,
+           size_t _pageSize,
+           std::vector<double> _poolSizeFractions = {})
+        : excludeFromCoredump(_excludeFromCoreDump),
+          lockMemory(_lockMemory),
+          poolNumaBindings(std::move(_poolNumaBindings)),
+          pageSize(_pageSize),
+          poolSizeFractions(std::move(_poolSizeFractions)) {}
     // exclude the memory region from core dumps
     bool excludeFromCoredump{false};
 
     // lock the pages in memory, forcing to allocate them and retaining them in
     // memory even when untouched.
     bool lockMemory{false};
+
+    // Optional per-pool NUMA bindings, indexed by PoolId. When the binding for
+    // a given pool is non-empty, each slab handed to that pool in makeNewSlab()
+    // has its pages migrated onto that pool's nodes using a weighted
+    // round-robin (see weightedInterleavePages). Pools without a binding (or
+    // when this vector is empty) are left untouched, preserving the existing
+    // whole-cache placement behavior.
+    std::vector<PoolNumaBinding> poolNumaBindings;
+
+    // Page size (in bytes) of the backing memory. Used to migrate per-page when
+    // per-pool NUMA bindings are configured (e.g. 2MB for huge pages). 0 means
+    // unspecified; per-pool placement requires a non-zero page size.
+    size_t pageSize{0};
+
+    // Optional per-pool size fractions (indexed by PoolId, summing to ~1.0).
+    // When non-empty together with poolNumaBindings, the slab region is carved
+    // into per-pool contiguous sub-regions sized by these fractions and each
+    // sub-region's pages are placed on the pool's nodes eagerly at init. When
+    // empty, per-pool placement falls back to the lazy per-slab migration done
+    // in makeNewSlab().
+    std::vector<double> poolSizeFractions;
   };
 
   // initialize the slab allocator for the range of memory starting from
@@ -372,6 +404,30 @@ class SlabAllocator {
   // Initialize the header for the given slab and pool
   void initializeHeader(Slab* slab, PoolId id);
 
+  // If a per-pool NUMA binding is configured for `id`, migrate the pages of
+  // `slab` onto that pool's nodes using a weighted round-robin. No-op when no
+  // per-pool bindings are configured or `id` has no binding. Only used on the
+  // lazy fallback path (when eager per-pool partitioning is not active).
+  void applyPoolNumaBinding(Slab* slab, PoolId id);
+
+  // Carve the slab region into contiguous per-pool sub-regions sized by
+  // config.poolSizeFractions and place each sub-region's pages on that pool's
+  // nodes eagerly (one weighted move_pages() over the whole sub-region). After
+  // this, makeNewSlab(id) hands slabs from the pool's own pre-placed
+  // sub-region via a per-pool bump pointer, so no per-slab migration happens
+  // during the run. Only invoked when both poolNumaBindings_ and
+  // poolSizeFractions are non-empty. Sets eagerPlacement_ on success.
+  void setupEagerPoolPlacement(const std::vector<double>& poolSizeFractions);
+
+  // makeNewSlab() helper for the eager path: hands the next slab from pool
+  // `id`'s pre-placed sub-region, or nullptr if that sub-region is exhausted.
+  Slab* makeNewSlabFromPoolRegion(PoolId id);
+
+  // Returns the PoolId whose eager sub-region contains `slab`, or -1 if none
+  // (or eager placement is inactive). Used to route a freed slab back to the
+  // pool that owns its (already-placed) memory.
+  PoolId poolForEagerSlab(const Slab* slab) const noexcept;
+
   // allocates space from the memory we own to store the SlabHeaders for all
   // the slabs.
   static Slab* computeSlabMemoryStart(void* memoryStart, size_t memorySize);
@@ -418,6 +474,42 @@ class SlabAllocator {
 
   // the memory address up to which we have converted into slabs.
   Slab* nextSlabAllocation_{nullptr};
+
+  // Optional per-pool NUMA bindings indexed by PoolId. Empty when no per-pool
+  // placement is configured (the common case), in which case makeNewSlab does
+  // not touch slab page placement.
+  const std::vector<PoolNumaBinding> poolNumaBindings_;
+
+  // Page size of the backing memory, used for per-pool page migration.
+  const size_t pageSize_{0};
+
+  // Per-pool weighted round-robin cursors, indexed by PoolId. Persisted across
+  // makeNewSlab() calls so that successive slabs of the same pool continue one
+  // continuous weighted cycle (a single 4MB slab is only 2 huge pages, far
+  // smaller than a typical weight cycle). Only used when poolNumaBindings_ is
+  // non-empty. Protected by numaCursorLock_.
+  mutable std::mutex numaCursorLock_;
+  std::vector<InterleaveCursor> poolNumaCursors_;
+
+  // --- Eager per-pool placement (preferred path) ---
+  // When true, the slab region was partitioned into per-pool contiguous
+  // sub-regions whose pages were placed on the pool's nodes at init. In this
+  // mode makeNewSlab() hands slabs from the pool's own sub-region (via the
+  // bump pointers below) and does NOT migrate pages during the run. Set by
+  // setupEagerPoolPlacement(); false => lazy per-slab migration fallback.
+  bool eagerPlacement_{false};
+  // Per-pool sub-region cursor (next slab to hand) and one-past-the-end, both
+  // indexed by PoolId. Only valid when eagerPlacement_ is true. Guarded by
+  // lock_ (same lock that protects nextSlabAllocation_/freeSlabs_).
+  std::vector<Slab*> poolRegionNext_;
+  std::vector<Slab*> poolRegionEnd_;
+  // Per-pool start of sub-region, used to map a freed slab back to its owning
+  // pool so it is re-handed to the same (correctly-placed) pool.
+  std::vector<Slab*> poolRegionStart_;
+  // Per-pool free lists (eager mode only). A freed slab is returned to the
+  // free list of the pool whose sub-region physically contains it, preserving
+  // its NUMA placement on reuse. Guarded by lock_.
+  std::vector<std::vector<Slab*>> poolFreeSlabs_;
 
   // boolean atomic that represents whether the allocator can allocate any
   // more slabs without holding any locks.

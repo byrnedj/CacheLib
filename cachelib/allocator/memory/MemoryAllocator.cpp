@@ -35,7 +35,9 @@ MemoryAllocator::MemoryAllocator(Config config,
     : config_(std::move(config)),
       slabAllocator_(memoryStart,
                      memSize,
-                     {config_.disableFullCoredump, config_.lockMemory}),
+                     {config_.disableFullCoredump, config_.lockMemory,
+                      config_.poolNumaBindings, config_.pageSize,
+                      config_.poolSizeFractions}),
       memoryPoolManager_(slabAllocator_) {
   checkConfig(config_);
 }
@@ -43,7 +45,9 @@ MemoryAllocator::MemoryAllocator(Config config,
 MemoryAllocator::MemoryAllocator(Config config, size_t memSize)
     : config_(std::move(config)),
       slabAllocator_(memSize,
-                     {config_.disableFullCoredump, config_.lockMemory}),
+                     {config_.disableFullCoredump, config_.lockMemory,
+                      config_.poolNumaBindings, config_.pageSize,
+                      config_.poolSizeFractions}),
       memoryPoolManager_(slabAllocator_) {
   checkConfig(config_);
 }
