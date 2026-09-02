@@ -231,8 +231,10 @@ echo "   log: $LOG"
 
 # The fiber scheduler has a known ~1-in-4 startup hang (frozen at
 # NavyRequestDispatcher startup). With --progress 60 a healthy run writes to
-# its log at least once a minute, so 150s of log silence while the process
-# lives means hung: kill and retry (up to 3 attempts).
+# its log at least once a minute, so prolonged log silence while the process
+# lives means hung: kill and retry (up to 3 attempts). A cold trace preload
+# is silent too, so the threshold is configurable (WATCHDOG_SILENCE seconds).
+WATCHDOG_SILENCE="${WATCHDOG_SILENCE:-330}"
 attempt_run() {
   rm -f "$OUT/navy_cache_file"
   /usr/bin/time -v numactl -N 0 \
@@ -246,7 +248,7 @@ attempt_run() {
     sz=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
     if [ "$sz" = "$last" ]; then
       silent=$((silent + 1))
-      if [ "$silent" -ge 5 ]; then
+      if [ "$silent" -ge $((WATCHDOG_SILENCE / 30)) ]; then
         pkill -9 -P "$tpid" 2>/dev/null
         kill -9 "$tpid" 2>/dev/null
         wait "$tpid" 2>/dev/null
@@ -266,7 +268,7 @@ for attempt in 1 2 3; do
   attempt_run
   rc=$?
   [ "$rc" -ne 99 ] && break
-  echo "WATCHDOG: run frozen for 150s+ (startup hang?), retrying (attempt $attempt of 3)"
+  echo "WATCHDOG: run frozen for ${WATCHDOG_SILENCE}s+ (startup hang?), retrying (attempt $attempt of 3)"
 done
 set -e
 rm -f "$OUT/navy_cache_file"
