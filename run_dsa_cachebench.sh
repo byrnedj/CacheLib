@@ -91,7 +91,7 @@ case "$INTERCEPT" in on|off) ;; *) echo "--intercept must be on|off" >&2; exit 1
 case "$FIBERS" in on|off) ;; *) echo "--fibers must be on|off" >&2; exit 1 ;; esac
 mkdir -p "$OUT"
 
-export LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${DTO_LIB_DIR:+$DTO_LIB_DIR:}$PREFIX/lib:$PREFIX/lib64:/usr/local/lib:${LD_LIBRARY_PATH:-}"
 
 # ---------------------------------------------------------------- build ----
 if [ "$SKIP_BUILD" = 0 ]; then
