@@ -211,6 +211,10 @@ print(f"wrote {os.environ['RUN_CONFIG']}")
 EOF
 
 # ---------------------------------------------------------------- run ------
+# navy with 128 reader + 300 writer threads needs far more fds than the
+# usual 1024 soft limit
+ulimit -n 65536 2>/dev/null || true
+
 export DTO_USESTDC_CALLS=0
 export DTO_CRC_MIN_BYTES=4096
 export DTO_WAIT_METHOD="${DTO_WAIT_METHOD:-busypoll}"
