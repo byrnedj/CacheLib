@@ -264,11 +264,12 @@ attempt_run() {
 
 set +e
 rc=99
-for attempt in 1 2 3; do
+WATCHDOG_RETRIES="${WATCHDOG_RETRIES:-6}"
+for attempt in $(seq 1 "$WATCHDOG_RETRIES"); do
   attempt_run
   rc=$?
   [ "$rc" -ne 99 ] && break
-  echo "WATCHDOG: run frozen for ${WATCHDOG_SILENCE}s+ (startup hang?), retrying (attempt $attempt of 3)"
+  echo "WATCHDOG: run frozen for ${WATCHDOG_SILENCE}s+ (startup hang?), retrying (attempt $attempt of $WATCHDOG_RETRIES)"
 done
 set -e
 rm -f "$OUT/navy_cache_file"
