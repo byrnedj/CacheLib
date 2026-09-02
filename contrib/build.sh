@@ -167,7 +167,7 @@ if test -z "$skip_os_pkgs" ; then
     centos8|rocky8.*) build_centos_8 ;;
     centos9) build_centos_9 ;;
     rocky9.?) build_rocky_9 ;;
-    fedora3[456]) build_fedora_34 ;;
+    fedora3[456]|fedora4[0-9]) build_fedora_34 ;;
     arch*|manjaro*) build_arch ;;
     *) die "No build recipe for detected operating system '$DETECTED'" ;;
   esac

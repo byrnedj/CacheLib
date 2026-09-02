@@ -27,6 +27,10 @@
 #   --nvm-size-mb N     Navy cache size (default: cdn 20480, bigcache 409600)
 #   --num-ops N         override test_config.numOps (per stressor thread;
 #                       bigcache default 500000 = the study's 12M-op replay)
+#   --page-size 4k|2mb|1gb
+#                       page size backing the DRAM cache (slabs + hash table,
+#                       SysV hugetlb shm). The hugetlb pools must be reserved
+#                       out-of-band (setup_dsa_bench.sh); 4k = default pages.
 #   --devices "0 2 4 6" DSA device ids to enable (default "0 2 4 6")
 #   --out DIR           output/work directory (default ./dsa_bench_out)
 #   --skip-build        do not (re)build cachebench
@@ -45,6 +49,7 @@ INTERCEPT=off
 FIBERS=off
 NVM_SIZE_MB=""
 NUM_OPS=""
+PAGE_SIZE=4k
 DEVICES="0 2 4 6"
 OUT="$PWD/dsa_bench_out"
 SKIP_BUILD=0
@@ -59,6 +64,7 @@ while [ $# -gt 0 ]; do
     --fibers)      FIBERS="$2"; shift 2 ;;
     --nvm-size-mb) NVM_SIZE_MB="$2"; shift 2 ;;
     --num-ops)     NUM_OPS="$2"; shift 2 ;;
+    --page-size)   PAGE_SIZE="$2"; shift 2 ;;
     --devices)     DEVICES="$2"; shift 2 ;;
     --out)         OUT="$2"; shift 2 ;;
     --skip-build)  SKIP_BUILD=1; shift ;;
@@ -120,9 +126,22 @@ ls /dev/dsa/wq*.0 >/dev/null 2>&1 || { echo "no enabled DSA WQs under /dev/dsa" 
 echo "DSA WQs: $(ls /dev/dsa/)"
 
 # ------------------------------------------------------- derive config -----
-RUN_CONFIG="$OUT/config_${WORKLOAD}_offload_${OFFLOAD}.json"
+case "$PAGE_SIZE" in
+  4k)  HUGE_BYTES=0 ;;
+  2mb) HUGE_BYTES=2097152
+       free=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/free_hugepages)
+       [ "$free" -ge 4600 ] || { echo "need >=4600 free 2MB pages (have $free); reserve with setup_dsa_bench.sh" >&2; exit 1; } ;;
+  1gb) HUGE_BYTES=1073741824
+       free=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages)
+       [ "$free" -ge 11 ] || { echo "need >=11 free 1GB pages (have $free); reserve with setup_dsa_bench.sh" >&2; exit 1; } ;;
+  *) echo "bad --page-size '$PAGE_SIZE' (4k|2mb|1gb)" >&2; exit 1 ;;
+esac
+export HUGE_BYTES
+
+RUN_CONFIG="$OUT/config_${WORKLOAD}_offload_${OFFLOAD}_page_${PAGE_SIZE}.json"
 CONFIG="$CONFIG" RUN_CONFIG="$RUN_CONFIG" OFFLOAD="$OFFLOAD" \
 NVM_SIZE_MB="$NVM_SIZE_MB" NUM_OPS="$NUM_OPS" OUT="$OUT" FIBERS="$FIBERS" \
+HUGE_BYTES="$HUGE_BYTES" \
 python3 - <<'EOF'
 import json, os, shutil, sys
 cfgPath = os.environ["CONFIG"]
@@ -174,6 +193,11 @@ elif offload != "none":
     cc["navyChecksumOffload"] = offload == "on"
     cc["navyChecksumOffloadMinSize"] = 4096
 
+huge = int(os.environ.get("HUGE_BYTES", "0"))
+if huge:
+    # DRAM cache (slabs + hash table) on hugetlb-backed SysV shm
+    cc["hugePageSize"] = huge
+
 if os.environ["FIBERS"] == "on":
     # NavyRequestScheduler (fibers, libaio) with the study's settings;
     # required for the offload's yield-during-DSA-wait to overlap work.
@@ -197,7 +221,7 @@ else
   unset DTO_MIN_BYTES               # DTO's own threshold decides
 fi
 
-LOG="$OUT/cachebench_${WORKLOAD}_offload_${OFFLOAD}_intercept_${INTERCEPT}.log"
+LOG="$OUT/cachebench_${WORKLOAD}_offload_${OFFLOAD}_intercept_${INTERCEPT}_page_${PAGE_SIZE}.log"
 echo "== Running cachebench on socket 0 (workload=$WORKLOAD offload=$OFFLOAD intercept=$INTERCEPT fibers=$FIBERS) =="
 echo "   log: $LOG"
 
